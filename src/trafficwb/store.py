@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 1  # base schema; later versions are applied by MISSION_MIGRATIONS
 TARGET_COUNTRIES = {"IR": "Iran", "LB": "Lebanon", "IL": "Israel", "LV": "Latvia"}
 INPUT_TYPES = {"images", "video"}
 MODES = {
@@ -146,6 +146,120 @@ CREATE TABLE notification (
   acknowledged INTEGER NOT NULL DEFAULT 0
 );
 """
+
+
+# Forward-only migrations. Each runs once, after a backup of the mission database.
+MISSION_MIGRATIONS: dict[int, str] = {
+    2: """
+CREATE TABLE camera_location (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE camera_view (
+  id INTEGER PRIMARY KEY,
+  location_id INTEGER REFERENCES camera_location(id),
+  name TEXT NOT NULL,
+  ref_width INTEGER, ref_height INTEGER,
+  state TEXT NOT NULL DEFAULT 'proposed',   -- proposed | active | needs_review | retired
+  merged_into INTEGER REFERENCES camera_view(id),
+  link_note TEXT,                            -- why clusters were joined, and whether a person confirmed it
+  link_confirmed INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+-- Illumination-robust structural signature per source version.
+CREATE TABLE view_signature (
+  source_version_id INTEGER PRIMARY KEY REFERENCES source_version(id),
+  algo TEXT NOT NULL,
+  vec BLOB NOT NULL,
+  width INTEGER NOT NULL, height INTEGER NOT NULL,
+  mean_luma REAL NOT NULL, saturation REAL NOT NULL,
+  condition TEXT NOT NULL                    -- colour | monochrome (measured, not from clock time)
+);
+-- Assignment history; current = latest row per version without superseded_by.
+CREATE TABLE view_assignment (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  view_id INTEGER REFERENCES camera_view(id),  -- NULL = unassigned
+  method TEXT NOT NULL,                         -- auto | manual
+  score REAL,
+  author TEXT NOT NULL,
+  reason TEXT,
+  created_at TEXT NOT NULL,
+  superseded_by INTEGER REFERENCES view_assignment(id)
+);
+CREATE INDEX ix_assign_current ON view_assignment(source_version_id) WHERE superseded_by IS NULL;
+CREATE TABLE view_event (
+  id INTEGER PRIMARY KEY,
+  view_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,                           -- created | renamed | merged | split | confirmed_link | needs_review | drift_check
+  detail TEXT,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+-- Reference image per view and lighting condition, used for drift checks.
+CREATE TABLE view_reference (
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  condition TEXT NOT NULL,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  set_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(view_id, condition)
+);
+CREATE TABLE view_drift (
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  inliers INTEGER NOT NULL,
+  displacement_px REAL,          -- max shift of region vertices (or frame corners), original pixels
+  result TEXT NOT NULL,          -- ok | shifted | unverified
+  checked_at TEXT NOT NULL,
+  PRIMARY KEY(source_version_id, view_id)
+);
+-- Region geometry in the view's original pixel coordinates. Configuration, not training labels.
+CREATE TABLE region_revision (
+  id INTEGER PRIMARY KEY,
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  region_uid TEXT NOT NULL,
+  kind TEXT NOT NULL,                           -- include | exclude
+  name TEXT,
+  polygon TEXT NOT NULL,                        -- JSON [[x,y],...]
+  deleted INTEGER NOT NULL DEFAULT 0,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+""",
+}
+
+
+def _statements(sql: str) -> list[str]:
+    """Split migration SQL into statements, dropping -- comments (which may contain semicolons)."""
+    lines = [l.split("--", 1)[0] for l in sql.splitlines()]
+    return [st.strip() for st in "\n".join(lines).split(";") if st.strip()]
+
+
+def migrate(db_path: Path, con: sqlite3.Connection) -> int:
+    """Apply pending migrations, backing up the database first. Returns the resulting version."""
+    current = con.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+    pending = sorted(v for v in MISSION_MIGRATIONS if v > current)
+    if not pending:
+        return current
+    backups = db_path.parent / "backups"
+    backups.mkdir(exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    dest = sqlite3.connect(backups / f"mission-v{current}-{stamp}.db")
+    con.backup(dest)
+    dest.close()
+    for v in pending:
+        con.execute("BEGIN")
+        try:
+            for stmt in _statements(MISSION_MIGRATIONS[v]):
+                con.execute(stmt)
+            con.execute("INSERT INTO schema_version VALUES (?)", (v,))
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
+    return pending[-1]
 
 
 def utcnow() -> str:
@@ -288,6 +402,12 @@ class DataRoot:
             (str(Path(cfg.source_dir).resolve()), int(cfg.include_subdirs)),
         )
         con.execute("COMMIT")
+        for v in sorted(MISSION_MIGRATIONS):  # new databases start at the latest schema, no backup needed
+            con.execute("BEGIN")
+            for stmt in _statements(MISSION_MIGRATIONS[v]):
+                con.execute(stmt)
+            con.execute("INSERT INTO schema_version VALUES (?)", (v,))
+            con.execute("COMMIT")
         con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         con.close()
         for suffix in ("-wal", "-shm"):
@@ -318,7 +438,9 @@ class Mission:
         self.root = root
         self.id = mission_id
         self.dir = root.path / "missions" / mission_id
-        self.con = connect(root.path / row["db_path"])
+        db_path = root.path / row["db_path"]
+        self.con = connect(db_path)
+        migrate(db_path, self.con)
 
     # --- configuration ---
     def config(self) -> MissionConfig:

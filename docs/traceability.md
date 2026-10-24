@@ -25,6 +25,11 @@ Requirement IDs come from the design package (`docs/design/design-package.html`,
 | ING-04 identity, checksum, versions, originals untouched, replacements keep history | `ingest.Ingestor._ingest` | `tests/test_store_ingest.py` | Tested (unit) |
 | ING-06 / DER-04 outputs and data never re-ingested | `store.validate`, `ingest.Ingestor._walk` | `tests/test_store_ingest.py` | Tested (unit) |
 
+| VIEW-01 location vs view, grouping proposals, reassign, split, merge, rename, history | `src/trafficwb/views.py` (`ViewService`), migration v2 in `store.py` | `tests/test_views_regions.py`, sample run | Tested (unit + sample). Screens not built. |
+| VIEW-02 lighting change alone does not create a new view | `views.assign_or_propose` (colour/monochrome link by structure similarity) | `tests/test_views_regions.py`, sample run | Tested. Links found this way need operator confirmation. Background models not built yet. |
+| VIEW-03 inclusion/exclusion polygons, precedence, original coordinates, membership rule | `src/trafficwb/regions.py` | `tests/test_views_regions.py` | Tested (unit). Drawing screen not built. |
+| VIEW-04 flag a view when it changes | `views.ViewService.check_drift` | `tests/test_views_regions.py` | Tested on synthetic shifts. Not seen on a real moved camera. |
+
 All other requirements: not started.
 
 Evidence for each phase is in `docs/delivery/`.

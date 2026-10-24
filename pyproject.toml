@@ -8,7 +8,11 @@ version = "0.0.1"
 description = "Offline road-traffic image and video analysis (foundations)"
 requires-python = ">=3.11"
 # tzdata ships the IANA database so zoneinfo works on Windows without network access.
-dependencies = ["tzdata>=2024.1"]
+dependencies = [
+    "tzdata>=2024.1",
+    "numpy>=1.26",
+    "opencv-python-headless>=4.8",
+]
 
 [project.optional-dependencies]
 probe = ["psutil>=5.9"]
