@@ -148,3 +148,15 @@ details.spec > summary { cursor: pointer; margin: 8px 0; }
 .hit img { width: 100%; height: 130px; object-fit: contain; background: #000; border-radius: 4px; }
 .hit.possible { border-style: dashed; }
 .hit ul.reasons { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--warn); }
+
+/* plates */
+.plate { display: grid; grid-template-columns: 150px 220px minmax(0, 1fr) 300px; gap: 12px; padding: 10px; align-items: start; }
+.plate img.veh { width: 150px; height: 90px; object-fit: contain; background: #000; border-radius: 4px; display: block; }
+.plate img.pl { height: 56px; max-width: 220px; object-fit: contain; image-rendering: pixelated; background: #000; border-radius: 3px; }
+.plate .chars { display: flex; flex-wrap: wrap; gap: 2px; }
+.plate .chars span { font-family: ui-monospace, monospace; border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; font-size: 14px; display: inline-flex; flex-direction: column; align-items: center; line-height: 1.1; }
+.plate .chars small { font-size: 9px; color: var(--muted); }
+.platetext { font-family: ui-monospace, monospace; font-size: 20px; font-weight: 600; unicode-bidi: isolate; }
+ul.reasons { padding-left: 18px; font-size: 12.5px; color: var(--warn); }
+.card.evalonly { border-color: var(--warn); border-style: dashed; }
+@media (max-width: 1100px) { .plate { grid-template-columns: 150px minmax(0, 1fr); } }

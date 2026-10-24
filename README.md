@@ -2,7 +2,7 @@
 
 Offline road-traffic still-image and video analysis for a single Windows workstation, reachable from browsers on the local network. It is a new, independent application.
 
-Status: **still images (phases 0 to 4), web screens, object search, and video part 1 are done**. Only the pieces below exist. Plates come later.
+Status: **still images (phases 0 to 4), web screens, object search, video part 1 and plates part 1 are done**. Only the pieces below exist. Plate reads are evaluation only until a country passes its own test set.
 
 | Piece | What it does |
 |---|---|
@@ -18,8 +18,9 @@ Status: **still images (phases 0 to 4), web screens, object search, and video pa
 | `trafficwb.process` | Resumable processing runs |
 | `trafficwb.interpret`, `trafficwb.attributes`, `trafficwb.search` | Typed object search: request to confirmed spec, vehicle colour with "not observable", match/possible results |
 | `trafficwb.video`, `trafficwb.tracker`, `trafficwb.video_process`, `trafficwb.video_review` | Video by frame timestamps in resumable chunks, vehicle tracking, one event per appearance, event review, clips |
+| `trafficwb.plates`, `trafficwb.plate_layout` | Plate finding and reading on each vehicle, raw and normalised text, unreadable kept unreadable, review, country evaluation gate |
 | `trafficwb.review`, `trafficwb.export` | Results table, corrections, approval, CSV and Excel export |
-| `trafficwb-web` | Local web server and screens: missions, wizard, results, investigation, camera views, regions, search, video events and player |
+| `trafficwb-web` | Local web server and screens: missions, wizard, results, investigation, camera views, regions, search, video events and player, plates |
 | `trafficwb-mission` | Create a mission, scan, detect, list results, export, show status |
 | `trafficwb-inventory` | Read-only report on a sample folder: formats, sizes, EXIF, checksums, name parsing, intervals |
 
@@ -50,5 +51,6 @@ trafficwb-mission export --data D:\twb-data --mission <id>
 - `docs/design/object-search.md`: object search rules
 - `docs/design/web-ui.md`: web server, sign-in and screen rules
 - `docs/design/video.md`: video timing, tracking, events, review and clips
+- `docs/design/plates.md`: plate reading rules; `docs/decisions/plate-models.md`: which plate models and why
 - `docs/traceability.md`: requirement → code → test status
 - `docs/delivery/`: per-phase delivery reports (what was built, what was actually tested)

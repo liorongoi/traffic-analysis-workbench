@@ -3,6 +3,7 @@ import { api, ApiError, Filter, fmtDuration, Job, post, REVIEW_LABEL, ResultRow 
 import { go } from "../router";
 import SearchTab from "./Search";
 import EventsTab from "./Events";
+import PlatesTab from "./Plates";
 
 export type SavedQuery = { filter: Filter; sort: string; desc: boolean };
 export const queryKey = (mid: string) => `twb-query-${mid}`;
@@ -29,6 +30,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   if (!m) return <div className="page muted">Loading…</div>;
   const isVideo = m.config.input_type === "video";
   const tabs = [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
+    ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []),
     ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["views", "Camera views"]])];
   return (
     <div className="page">
@@ -42,6 +44,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
       {tab === "overview" && <Overview m={m} reload={load} />}
       {tab === "results" && !isVideo && <Results missionId={missionId} />}
       {tab === "views" && !isVideo && <Views missionId={missionId} />}
+      {tab === "plates" && m.config.mode === "plate_recognition" && <PlatesTab missionId={missionId} />}
       {tab === "events" && isVideo && <EventsTab missionId={missionId} eventId={extra ? Number(extra) : null} />}
       {tab === "search" && <SearchTab missionId={missionId} runId={extra ? Number(extra) : null} />}
     </div>

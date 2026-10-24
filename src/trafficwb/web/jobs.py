@@ -49,10 +49,13 @@ class Job:
 
 class JobManager:
     def __init__(self, data_root: Path, detector_factory: Callable[[], tuple[object, dict]],
-                 monitor_interval: float = 60, stability_seconds: int = 30):
+                 monitor_interval: float = 60, stability_seconds: int = 30,
+                 plate_factory: Callable[[], tuple] | None = None):
         self.data_root = Path(data_root)
         self.detector_factory = detector_factory
+        self.plate_factory = plate_factory
         self._detector = None
+        self._plates = None
         self._lock = threading.Lock()
         self.jobs: dict[str, Job] = {}
         self.monitors: dict[str, Monitor] = {}
@@ -64,6 +67,13 @@ class JobManager:
             if self._detector is None:
                 self._detector = self.detector_factory()
             return self._detector
+
+    def plate_models(self):
+        with self._lock:
+            if self._plates is None:
+                from ..plates import default_plate_models
+                self._plates = (self.plate_factory or default_plate_models)()
+            return self._plates
 
     def current(self, mission_id: str) -> Job | None:
         return self.jobs.get(mission_id)
@@ -108,8 +118,11 @@ class JobManager:
                 from ..video_process import VideoProcessor
                 proc = VideoProcessor(m, det, card, control=job.control)
             else:
-                proc = Processor(m, det, card, control=job.control)
+                proc = Processor(m, det, card, control=job.control, plate_models=self.plate_models)
             job.report = [r.__dict__ for r in proc.process_all(progress)]
+            if m.input_type == "images" and m.config().mode == "plate_recognition" and not job.control.cancelled:
+                job.control.stage = "reading plates"
+                job.report.append({"plates": proc._plates()})   # plates left from an earlier cancelled run
             job.state = "cancelled" if job.control.cancelled else "finished"
         except Exception as exc:  # surface, never crash the server
             job.state = "failed"

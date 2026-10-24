@@ -121,6 +121,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         for p in export(m, a.author, a.formats.split(",") if a.formats else None):
             print(p)
+        if m.config().mode == "plate_recognition":
+            from .plates import PlateService
+            for p in PlateService(m).export(a.author, a.formats.split(",") if a.formats else None):
+                print(p)
         return 0
     return 1
 

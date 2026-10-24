@@ -555,6 +555,60 @@ CREATE TABLE clip (
   created_at TEXT NOT NULL
 );
 """,
+    7: """
+-- One row per vehicle detection the plate stage looked at, for one detector + reader pair (machine output, never edited).
+CREATE TABLE plate_read (
+  id INTEGER PRIMARY KEY,
+  detection_id INTEGER NOT NULL REFERENCES detection(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  object_uid TEXT NOT NULL,          -- d<detection id>
+  outcome TEXT NOT NULL,             -- read | no_plate_found | vehicle_too_small | plate_too_small
+  x1 REAL, y1 REAL, x2 REAL, y2 REAL,
+  det_score REAL,
+  crop_path TEXT,
+  raw_text TEXT,                     -- reader output as emitted (pad removed), Unicode, reading order
+  raw_chars TEXT,                    -- JSON [[char, confidence], ...] for every slot
+  normalized_text TEXT,              -- '?' for unsure characters; never completed by guessing
+  display_text TEXT,
+  country_hyp TEXT,                  -- mission country
+  layout_hyp TEXT,
+  region_label TEXT, region_conf REAL,   -- the reader's own country guess
+  readability TEXT,                  -- full | partial | unreadable (NULL when no plate was read)
+  reasons TEXT NOT NULL DEFAULT '[]',
+  detector_model_id INTEGER REFERENCES model_version(id),
+  reader_model_id INTEGER REFERENCES model_version(id),
+  rules TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(detection_id, detector_model_id, reader_model_id)
+);
+CREATE INDEX ix_plate_read_version ON plate_read(source_version_id);
+-- Operator corrections, append-only, per vehicle object (so a plate can also be added where none was found).
+CREATE TABLE plate_revision (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  object_uid TEXT NOT NULL,
+  action TEXT NOT NULL,              -- confirm | correct | unreadable | no_plate | reopen
+  text TEXT,                         -- as the operator typed it, Unicode
+  normalized_text TEXT,
+  box TEXT,                          -- JSON [x1,y1,x2,y2] when the operator drew the plate
+  author TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_plate_rev ON plate_revision(source_version_id, object_uid);
+-- A country's plates are evaluation only until an evaluation on reviewed plates passes; append-only.
+CREATE TABLE plate_country_status (
+  id INTEGER PRIMARY KEY,
+  country TEXT NOT NULL,
+  action TEXT NOT NULL,              -- evaluate | enable | disable
+  reader_model_id INTEGER REFERENCES model_version(id),
+  result TEXT NOT NULL,              -- JSON: counts, exact match, CER per layout, thresholds
+  passed INTEGER,
+  author TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
+""",
 }
 
 

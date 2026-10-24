@@ -65,6 +65,7 @@ class RunReport:
     detections: int = 0
     errors: list[str] = field(default_factory=list)
     night: dict = field(default_factory=dict)
+    plates: dict = field(default_factory=dict)
 
 
 def register_model(con, describe: dict, card: dict) -> int:
@@ -80,8 +81,11 @@ def register_model(con, describe: dict, card: dict) -> int:
 
 
 class Processor:
+    """Vehicle detection per image, then night analysis, then (plate recognition missions) plate reading."""
+
     def __init__(self, mission: Mission, detector: Detector, card: dict | None = None,
-                 region_rule: str = "bottom_center", min_overlap: float = 0.5, control: RunControl | None = None):
+                 region_rule: str = "bottom_center", min_overlap: float = 0.5, control: RunControl | None = None,
+                 plate_models: Callable[[], tuple] | None = None):
         if region_rule not in RULES:
             raise ValueError(f"region rule must be one of {RULES}")
         self.m = mission
@@ -93,6 +97,7 @@ class Processor:
         self.views = ViewService(mission)
         self.night = NightService(mission)
         self.control = control or RunControl()
+        self.plate_models = plate_models   # loaded only when a plate recognition mission needs it
 
     def pending_runs(self) -> list[int]:
         # Includes runs interrupted after their last image but before night analysis and completion.
@@ -189,6 +194,16 @@ class Processor:
         # Night: backgrounds need many images, so lights are grouped once the images are in.
         self.control.stage = "night analysis"
         rep.night = self.night.refresh()
+        if self.m.config().mode == "plate_recognition":
+            self.control.stage = "reading plates"
+            try:
+                rep.plates = self._plates()
+            except RunCancelled:
+                self.con.execute("UPDATE run SET state='cancelled', finished_at=? WHERE id=?", (utcnow(), run_id))
+                self.m.notify("warning", "run_cancelled", f"Run {run_id} was cancelled while reading plates; "
+                              "plates not yet read are read on the next run.", run_id=run_id)
+                self.control.stage = "cancelled"
+                return rep
         self.control.stage = "finished"
         left = self.con.execute("SELECT COUNT(*) FROM run_item WHERE run_id=? AND processing_state IN ('queued','running')",
                                 (run_id,)).fetchone()[0]
@@ -200,3 +215,14 @@ class Processor:
             self.m.notify("info" if not failed else "warning", "run_finished",
                           f"Run {run_id} finished: {rep.done} processed, {failed} failed.", run_id=run_id)
         return rep
+
+    def _plates(self) -> dict:
+        from .models import ModelPackError
+        from .plates import PlateService, default_plate_models
+        try:
+            finder, reader = (self.plate_models or default_plate_models)()
+        except ModelPackError as exc:
+            self.m.notify("error", "plate_models_missing", f"Plates were not read: {exc}",
+                          action="Copy the plate model packs from the staging machine (scripts/fetch_models.py).")
+            return {"error": str(exc)}
+        return PlateService(self.m, finder, reader).refresh(self.control)

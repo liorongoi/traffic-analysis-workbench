@@ -153,6 +153,18 @@ class ReviseBody(BaseModel):
     t: float | None = None
 
 
+class PlateReviseBody(BaseModel):
+    action: str
+    text: str | None = None
+    box: list[float] | None = None
+    note: str | None = None
+
+
+class EnableBody(BaseModel):
+    enabled: bool
+    note: str | None = None
+
+
 class ClipBody(BaseModel):
     before_s: float | None = None
     after_s: float | None = None
@@ -177,11 +189,13 @@ def default_detector_factory():
 
 
 def create_app(data_root: Path | str, detector_factory: Callable | None = None, allow_setup_from: tuple = ("127.0.0.1", "::1", "testclient"),
-               monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True) -> FastAPI:
+               monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True,
+               plate_factory: Callable | None = None) -> FastAPI:
     data_root = Path(data_root)
     DataRoot(data_root)  # create folders and control.db
     Auth(connect(data_root / "control.db"))
-    jobs = JobManager(data_root, detector_factory or default_detector_factory, monitor_interval, stability_seconds)
+    jobs = JobManager(data_root, detector_factory or default_detector_factory, monitor_interval, stability_seconds,
+                      plate_factory)
     previews: dict[str, tuple[float, dict]] = {}
 
     @asynccontextmanager
@@ -674,6 +688,70 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
                           interpolation=cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA)
         ok, buf = cv2.imencode(".jpg", part, [cv2.IMWRITE_JPEG_QUALITY, 88])
         return Response(buf.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+    # ---------- plates ----------
+    def _plates_svc(m: Mission):
+        from ..plates import PlateService
+        if m.input_type != "images" or m.config().mode != "plate_recognition":
+            raise ApiError(400, "not_plates", "Plates are read only in plate recognition missions.")
+        return PlateService(m)
+
+    def _plate_call(fn):
+        from ..plates import PlateError
+        try:
+            return fn()
+        except PlateError as exc:
+            raise ApiError(400, "plates", str(exc)) from None
+
+    @app.get("/api/missions/{mission_id}/plates")
+    def plates_list(m: Mission = Depends(mission), outcome: str | None = None, readability: str | None = None,
+                    review: str | None = None, search: str | None = None, version_id: int | None = None,
+                    offset: int = 0, limit: int = Query(100, ge=1, le=500)):
+        from collections import Counter
+        svc = _plates_svc(m)
+        everything = svc.plates(version_id)
+        shown = svc.plates(version_id, outcome or None, readability or None, review or None, search or None)
+        return {"plates": [p.__dict__ for p in shown[offset: offset + limit]], "total": len(shown),
+                "counts": {"outcome": Counter(p.outcome for p in everything),
+                           "readability": Counter(p.readability or "none" for p in everything),
+                           "review": Counter(p.review for p in everything)},
+                "country": svc.country_status()}
+
+    @app.get("/api/missions/{mission_id}/plates/{plate_id}/crop")
+    def plate_crop(plate_id: int, m: Mission = Depends(mission), h: int = Query(64, ge=16, le=300)):
+        svc = _plates_svc(m)
+        row = m.con.execute("SELECT crop_path FROM plate_read WHERE id=?", (plate_id,)).fetchone()
+        if row is None or not row[0] or not Path(row[0]).is_file():
+            raise ApiError(404, "no_crop", "No plate crop for this vehicle.")
+        img = cv2.imread(row[0])
+        s = h / img.shape[0]
+        img = cv2.resize(img, (max(1, int(img.shape[1] * s)), h), interpolation=cv2.INTER_NEAREST if s > 3 else cv2.INTER_CUBIC)
+        ok, buf = cv2.imencode(".png", img)
+        return Response(buf.tobytes(), media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.post("/api/missions/{mission_id}/plates/{plate_id}/revise")
+    def plate_revise(plate_id: int, body: PlateReviseBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        svc = _plates_svc(m)
+        return _plate_call(lambda: svc.revise(plate_id, body.action, u.username, body.text, body.box, body.note)).__dict__
+
+    @app.post("/api/missions/{mission_id}/plates/country/evaluate")
+    def plate_evaluate(m: Mission = Depends(mission), u: User = Depends(user)):
+        return _plates_svc(m).evaluate(u.username)
+
+    @app.post("/api/missions/{mission_id}/plates/country/enable")
+    def plate_enable(body: EnableBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        svc = _plates_svc(m)
+        return _plate_call(lambda: svc.set_enabled(body.enabled, u.username, body.note))
+
+    @app.post("/api/missions/{mission_id}/plates/export")
+    def plates_export(body: ExportBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        svc = _plates_svc(m)
+        try:
+            paths = svc.export(u.username, body.formats)
+        except Exception as exc:
+            raise ApiError(500, "export_failed", f"Export failed: {exc}",
+                           "Check that the output folder exists, is writable and has free space.") from None
+        return {"files": [str(p) for p in paths]}
 
     # ---------- video ----------
     def _video(m: Mission):
