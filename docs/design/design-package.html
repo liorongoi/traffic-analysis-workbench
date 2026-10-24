@@ -1,0 +1,1079 @@
+<title>Traffic Analysis Design Package</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: engineering spec. Sticky section index on the left (desktop), one reading column, wide tables scroll inside their own frames.
+   Palette: cool road-asphalt neutrals with a sodium-streetlight amber accent; three status inks for Confirmed / Proposed / Open. */
+:root{
+  --bg:#f4f6f7; --surface:#ffffff; --sunk:#eaeef0; --ink:#17212b; --muted:#5a6672; --line:#d6dce1;
+  --accent:#a85f06; --accent-soft:#fbefdc;
+  --conf:#1f6b5c; --conf-soft:#dff1ec;
+  --prop:#8a5a00; --prop-soft:#fdf0d5;
+  --open:#9b2c4a; --open-soft:#f8e1e8;
+  --wf:#f9fafb; --wf-line:#9aa5af; --wf-fill:#e3e8ec;
+  --ov-machine:#1b74c9; --ov-cand:#c27a00; --ov-human:#21875a; --ov-reject:#c0392b;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e1318; --surface:#151c23; --sunk:#1b242c; --ink:#e4e9ed; --muted:#9aa6b1; --line:#2b3640;
+  --accent:#f2a443; --accent-soft:#3a2a12;
+  --conf:#6fd0b8; --conf-soft:#123029; --prop:#f0bf5a; --prop-soft:#352a10; --open:#f08aa6; --open-soft:#3a1824;
+  --wf:#121920; --wf-line:#5d6a75; --wf-fill:#212b34;
+  --ov-machine:#5aa9f0; --ov-cand:#f0b13c; --ov-human:#4fc48a; --ov-reject:#f07163;
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e1318; --surface:#151c23; --sunk:#1b242c; --ink:#e4e9ed; --muted:#9aa6b1; --line:#2b3640;
+  --accent:#f2a443; --accent-soft:#3a2a12;
+  --conf:#6fd0b8; --conf-soft:#123029; --prop:#f0bf5a; --prop-soft:#352a10; --open:#f08aa6; --open-soft:#3a1824;
+  --wf:#121920; --wf-line:#5d6a75; --wf-fill:#212b34;
+  --ov-machine:#5aa9f0; --ov-cand:#f0b13c; --ov-human:#4fc48a; --ov-reject:#f07163;
+  color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15.5px;line-height:1.6}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+code,.mono{font-family:var(--f-mono);font-size:.88em}
+code{background:var(--sunk);padding:.08em .35em;border-radius:3px}
+
+.masthead{border-bottom:1px solid var(--line);background:var(--surface)}
+.masthead .in{max-width:1240px;margin:0 auto;padding-block:40px 30px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font-family:var(--f-display);font-weight:700;font-size:clamp(30px,4.6vw,46px);line-height:1.08;margin:.25em 0 .3em;text-wrap:balance;letter-spacing:-.01em}
+.lede{max-width:70ch;color:var(--muted);font-size:17px;margin:0}
+.statusbar{display:flex;flex-wrap:wrap;gap:10px 22px;margin-top:22px;font-size:13.5px}
+.statusbar div{display:flex;gap:8px;align-items:baseline}
+.statusbar b{font-family:var(--f-mono);font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.notice{margin-top:22px;border:1px solid var(--accent);background:var(--accent-soft);padding:12px 16px;border-radius:6px;max-width:90ch;font-size:14.5px}
+
+.wrap{max-width:1240px;margin:0 auto;display:grid;grid-template-columns:230px minmax(0,1fr);gap:48px;padding-block:32px 80px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+nav.toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 20px);align-self:start;max-height:calc(100vh - 40px);overflow:auto;font-size:13.5px}
+nav.toc ol{list-style:none;margin:0;padding:0;display:grid;gap:2px;counter-reset:t}
+nav.toc li a{display:grid;grid-template-columns:2.2em 1fr;padding:5px 8px;border-radius:4px;color:var(--ink);text-decoration:none}
+nav.toc li a:hover{background:var(--sunk)}
+nav.toc li a span{font-family:var(--f-mono);color:var(--muted);font-size:12px;padding-top:2px}
+nav.toc .k{margin-top:18px;padding-top:14px;border-top:1px solid var(--line);display:grid;gap:8px;font-size:12.5px;color:var(--muted)}
+main{min-width:0}
+section.d{padding-top:12px;margin-bottom:64px;scroll-margin-top:20px}
+.dh{display:flex;gap:14px;align-items:baseline;border-bottom:2px solid var(--ink);padding-bottom:8px;margin-bottom:18px}
+.dh .n{font-family:var(--f-mono);font-size:13px;color:var(--accent);font-weight:500}
+h2{font-family:var(--f-display);font-weight:600;font-size:clamp(24px,3vw,30px);line-height:1.15;margin:0;text-wrap:balance}
+h3{font-family:var(--f-display);font-weight:600;font-size:20px;margin:34px 0 10px;text-wrap:balance}
+h4{font-family:var(--f-body);font-weight:600;font-size:15.5px;margin:22px 0 6px}
+p,li{max-width:76ch}
+.intro{color:var(--muted);max-width:76ch;margin-top:0}
+ul.tight,ol.tight{padding-left:1.25em;margin:.4em 0}
+ul.tight li,ol.tight li{margin:.2em 0}
+
+.tag{display:inline-block;font-family:var(--f-mono);font-size:10.5px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border-radius:3px;vertical-align:1px;white-space:nowrap}
+.t-c{color:var(--conf);background:var(--conf-soft)}
+.t-p{color:var(--prop);background:var(--prop-soft)}
+.t-o{color:var(--open);background:var(--open-soft)}
+.t-d{color:var(--muted);background:var(--sunk)}
+
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--surface);margin:12px 0 18px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;vertical-align:top;padding:8px 12px;border-bottom:1px solid var(--line)}
+th{font-family:var(--f-mono);font-weight:500;font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);background:var(--sunk);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.id{font-family:var(--f-mono);font-size:12.5px;white-space:nowrap;color:var(--muted)}
+td.grp{background:var(--sunk);font-family:var(--f-display);font-weight:600;font-size:14.5px;color:var(--ink)}
+.num{font-variant-numeric:tabular-nums}
+
+.callout{border-left:3px solid var(--line);padding:6px 0 6px 16px;margin:16px 0;color:var(--ink)}
+.callout.warn{border-color:var(--open)}
+.callout.prop{border-color:var(--prop)}
+.callout b.h{display:block;font-family:var(--f-mono);font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:500;margin-bottom:2px}
+
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px 18px;min-width:0}
+.panel h4{margin-top:0}
+
+pre.mermaid{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:16px;overflow-x:auto;margin:12px 0 18px}
+
+/* Wireframes */
+.wf{background:var(--wf);border:1.5px solid var(--wf-line);border-radius:8px;padding:12px;margin:14px 0 6px;font-family:var(--f-mono);font-size:12px;color:var(--muted);overflow-x:auto}
+.wf-inner{min-width:640px;display:grid;gap:8px}
+.wf .bar{display:flex;gap:8px;align-items:center;border:1px solid var(--wf-line);border-radius:4px;padding:6px 10px;background:var(--surface);flex-wrap:wrap}
+.wf .bar .sp{flex:1}
+.wf .btn{border:1px solid var(--wf-line);border-radius:4px;padding:2px 9px;background:var(--wf-fill);color:var(--ink);white-space:nowrap}
+.wf .btn.pri{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.wf .box{border:1px dashed var(--wf-line);border-radius:4px;padding:8px;background:var(--surface)}
+.wf .fill{background:var(--wf-fill);border-radius:3px}
+.wf .row{display:grid;gap:8px}
+.wf .lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:4px}
+.wf table{font-size:11.5px;font-family:var(--f-mono)}
+.wf th,.wf td{padding:4px 8px}
+.wf .steps{display:flex;gap:4px;flex-wrap:wrap}
+.wf .steps span{padding:2px 8px;border-radius:10px;border:1px solid var(--wf-line)}
+.wf .steps span.on{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.wf .steps span.done{background:var(--wf-fill)}
+.wf .field{display:grid;grid-template-columns:160px 1fr;gap:8px;align-items:center}
+.wf .inp{border:1px solid var(--wf-line);border-radius:3px;padding:3px 8px;background:var(--surface);color:var(--ink)}
+.wf .ok{color:var(--conf)} .wf .bad{color:var(--open)}
+.wf .img{position:relative;background:linear-gradient(180deg,#2a3440 0%,#3b4652 55%,#262d35 100%);border-radius:4px;height:300px;overflow:hidden}
+.wf .road{position:absolute;left:18%;right:8%;bottom:0;height:62%;background:#4a535c;clip-path:polygon(38% 0,52% 0,100% 100%,0 100%)}
+.ovl{position:absolute;border:2px solid;font-size:10px;line-height:1;padding:2px 3px;color:#fff}
+.ovl span{position:absolute;top:-16px;left:-2px;padding:1px 4px;white-space:nowrap}
+.ov-m{border-color:var(--ov-machine);border-style:dashed} .ov-m span{background:var(--ov-machine)}
+.ov-c{border-color:var(--ov-cand);border-style:dotted;border-radius:50%} .ov-c span{background:var(--ov-cand);color:#111}
+.ov-h{border-color:var(--ov-human);border-style:solid} .ov-h span{background:var(--ov-human)}
+.ov-x{border-color:var(--ov-reject);border-style:solid;opacity:.85;background:repeating-linear-gradient(45deg,transparent 0 5px,rgba(192,57,43,.35) 5px 7px)} .ov-x span{background:var(--ov-reject)}
+.poly{position:absolute;inset:0;width:100%;height:100%}
+.wf-cap{font-size:13px;color:var(--muted);margin:4px 0 22px}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px;margin:8px 0}
+.legend span{display:inline-flex;gap:6px;align-items:center}
+.sw{width:22px;height:14px;border:2px solid;display:inline-block}
+.timeline{height:26px;position:relative;background:var(--wf-fill);border-radius:3px}
+.timeline i{position:absolute;top:4px;height:18px;border-radius:2px;background:var(--ov-machine);opacity:.8}
+.timeline i.h{background:var(--ov-human)}
+.kbd{display:inline-block;font-family:var(--f-mono);font-size:12px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 6px;background:var(--surface)}
+
+.phase{display:grid;grid-template-columns:72px minmax(0,1fr);gap:16px;padding:16px 0;border-top:1px solid var(--line)}
+.phase .pn{font-family:var(--f-display);font-weight:700;font-size:26px;color:var(--accent);line-height:1}
+.phase .pn small{display:block;font-family:var(--f-mono);font-weight:400;font-size:11px;color:var(--muted);margin-top:6px;letter-spacing:.04em}
+.phase h4{margin:0 0 6px;font-size:16.5px}
+.phase .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 24px;font-size:14px}
+.phase .cols b{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:500}
+
+footer{border-top:1px solid var(--line);padding-top:18px;color:var(--muted);font-size:13px}
+
+@media (max-width:980px){
+  .wrap{grid-template-columns:1fr;gap:20px}
+  nav.toc{position:static;max-height:none;border:1px solid var(--line);border-radius:6px;padding:10px;background:var(--surface)}
+  nav.toc ol{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+  nav.toc .k{display:none}
+}
+@media (max-width:520px){ .phase{grid-template-columns:1fr} .wf .field{grid-template-columns:1fr} }
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+html{scroll-behavior:smooth}
+</style>
+
+<header class="masthead"><div class="in">
+  <div class="eyebrow">Design package · v0.1 · 24 Oct 2026 · Spec §21 deliverables</div>
+  <h1>Offline Road-Traffic Image and Video Analysis</h1>
+  <p class="lede">Ten design deliverables for a new, independent Windows-workstation application that analyzes road-traffic still images and long video recordings fully offline, from mission creation through review, approval, export and continued model improvement.</p>
+  <div class="statusbar">
+    <div><b>State</b> Design only. No code written, nothing executed or measured.</div>
+    <div><b>Repository</b> Not chosen yet (see Q30)</div>
+    <div><b>Relation to SpectraScope</b> None. Nothing inherited.</div>
+  </div>
+  <div class="notice"><strong>How to read this.</strong> Every statement is labelled. <span class="tag t-c">Confirmed</span> comes from your specification. <span class="tag t-p">Proposed</span> is my design choice, open to change. <span class="tag t-o">Open</span> needs your answer. Model names, licenses and dataset terms listed here are research leads that must be re-verified against primary sources before adoption. No throughput, accuracy or timing figure in this document is a measurement.</div>
+</div></header>
+
+<div class="wrap">
+<nav class="toc" aria-label="Deliverables">
+  <ol>
+    <li><a href="#reqs"><span>01</span>Requirements specification</a></li>
+    <li><a href="#questions"><span>02</span>Clarification questions</a></li>
+    <li><a href="#arch"><span>03</span>Architecture &amp; data model</a></li>
+    <li><a href="#ui"><span>04</span>UI workflow &amp; wireframes</a></li>
+    <li><a href="#views"><span>05</span>Camera views &amp; nighttime</a></li>
+    <li><a href="#models"><span>06</span>Model &amp; dataset plan</a></li>
+    <li><a href="#learning"><span>07</span>Corrections &amp; learning</a></li>
+    <li><a href="#hw"><span>08</span>Hardware &amp; resources</a></li>
+    <li><a href="#deploy"><span>09</span>Offline deployment</a></li>
+    <li><a href="#roadmap"><span>10</span>Roadmap &amp; acceptance</a></li>
+  </ol>
+  <div class="k">
+    <div><span class="tag t-c">Confirmed</span> from your spec</div>
+    <div><span class="tag t-p">Proposed</span> design choice</div>
+    <div><span class="tag t-o">Open</span> needs an answer</div>
+    <div><span class="tag t-d">Derived</span> my reading of the spec</div>
+  </div>
+</nav>
+
+<main>
+
+<!-- ============================================================ 01 -->
+<section class="d" id="reqs">
+  <div class="dh"><span class="n">01</span><h2>Consolidated requirements specification</h2></div>
+  <p class="intro">Your specification restated as numbered, testable requirements so each one can be traced to a design section, a phase and a test. The § column points back to your document. Rows marked Derived are my interpretation where the spec implies but does not state the requirement; please correct any that are wrong.</p>
+
+  <div class="tbl"><table>
+    <thead><tr><th>ID</th><th>Requirement</th><th>§</th><th>Status</th></tr></thead>
+    <tbody>
+    <tr><td class="grp" colspan="4">Deployment and environment</td></tr>
+    <tr><td class="id">ENV-01</td><td>Runs on a single Windows workstation hosting backend, workers, databases and local web UI. No separate server.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ENV-02</td><td>Accessible from a browser on the workstation and from authorized computers on the same LAN.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ENV-03</td><td>One active operator at a time.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ENV-04</td><td>Every function works with no internet: detection, tracking, OCR, language interpretation, time zones, fonts, maps, UI assets, export, training.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ENV-05</td><td>No hosted APIs, cloud storage, online auth, CDNs or runtime model downloads.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ENV-06</td><td>Dependencies, models and datasets prepared on a connected staging machine and transferred.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ENV-07</td><td>No assumption of Docker, WSL, Hyper-V, admin rights or a pre-installed ML runtime. Normal operation needs no admin rights.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ENV-08</td><td>Installation permissions confirmed before choosing service or auto-start mechanisms.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Hardware and performance</td></tr>
+    <tr><td class="id">HW-01</td><td>Detect CPU features and cores, physical and available RAM, GPU model, VRAM, driver and usable execution backends, disk space and storage speed.</td><td>3</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">HW-02</td><td>Conservative 16 GB profile and expanded 48 GB profile, evaluated independently of GPU availability.</td><td>3</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">HW-03</td><td>GPU acceleration when supported, working CPU fallback otherwise, operator overrides with stated resource effects.</td><td>3</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">HW-04</td><td>Bounded queues and caches, incremental DB writes, controlled concurrency, incremental video processing, models loaded on demand.</td><td>3</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">HW-05</td><td>Review stays responsive during processing. Training yields to interactive work and operational inference.</td><td>3</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">HW-06</td><td>Every resize, tile, frame sample or quantization affecting analysis is recorded on the run. No silent data reduction.</td><td>3</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">HW-07</td><td>Performance claims only from measurements on target hardware.</td><td>3</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Missions and runs</td></tr>
+    <tr><td class="id">MIS-01</td><td>A mission holds source config, geography and time zone, analysis mode, view groups, regions, schedules, runs, results, corrections, approvals, exports.</td><td>4</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">MIS-02</td><td>One SQLite-class database per mission, created when the wizard is committed, runs stored inside it. Missions isolated, never merged automatically.</td><td>4, 17</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">MIS-03</td><td>A run records its input set, configuration and model versions.</td><td>4</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">MIS-04</td><td>Exactly one input type and one analytical mode per mission; several algorithms may cooperate within the mode.</td><td>4</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">MIS-05</td><td>Wizard: name, input type, country (Iran, Lebanon, Israel, Latvia), location and time zone, source dir, subdirectories, one-time or continuous, output dir, xlsx / csv / both.</td><td>5</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">MIS-06</td><td>Validate source access, destination permission, free storage and config consistency. Paths are on the workstation, not the remote browser.</td><td>5</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">MIS-07</td><td>Continuous mode monitors the directory independent of open browser tabs, creates further runs, notifies, keeps results pending review, resumes after restart.</td><td>5</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Time</td></tr>
+    <tr><td class="id">TIME-01</td><td>Still capture time parsed from <code>DDMMYYYY-HHmm-&lt;suffix&gt;</code> as UTC, minute precision kept as minute precision, suffix kept opaque, original filename kept.</td><td>6</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">TIME-02</td><td>No silent fallback to filesystem times. Parse preview and visible handling of malformed names.</td><td>6</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">TIME-03</td><td>Video: absolute UTC start from a confirmed source; event times from presentation timestamps, correct under variable frame rate.</td><td>6</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">TIME-04</td><td>Offline interactive time-zone map with search, local time, UTC offset and DST status for a given capture date. Store IANA zone id.</td><td>6</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">TIME-05</td><td>Local time computed per timestamp with the rules in force at that instant. Manual override keeps UTC and override provenance.</td><td>6</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Ingestion and monitoring</td></tr>
+    <tr><td class="id">ING-01</td><td>Recursive discovery, file-stability check, filesystem notifications plus periodic reconciliation, persistent checkpoints, restart recovery.</td><td>7</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ING-02</td><td>Detect corrupt, partial, replaced, renamed, unsupported files and unavailable directories, with visible actionable errors.</td><td>5, 7</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ING-03</td><td>No duplicate processing from repeated notifications, yet identical bytes at different capture times stay distinct observations.</td><td>7</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ING-04</td><td>Record source identity, capture time, checksum, path and version. Never modify sources. Replacing a file never invalidates earlier results or corrections.</td><td>7</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ING-05</td><td>Retention policy preserves evidence behind reviewed results.</td><td>7</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ING-06</td><td>Application outputs, DBs, caches and clips are never re-ingested.</td><td>7</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Camera views and regions</td></tr>
+    <tr><td class="id">VIEW-01</td><td>Camera location distinct from its views. Automatic grouping proposals with representatives, sizes, manual reassign, split, merge, rename, history.</td><td>8</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">VIEW-02</td><td>Lighting change alone does not create a new view. Background models and settings are per view; incompatible backgrounds never combined.</td><td>8</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">VIEW-03</td><td>Inclusion and exclusion polygons per view with defined precedence, stored in original image coordinates.</td><td>8</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">VIEW-04</td><td>Flag a view for review when it changes enough to invalidate polygons or background.</td><td>8</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Still-image analysis</td></tr>
+    <tr><td class="id">IMG-01</td><td>General traffic: per-image vehicle detection and counts. Never presented as unique vehicles or traffic flow.</td><td>9A</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">IMG-02</td><td>Scanning schedules: date ranges, weekdays, several windows per day, windows across midnight, evaluated in local time, documented boundaries and DST behavior.</td><td>9A</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">IMG-03</td><td>Object search by mission chat, translated offline into a structured spec shown before execution. No generated code is executed. Uncertain attributes stay uncertain.</td><td>9B</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">IMG-04</td><td>Plate detection and OCR for IR, LB, IL, LV covering digits, Latin, Arabic and Persian characters and numerals, layouts and reading order.</td><td>9C</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">IMG-05</td><td>Store plate box and crop, raw OCR, normalized text, country/layout hypothesis, uncertainty, corrections, provenance. Unreadable stays unreadable. No owner lookup.</td><td>9C</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Nighttime</td></tr>
+    <tr><td class="id">NGT-01</td><td>Model light components, light groups, vehicle candidates and confirmed vehicles as separate levels. Light count never equals vehicle count by rule.</td><td>10</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">NGT-02</td><td>Per-view, per-condition background and illumination model. Unexplained meaningful lights become candidates for review, not confirmed vehicles.</td><td>10</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">NGT-03</td><td>Background adaptation must not silently absorb stopped vehicles.</td><td>10</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">NGT-04</td><td>Condition judged from image content, not clock time. Enhanced images are not independent evidence. Confirmed and unresolved counts shown separately.</td><td>10</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">NGT-05</td><td>Video: one track through blob → headlight pair → visible body without duplicate events; ambiguous links stay uncertain. Stills: no continuity claims.</td><td>10</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">NGT-06</td><td>Separate nighttime evaluation plan.</td><td>10</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Video analysis</td></tr>
+    <tr><td class="id">VID-01</td><td>Target defined by structured controls or confirmed chat interpretation.</td><td>11</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">VID-02</td><td>Bounded-memory incremental processing, tracking continuity across chunks, one event per continuous appearance.</td><td>11</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">VID-03</td><td>Defined rules for occlusion, re-entry, view change, scene cut, recording boundary. No cross-camera or cross-recording identity claims.</td><td>11</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">VID-04</td><td>Event fields: file, event id, first/last times, relative positions, absolute UTC when known, thumbnail, class and uncertainty, review status, clip info. Configurable clip context.</td><td>11</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Processing, review, export</td></tr>
+    <tr><td class="id">PRG-01</td><td>Live progress (counts by state, stage, position, elapsed, supportable ETA, resources, errors). Pause, resume, cancel, recover. Browser close does not stop work.</td><td>12</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">PRG-02</td><td>Processing status kept separate from review status.</td><td>12</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">REV-01</td><td>Still result table: filename, capture time, view, vehicle count, candidate count, processing and review status. Searchable and sortable.</td><td>13</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">REV-02</td><td>"Approve all and export" shows scope and count, records bulk approval as unreviewed, never covers later continuous data, never called ground truth.</td><td>13</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">REV-03</td><td>Investigation screen: overlays, remove false, add missed by rectangle, correct class / grouping / candidate / plate, approve, prev/next, index of total.</td><td>13</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">REV-04</td><td>Video event table with thumbnails that open playback at the event with context and overlays; correct false and duplicate events; timing edits, merge and split defined in design.</td><td>14</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">EXP-01</td><td>Exports: configured dir and formats, defined snapshot, Unicode and leading zeros preserved, prediction vs correction vs candidate vs approval type distinguished, mission/run/source ids, no silent truncation or overwrite, failures reported.</td><td>17</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">EXP-02</td><td>Selected video clip export with traceable links between rows, events, clips, runs and recordings.</td><td>14</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Corrections and learning</td></tr>
+    <tr><td class="id">COR-01</td><td>Persist every correction type listed in §15 with full provenance; revisions never overwrite; deterministic current interpretation.</td><td>15</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">COR-02</td><td>Configuration changes (polygons, view reassignments) stored apart from analytical labels.</td><td>15</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">LRN-01</td><td>Explicit training workflow: inspect evidence, select eligible data, start manually; optional auto-scheduling policy proposed and approved before enabling. No retraining per correction.</td><td>16</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">LRN-02</td><td>Each algorithm declares its learning adapter; none called trainable without an implemented and tested path.</td><td>16</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">LRN-03</td><td>Only explicit reviewed labels as references; partial vs full review; no implied negatives; leak-free splits; mission provenance; explicit cross-mission reuse policy.</td><td>16</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">LRN-04</td><td>Versioned training runs, candidate models never overwrite production, comparison including night and per country, controlled promotion and rollback, failed runs keep diagnostics.</td><td>16</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Architecture, UX, validation</td></tr>
+    <tr><td class="id">ARC-01</td><td>Separated responsibilities for ingestion, scheduling, detection, OCR, tracking, review, persistence, training, export. Persistent background tasks.</td><td>18</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ARC-02</td><td>Browsers never open DB files; all access via backend. Safe writes, backups, recovery.</td><td>17</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ARC-03</td><td>LAN authentication and session handling.</td><td>18</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ARC-04</td><td>Offline packaging with small app updates separate from runtime and model packs; updates preserve all mission data and model history.</td><td>18</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">UX-01</td><td>Guided wizard, editable config summaries, prominent monitoring controls, responsive review, shortcuts, pagination, clear states, contextual help, visible distinction of machine / candidate / human / training.</td><td>18</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">VAL-01</td><td>Requirements-to-tests traceability matrix; unit, integration, browser, recovery and performance tests run continuously.</td><td>20</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">VAL-02</td><td>Measured metrics broken down by condition, view, object type, country and hardware profile. Thresholds agreed with product owner, never invented.</td><td>20</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">VAL-03</td><td>Per-delivery report: implemented, actually tested, commands and evidence, model versions, limitations, untested scenarios.</td><td>20</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="grp" colspan="4">Derived requirements (please confirm)</td></tr>
+    <tr><td class="id">DER-01</td><td>Operator identity must be individual (named local accounts) because corrections record operator identity, even with one active user at a time.</td><td>15, 18</td><td><span class="tag t-d">Derived</span></td></tr>
+    <tr><td class="id">DER-02</td><td>Schedules evaluated on a minute-precision capture time: a capture at 05:00 is treated as the whole minute 05:00:00–05:00:59. Boundary rule must be stated for this case.</td><td>6, 9A</td><td><span class="tag t-d">Derived</span></td></tr>
+    <tr><td class="id">DER-03</td><td>Nighttime processing runs inside the general-traffic (and video) mode as a cooperating algorithm, activated by measured image condition, rather than being a separate mission mode.</td><td>4, 10</td><td><span class="tag t-d">Derived</span></td></tr>
+    <tr><td class="id">DER-04</td><td>Output directory, data directory and evidence store must not lie inside a monitored source tree; the wizard blocks or excludes such paths.</td><td>7</td><td><span class="tag t-d">Derived</span></td></tr>
+    <tr><td class="id">DER-05</td><td>Excel sheets hold at most 1,048,576 rows; larger tables are split across sheets or files and the split is reported, never truncated.</td><td>17</td><td><span class="tag t-d">Derived</span></td></tr>
+    <tr><td class="id">DER-06</td><td>CSV and xlsx cells beginning with <code>=</code>, <code>+</code>, <code>-</code>, <code>@</code> are neutralized against formula injection without altering stored values.</td><td>17</td><td><span class="tag t-d">Derived</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Tensions found in the specification</h3>
+  <ul class="tight">
+    <li><b>LAN access versus no admin rights.</b> Accepting connections from other computers normally needs a Windows Firewall inbound rule, which usually needs an administrator once. This is likely the one unavoidable admin step. See Q18.</li>
+    <li><b>One mode per mission versus nighttime as a core capability.</b> Night images will appear in any general-traffic mission. I propose night handling as a cooperating algorithm inside the mode (DER-03). See Q8.</li>
+    <li><b>Changed files versus never invalidating earlier results.</b> Resolved by treating each content change as a new source version that keeps its own results; earlier versions and their corrections remain. Whether originals are copied into an evidence store is Q7.</li>
+    <li><b>Training on the 16 GB / CPU-only profile.</b> Detector fine-tuning may be impractical there. The design declares learning adapters per profile instead of promising them everywhere. See Q25.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ 02 -->
+<section class="d" id="questions">
+  <div class="dh"><span class="n">02</span><h2>Remaining material clarification questions</h2></div>
+  <p class="intro">Only questions whose answers change correctness or design. Each has the phase it blocks and the default I will use if work must start before you answer. Defaults are reversible.</p>
+
+  <div class="callout prop"><b class="h">Update 24 Oct · first sample reviewed</b>
+  Sample: Fintraffic camera C04507 preset C0450701 (Road 3 Tampere, Lakalaiva, Finland), 143 JPEGs over 24 h, CC BY 4.0. Findings that change the design:
+  <ul class="tight">
+    <li><b>Filename pattern differs from the spec.</b> Names are <code>C0450701_20261021T071528Z.jpg</code>: camera-preset id, then ISO-8601 basic UTC <i>with seconds</i>. The spec's <code>DDMMYYYY-HHmm-suffix</code> did not appear. The parser becomes a configurable set of named patterns with declared precision (minute or second), and the preset id is a strong hint for view grouping.</li>
+    <li>All 1280×720 baseline JPEG, no EXIF, 143 unique checksums. Regular 10-minute interval with one 20-minute gap.</li>
+    <li><b>Night frames are monochrome.</b> Vehicle colour must be reported as not observable at night for this camera type.</li>
+    <li>A burned-in caption sits at top-left; it is excluded from analysis by a default exclusion region suggestion.</li>
+    <li>Finland (Europe/Helsinki) is not among the four target countries; this sample is used for format, view and night-pipeline work, not plate or country evaluation.</li>
+  </ul></div>
+
+  <h3>Needed before Phase 1</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>Question</th><th>Why it matters</th><th>Default until answered</th></tr></thead>
+    <tbody>
+    <tr><td class="id">Q01</td><td>Can you provide representative, authorized samples: stills and videos per camera, per country, day and night?</td><td>Formats, codecs, view grouping, night design and every benchmark depend on real samples.</td><td>Design proceeds; Phase 0 cannot exit without samples.</td></tr>
+    <tr><td class="id">Q02</td><td>Which image formats and resolutions, and which video containers and codecs (MP4/H.264, H.265, AVI, proprietary NVR/DVR exports)?</td><td>Decoder selection and packaging; proprietary formats may need vendor tools.</td><td>JPEG/PNG/TIFF/BMP; anything FFmpeg can decode, checked by probing samples.</td></tr>
+    <tr><td class="id">Q03</td><td>How is the absolute UTC start time of a video encoded: filename pattern, container <code>creation_time</code>, burned-in on-screen clock, sidecar file?</td><td>Without it, events have only relative times.</td><td>Configurable filename pattern; if absent, absolute UTC left empty and shown as unknown.</td></tr>
+    <tr><td class="id">Q04</td><td>Expected volumes: images per day per mission, number of cameras and views, archive size, video hours per day, longest single recording.</td><td>Sizing of indexes, storage, queues, profiles and test data.</td><td>Design for archives of millions of images and multi-hour files, verified later.</td></tr>
+    <tr><td class="id">Q05</td><td>Do all still filenames follow <code>DDMMYYYY-HHmm-suffix</code> exactly? Any variants (seconds, other separators)? Does any part of the suffix have a known meaning, such as a camera id?</td><td>Parser strictness; a camera id in the name would anchor view grouping.</td><td>Strict pattern only; suffix opaque; non-matching files listed as malformed, not processed.</td></tr>
+    <tr><td class="id">Q06</td><td>Can one source directory hold images from several camera locations? Does folder structure indicate camera?</td><td>View grouping difficulty and whether location can be pre-set per folder.</td><td>Assume mixed; offer optional folder → location mapping.</td></tr>
+    <tr><td class="id">Q07</td><td>When a reviewed source file is later replaced or deleted, should the app keep its own copy of the original as evidence? How long are missions and evidence kept?</td><td>Storage cost versus evidence preservation.</td><td>Copy originals into the mission evidence store only once an item is reviewed or exported; keep thumbnails, crops and checksums for all.</td></tr>
+    <tr><td class="id">Q18</td><td>Can an administrator perform one-time setup: firewall inbound rule for LAN access, optional Windows service, GPU driver updates?</td><td>Without a firewall rule, remote browsers likely cannot connect. Determines auto-start method.</td><td>Per-user install, start at user logon via Task Scheduler, localhost works; LAN access documented as needing one admin step.</td></tr>
+    <tr><td class="id">Q19</td><td>Is application whitelisting (AppLocker, WDAC, Smart App Control) or antivirus policy in force? Must executables be code-signed?</td><td>An embedded Python runtime or unsigned binaries may be blocked.</td><td>Plan for signed binaries if a signing certificate is available; test on a locked-down VM.</td></tr>
+    <tr><td class="id">Q30</td><td>Which repository should hold the implementation? A new one must be created by you on GitHub.</td><td>Nowhere to commit code yet.</td><td>No code is written until you answer.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Needed before the phase indicated</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>Question</th><th>Blocks</th><th>Default until answered</th></tr></thead>
+    <tbody>
+    <tr><td class="id">Q08</td><td>Is nighttime analysis a cooperating part of general traffic and video modes (my proposal), or a separate mission mode?</td><td>P4</td><td>Cooperating component, activated by measured image condition.</td></tr>
+    <tr><td class="id">Q09</td><td>Should a mission ever combine counting with plate reading or object search, or are these strictly separate missions?</td><td>P3</td><td>Strictly separate, per §4.</td></tr>
+    <tr><td class="id">Q10</td><td>Which vehicle classes are counted and searchable (car, pickup, van, bus, truck, semi-trailer, motorcycle, bicycle)? Are pedestrians in scope?</td><td>P3</td><td>Car, bus, truck, motorcycle, plus "other vehicle"; finer subtypes only after evidence.</td></tr>
+    <tr><td class="id">Q11</td><td>In which languages will operators type chat requests: English, Hebrew, Arabic, Persian, Latvian?</td><td>P6</td><td>English only.</td></tr>
+    <tr><td class="id">Q12</td><td>What UI language(s) are required, and is right-to-left UI needed?</td><td>P1</td><td>English UI with correct bidi rendering of Arabic, Persian and Hebrew data.</td></tr>
+    <tr><td class="id">Q13</td><td>Which plate types per country are in scope (private, commercial, taxi, motorcycle, temporary, diplomatic, military, legacy formats)? Can you supply labelled plate images for Lebanon and Latvia, where no dataset is named?</td><td>P5</td><td>Current standard private-car plates only; country marked unsupported until country-specific evidence exists.</td></tr>
+    <tr><td class="id">Q14</td><td>Video: are recordings split into consecutive files from the same camera? Should a track continue across that file boundary? Are PTZ moves or scene cuts expected?</td><td>P7</td><td>Tracks end at file boundaries; scene cuts end all tracks.</td></tr>
+    <tr><td class="id">Q15</td><td>Clip context before and after an event, and clip format: fast keyframe-aligned copy or frame-exact re-encode?</td><td>P7</td><td>Operator setting with no preset value; both export methods offered.</td></tr>
+    <tr><td class="id">Q16</td><td>Do you want any automatic approval policy for continuous missions?</td><td>P3</td><td>None. All new results pending review.</td></tr>
+    <tr><td class="id">Q17</td><td>Notifications: in-app only, Windows notifications on the workstation, or an internal mail server?</td><td>P1</td><td>In-app notification center plus optional Windows toast.</td></tr>
+    <tr><td class="id">Q20</td><td>Installed NVIDIA driver version on the A4000 workstation, and may it be updated?</td><td>P0</td><td>Detect at runtime; choose the newest packaged CUDA runtime the driver supports, else DirectML or CPU.</td></tr>
+    <tr><td class="id">Q21</td><td>LAN security: is HTTPS required? Internal CA certificates available? How many named operator accounts? Session timeout policy?</td><td>P1</td><td>Named local accounts, HTTPS with a locally generated certificate, idle timeout configurable.</td></tr>
+    <tr><td class="id">Q22</td><td>Storage layout: separate data drive? Backup destination? Antivirus scanning on source folders?</td><td>P1</td><td>Data root chosen at install; nightly DB backup to a configurable folder.</td></tr>
+    <tr><td class="id">Q23</td><td>Are source directories ever network shares (UNC paths)?</td><td>P1</td><td>Supported; reconciliation scan relied on more heavily because change notifications over SMB are unreliable.</td></tr>
+    <tr><td class="id">Q24</td><td>May reviewed data from one mission be used to train models used by other missions? Who approves that?</td><td>P8</td><td>No pooling unless a mission is explicitly opted in by an operator.</td></tr>
+    <tr><td class="id">Q25</td><td>Is it acceptable that detector fine-tuning is unavailable on CPU-only or 16 GB machines, with lighter adapters (calibration, small classifiers) offered there instead?</td><td>P8</td><td>Yes; adapters declared per profile.</td></tr>
+    <tr><td class="id">Q26</td><td>What is the intended use category (government, commercial, research)? Public datasets differ in what they permit even for evaluation.</td><td>P0</td><td>Treat non-commercial datasets as unusable until you confirm otherwise.</td></tr>
+    <tr><td class="id">Q27</td><td>Which numerical acceptance thresholds will you set, per metric and condition?</td><td>Each phase exit</td><td>Report measurements only; no pass/fail thresholds invented.</td></tr>
+    <tr><td class="id">Q28</td><td>Data retention and deletion rules for missions, evidence and training data.</td><td>P9</td><td>Keep everything until an operator deletes a mission; deletion is explicit and logged.</td></tr>
+    <tr><td class="id">Q29</td><td>In which situations do you expect a manual time-zone override to be needed?</td><td>P1</td><td>Override per mission with mandatory reason; UTC never altered.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============================================================ 03 -->
+<section class="d" id="arch">
+  <div class="dh"><span class="n">03</span><h2>Architecture and per-mission data model</h2></div>
+  <p class="intro">One backend process on the workstation supervises a small set of worker processes. The browser is only a client. All state lives in a control database plus one database per mission. <span class="tag t-p">Proposed</span> throughout unless marked.</p>
+
+  <h3>Component view</h3>
+  <pre class="mermaid">
+flowchart LR
+  subgraph Clients
+    B1[Browser on workstation]
+    B2[Browser on LAN computer]
+  end
+  subgraph Backend["Backend process (HTTP + WebSocket, auth, API)"]
+    API[REST / WebSocket API]
+    SCH[Scheduler and job queue]
+    WR[Mission DB writer]
+    MON[Directory monitor]
+    EXP[Export service]
+    HWP[Hardware probe and profile]
+  end
+  subgraph Workers["Worker processes (started on demand)"]
+    ING[Ingestion and hashing]
+    DET[Detection and classification]
+    NGT[Night light analysis]
+    OCR[Plate detection and OCR]
+    TRK[Video decode and tracking]
+    LLM[Query interpreter]
+    TRN[Training and evaluation]
+  end
+  subgraph Storage
+    CDB[(control.db)]
+    MDB[(mission.db per mission)]
+    EVD[/evidence, crops, thumbnails, clips/]
+    MREG[/model registry/]
+  end
+  SRC[/Source folders - read only/]
+  OUT[/Export folders/]
+  B1 & B2 -->|HTTPS| API
+  API --> SCH
+  MON --> SCH
+  SRC -.watch + scan.-> MON
+  SCH --> ING & DET & NGT & OCR & TRK & LLM & TRN
+  ING & DET & NGT & OCR & TRK & TRN -->|result batches| WR
+  WR --> MDB
+  API --> CDB
+  SCH --> CDB
+  DET & OCR & TRK & TRN --> MREG
+  ING --> EVD
+  EXP --> OUT
+  EXP --> MDB
+  </pre>
+
+  <h3>Technology choices</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Concern</th><th>Proposed choice</th><th>Reason</th></tr></thead>
+    <tbody>
+    <tr><td>Runtime</td><td>Embedded CPython distribution shipped in the app folder; pinned wheels with hashes</td><td>No installer or admin needed; the ML ecosystem for detection, OCR and training is Python-first.</td></tr>
+    <tr><td>Web server</td><td>FastAPI on Uvicorn; WebSocket for progress and notifications</td><td>Typed API, async I/O, single process to package.</td></tr>
+    <tr><td>UI</td><td>React + TypeScript single-page app, built on staging and served as static files; all fonts and icons bundled</td><td>Rich review screens; zero runtime network needs.</td></tr>
+    <tr><td>Inference</td><td>ONNX Runtime with CPU, CUDA and DirectML execution providers, chosen by probe</td><td>One model format across GPU vendors and CPU fallback; PyTorch not loaded for inference.</td></tr>
+    <tr><td>Training</td><td>PyTorch, loaded only inside the training worker</td><td>Keeps startup light (HW-04); export to ONNX for inference.</td></tr>
+    <tr><td>Video</td><td>FFmpeg libraries via PyAV, reading packet presentation timestamps and time base</td><td>Correct variable-frame-rate timing (TIME-03), broad codec support.</td></tr>
+    <tr><td>Images</td><td>OpenCV and Pillow</td><td>Mature, offline, permissive licenses.</td></tr>
+    <tr><td>Monitoring</td><td>ReadDirectoryChangesW (via <code>watchdog</code>) plus periodic full reconciliation</td><td>Notifications are fast but lossy; reconciliation is authoritative.</td></tr>
+    <tr><td>Language model</td><td>llama.cpp runtime with a small instruct model in GGUF, JSON-schema-constrained output</td><td>Runs offline on CPU or GPU; constrained decoding cannot emit code or free-form actions.</td></tr>
+    <tr><td>Time zones</td><td>Bundled IANA tzdata (Python <code>zoneinfo</code> + <code>tzdata</code> package), zone boundary polygons, offline vector basemap rendered with a bundled MapLibre GL</td><td>Per-timestamp DST rules; no network.</td></tr>
+    <tr><td>Databases</td><td>SQLite in WAL mode, one file per mission plus <code>control.db</code></td><td>Matches §17 for single-user use; no service to install. See justification below.</td></tr>
+    <tr><td>Export</td><td>openpyxl write-only mode for xlsx; UTF-8 CSV with BOM</td><td>Streams large tables; Excel opens Unicode CSV correctly with BOM.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="callout prop"><b class="h">SQLite justification and safeguards</b>
+  One operator, one host and per-mission isolation fit SQLite well, and it needs no service or admin rights. Safeguards: a single writer per mission database (the backend's writer task receives batched results from workers over a queue, so workers never hold write locks); WAL mode with <code>synchronous=FULL</code> for decisions and corrections; <code>PRAGMA integrity_check</code> on open; online backup API for scheduled and pre-upgrade backups; schema version table with forward-only migrations run only after a backup. A client-server database would only be justified if concurrent multi-user editing becomes a requirement.</div>
+
+  <h3>Process and task model</h3>
+  <ul class="tight">
+    <li><b>Jobs</b> are rows in <code>control.db</code> with state, priority class (interactive, operational, background), mission id and checkpoint. The scheduler survives restarts by resuming jobs from their checkpoints.</li>
+    <li><b>Workers</b> are separate OS processes started on demand and stopped after idle time, so a model crash cannot take down the UI and model memory is returned to the system.</li>
+    <li><b>Priority</b>: interactive requests (thumbnails, crops, review saves) are served by the backend directly; operational inference runs at normal priority; training at below-normal process priority and pauses at checkpoints when operational work queues.</li>
+    <li><b>Idempotency</b>: each work item is keyed by (run, source version, stage). Re-delivery after a crash overwrites only uncommitted output.</li>
+  </ul>
+
+  <h3>Filesystem layout</h3>
+<div class="tbl"><table><tbody>
+<tr><td class="mono">&lt;app&gt;\versions\1.4.0\</td><td>Application code and UI; side-by-side versions for rollback</td></tr>
+<tr><td class="mono">&lt;app&gt;\runtime\py311-2026.10\</td><td>Runtime pack: Python, wheels, FFmpeg, ONNX Runtime variants</td></tr>
+<tr><td class="mono">&lt;app&gt;\models\&lt;model&gt;\&lt;version&gt;\</td><td>Model pack content: weights, model card, license, SHA-256</td></tr>
+<tr><td class="mono">&lt;data&gt;\control.db</td><td>Accounts, sessions, mission registry, jobs, hardware profile, global model registry</td></tr>
+<tr><td class="mono">&lt;data&gt;\missions\&lt;mission-id&gt;\mission.db</td><td>Authoritative mission record</td></tr>
+<tr><td class="mono">&lt;data&gt;\missions\&lt;mission-id&gt;\evidence\ thumbs\ crops\ clips\ bg\</td><td>Derived and preserved media, content-addressed by hash</td></tr>
+<tr><td class="mono">&lt;data&gt;\backups\</td><td>Rotating database backups</td></tr>
+</tbody></table></div>
+
+  <h3>Per-mission data model</h3>
+  <p>Machine output rows are immutable. Human decisions, configuration changes and approvals are separate append-only records that reference them. Core entities:</p>
+  <pre class="mermaid">
+erDiagram
+  MISSION ||--o{ CONFIG_REVISION : "has"
+  MISSION ||--o{ RUN : "has"
+  MISSION ||--o{ SOURCE_FILE : "tracks"
+  SOURCE_FILE ||--o{ SOURCE_VERSION : "versions"
+  RUN ||--o{ RUN_ITEM : "processes"
+  SOURCE_VERSION ||--o{ RUN_ITEM : "in"
+  CAMERA_LOCATION ||--o{ CAMERA_VIEW : "has"
+  CAMERA_VIEW ||--o{ VIEW_ASSIGNMENT : "receives"
+  SOURCE_VERSION ||--o{ VIEW_ASSIGNMENT : "assigned"
+  CAMERA_VIEW ||--o{ REGION_REVISION : "regions"
+  CAMERA_VIEW ||--o{ BACKGROUND_MODEL : "per condition"
+  RUN_ITEM ||--o{ DETECTION : "produces"
+  RUN_ITEM ||--o{ LIGHT_COMPONENT : "produces"
+  LIGHT_COMPONENT }o--o{ LIGHT_GROUP : "grouped"
+  LIGHT_GROUP ||--o| CANDIDATE : "may form"
+  DETECTION ||--o| PLATE_READ : "may have"
+  RUN ||--o{ TRACK : "video"
+  TRACK ||--o{ TRACK_OBSERVATION : "frames"
+  TRACK }o--|| EVENT : "consolidated"
+  ANNOTATION ||--o{ ANNOTATION_REVISION : "history"
+  RUN_ITEM ||--o{ REVIEW_STATE : "review"
+  APPROVAL ||--o{ APPROVAL_ITEM : "covers"
+  EXPORT ||--o{ EXPORT_FILE : "writes"
+  TRAINING_RUN ||--o{ EVALUATION : "measured"
+  </pre>
+
+  <div class="tbl"><table>
+    <thead><tr><th>Table</th><th>Key fields</th><th>Notes</th></tr></thead>
+    <tbody>
+    <tr><td class="grp" colspan="3">Mission and configuration</td></tr>
+    <tr><td class="mono">mission</td><td>id, name, input_type, mode, country, iana_zone, location (lat/lon), processing_mode, created_at, schema_version</td><td>Single row. Input type and mode immutable after creation.</td></tr>
+    <tr><td class="mono">config_revision</td><td>id, seq, kind, payload_json, author, created_at, reason</td><td>Every change to source dirs, output, formats, monitoring, tz override. Current config = latest per kind.</td></tr>
+    <tr><td class="mono">schedule, schedule_window</td><td>schedule: id, name, date_from, date_to, active; window: weekday_start, start_local, weekday_end, end_local</td><td>Windows may cross midnight. Revisioned like regions.</td></tr>
+    <tr><td class="grp" colspan="3">Sources and runs</td></tr>
+    <tr><td class="mono">source_file</td><td>id, source_root_id, rel_path_first_seen</td><td>Logical identity of a file path.</td></tr>
+    <tr><td class="mono">source_version</td><td>id, source_file_id, rel_path, size, mtime, sha256, capture_utc, capture_precision, parse_status, parse_detail, media_info_json, first_seen, superseded_by</td><td>New row on content change. Same bytes at different capture times remain different versions of different files.</td></tr>
+    <tr><td class="mono">run</td><td>id, kind (initial, continuous batch, reprocess), config_snapshot_json, model_versions_json, preprocessing_json, resource_profile_json, input_snapshot_id, state, started, ended</td><td>Preprocessing record lists every resize, tile, frame sampling, quantization.</td></tr>
+    <tr><td class="mono">run_item</td><td>id, run_id, source_version_id, processing_state, stage, error_code, error_detail, attempts, checkpoint_json</td><td>Processing status only. Review status lives elsewhere (PRG-02).</td></tr>
+    <tr><td class="grp" colspan="3">Views and regions</td></tr>
+    <tr><td class="mono">camera_location, camera_view</td><td>view: id, location_id, name, ref_width, ref_height, reference_item_ids, state (active, needs review, retired)</td><td></td></tr>
+    <tr><td class="mono">view_assignment</td><td>id, source_version_id, view_id, method (auto, manual), score, author, created_at, superseded_by</td><td>History preserved; current = latest non-superseded.</td></tr>
+    <tr><td class="mono">region_revision</td><td>id, view_id, region_uid, kind (include, exclude), polygon_json (original pixel coords), seq, author, created_at, deleted</td><td>Configuration, never training labels (COR-02).</td></tr>
+    <tr><td class="mono">background_model</td><td>id, view_id, condition, method, params_json, built_from_ids, artifact_path, version, created_at</td><td>Never mixed across views.</td></tr>
+    <tr><td class="grp" colspan="3">Machine output (immutable)</td></tr>
+    <tr><td class="mono">detection</td><td>id, run_item_id, frame_pts, bbox (orig px), class, class_scores_json, attributes_json, in_region, model_version_id, preprocessing_ref</td><td>Attributes carry per-attribute uncertainty, including "not observable".</td></tr>
+    <tr><td class="mono">light_component, light_group, candidate</td><td>component: centroid, area, peak, saturation, shape; group: kind, member_ids, score; candidate: group_id, evidence_json, state</td><td>Four levels kept separate (NGT-01).</td></tr>
+    <tr><td class="mono">plate_read</td><td>id, detection_id, bbox, crop_path, raw_text, raw_chars_json, normalized_text, country_hyp, layout_hyp, char_confidences, readability (full, partial, unreadable), model_version_id</td><td>Raw text stored as emitted, in Unicode, original order.</td></tr>
+    <tr><td class="mono">track, track_observation, event</td><td>track: id, run_id, chunk_span, state_history; obs: track_id, pts, bbox, appearance_state; event: id, track_ids, first_pts, last_pts, first_utc, last_utc, class, uncertainty, thumbnail_path</td><td></td></tr>
+    <tr><td class="grp" colspan="3">Human decisions</td></tr>
+    <tr><td class="mono">annotation, annotation_revision</td><td>see Deliverable 07</td><td>Append-only.</td></tr>
+    <tr><td class="mono">review_state</td><td>run_item_id or event_id, status (pending, in review, reviewed, bulk approved), completeness, reviewer, updated_at</td><td></td></tr>
+    <tr><td class="mono">approval, approval_item</td><td>approval: id, type (individual, bulk_unreviewed), scope_query_json, item_count, author, created_at</td><td>Bulk scope is frozen at the moment of approval.</td></tr>
+    <tr><td class="mono">query_spec</td><td>id, chat_text, interpreter_version, spec_json, operator_confirmed_at, edits_json</td><td>Only confirmed specs can drive a run.</td></tr>
+    <tr><td class="grp" colspan="3">Export, learning, operations</td></tr>
+    <tr><td class="mono">export, export_file</td><td>export: id, snapshot_at, scope, formats, state; file: path, rows, sha256, split_index, status</td><td>Partial failures recorded per file.</td></tr>
+    <tr><td class="mono">training_dataset, training_run, evaluation</td><td>see Deliverable 07</td><td></td></tr>
+    <tr><td class="mono">notification, error_log</td><td>severity, code, message, context_json, acknowledged</td><td></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Key rules encoded in the model</h3>
+  <ul class="tight">
+    <li><b>Timestamp parsing</b> <span class="tag t-c">Confirmed</span>: <code>17052026-1604-dcincincifbvhubuhbv</code> → <code>capture_utc = 2026-05-17T16:04Z</code>, <code>capture_precision = minute</code>, suffix stored verbatim. Invalid dates such as <code>31022026</code> are rejected as malformed, never coerced.</li>
+    <li><b>Local time</b> is computed when needed from <code>capture_utc</code> and <code>iana_zone</code>, never stored as the source of truth. Example: Asia/Jerusalem gives 19:04 on 17 May 2026 (summer) and 18:04 for the same clock time on 17 Jan 2026 (winter). These examples will become unit tests and are not yet executed.</li>
+    <li><b>Schedule boundaries</b> <span class="tag t-p">Proposed</span>: windows are half-open [start, end) in local wall-clock time. A minute-precision capture is inside when its whole minute lies inside the window. Local times that do not exist (spring-forward gap) cannot occur in captures because captures are UTC; window edges falling in a gap snap to the first valid instant, and repeated hours in autumn are matched in both occurrences. All four cases are listed in the test plan.</li>
+    <li><b>Region membership</b> <span class="tag t-p">Proposed</span>: an object counts as inside when its bounding box bottom-centre point (approximate ground contact) is inside at least one inclusion polygon and inside no exclusion polygon. Exclusion wins. No inclusion polygon means the whole frame is included. The membership rule is selectable per view (bottom-centre, centroid, overlap fraction) and recorded on the run.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ 04 -->
+<section class="d" id="ui">
+  <div class="dh"><span class="n">04</span><h2>UI workflow and review-screen wireframes</h2></div>
+  <p class="intro">Navigation follows the mission lifecycle. Wireframes show layout and content, not visual styling. All labels are examples.</p>
+
+  <pre class="mermaid">
+flowchart LR
+  H[Missions home] --> W[Mission wizard]
+  W -->|commit creates mission.db| O[Mission overview]
+  O --> V[Camera views]
+  V --> R[Regions per view]
+  O --> S[Schedules]
+  O --> A[Analysis target: controls or chat]
+  A --> P[Run and progress]
+  P --> T[Result table]
+  T --> I[Investigation screen]
+  T --> BA[Approve all and export]
+  I --> X[Export]
+  BA --> X
+  T --> L[Learning: evidence, training, models]
+  O --> M[Monitoring on/off]
+  M --> P
+  </pre>
+
+  <h3>Overlay language</h3>
+  <p>Machine output, candidates and human decisions differ by line style and label, not by color alone, so they remain distinguishable for color-blind operators and in print.</p>
+  <div class="legend">
+    <span><i class="sw" style="border-color:var(--ov-machine);border-style:dashed"></i>Machine detection (dashed)</span>
+    <span><i class="sw" style="border-color:var(--ov-cand);border-style:dotted;border-radius:50%"></i>Unresolved candidate (dotted, rounded)</span>
+    <span><i class="sw" style="border-color:var(--ov-human)"></i>Human added or confirmed (solid)</span>
+    <span><i class="sw" style="border-color:var(--ov-reject);background:repeating-linear-gradient(45deg,transparent 0 4px,rgba(192,57,43,.35) 4px 6px)"></i>Human rejected (hatched, hideable)</span>
+    <span><span class="tag t-p" style="background:var(--sunk);color:var(--ink)">M2.1 candidate</span>Training result badge</span>
+  </div>
+
+  <h4>A. Mission wizard, step 4 of 9</h4>
+  <div class="wf"><div class="wf-inner">
+    <div class="steps"><span class="done">1 Name</span><span class="done">2 Input</span><span class="done">3 Country</span><span class="on">4 Location &amp; time zone</span><span>5 Source</span><span>6 Subfolders</span><span>7 Processing</span><span>8 Output</span><span>9 Formats</span></div>
+    <div class="row" style="grid-template-columns:1.4fr 1fr">
+      <div class="box" style="height:230px;position:relative">
+        <div class="lbl">Offline time-zone map</div>
+        <div class="fill" style="position:absolute;inset:28px 8px 8px 8px"></div>
+        <div style="position:absolute;left:46%;top:48%;color:var(--ink)">◉ Selected</div>
+        <div class="inp" style="position:absolute;left:16px;top:36px;width:60%">Search country, city or zone…  Haifa</div>
+      </div>
+      <div class="box" style="display:grid;gap:6px;align-content:start">
+        <div class="lbl">Selection</div>
+        <div class="field"><span>IANA zone</span><span class="inp">Asia/Jerusalem</span></div>
+        <div class="field"><span>Now</span><span>UTC+03:00, daylight saving</span></div>
+        <div class="field"><span>Check date</span><span class="inp">17/01/2026 16:04 UTC</span></div>
+        <div class="field"><span>Local then</span><span>18:04, UTC+02:00, standard time</span></div>
+        <div class="field"><span>Override</span><span class="btn">Set manual override…</span></div>
+      </div>
+    </div>
+    <div class="bar"><span class="btn">Back</span><span class="sp"></span><span>Step validates on Next</span><span class="btn pri">Next</span></div>
+  </div></div>
+  <p class="wf-cap">Step 5 (source) shows a live parse preview: first 20 files, parsed UTC, local time, and a count of malformed names with examples. Step 8 checks write permission, free space and that the output is outside the source tree.</p>
+
+  <h4>B. Mission overview</h4>
+  <div class="wf"><div class="wf-inner">
+    <div class="bar"><b style="color:var(--ink)">Route 6 North cameras</b><span>· Still images · General traffic · Israel · Asia/Jerusalem</span><span class="sp"></span><span class="ok">● Monitoring ON</span><span class="btn">Pause monitoring</span></div>
+    <div class="row" style="grid-template-columns:repeat(4,1fr)">
+      <div class="box"><div class="lbl">Discovered</div><span style="color:var(--ink)">12,408</span></div>
+      <div class="box"><div class="lbl">Processed</div><span style="color:var(--ink)">11,960</span></div>
+      <div class="box"><div class="lbl">Failed / malformed</div><span class="bad">37 / 112</span></div>
+      <div class="box"><div class="lbl">Pending review</div><span style="color:var(--ink)">11,960</span></div>
+    </div>
+    <div class="row" style="grid-template-columns:1fr 1fr">
+      <div class="box"><div class="lbl">Configuration summary</div>Source D:\Feeds\R6N (with subfolders) · Output E:\Exports\R6N · xlsx + csv · 4 views · 2 schedules · <span class="btn">Edit</span></div>
+      <div class="box"><div class="lbl">Recent runs</div>Run 14 continuous batch · 212 items · completed 14:20<br>Run 13 continuous batch · 198 items · 3 failed</div>
+    </div>
+  </div></div>
+  <p class="wf-cap">Example figures only. Monitoring state is always visible in the header of every mission page.</p>
+
+  <h4>C. Still-image result table</h4>
+  <div class="wf"><div class="wf-inner">
+    <div class="bar"><span class="inp" style="min-width:200px">Filter: view = North-A, review = pending</span><span class="btn">Schedule: Weeknights</span><span class="btn">Has candidates</span><span class="sp"></span><span class="btn">Review selected</span><span class="btn pri">Approve all without review and export…</span></div>
+    <div class="box" style="padding:0"><table>
+      <thead><tr><th>Filename</th><th>Capture UTC</th><th>Local</th><th>View</th><th>Vehicles</th><th>Unresolved</th><th>Processing</th><th>Review</th></tr></thead>
+      <tbody>
+      <tr><td>17052026-1604-dcinc…</td><td>2026-05-17 16:04</td><td>19:04</td><td>North-A</td><td>7</td><td>–</td><td>done</td><td>pending</td></tr>
+      <tr><td>17052026-2241-aa81f…</td><td>2026-05-17 22:41</td><td>01:41 +1d</td><td>North-A</td><td>2</td><td>3</td><td>done</td><td>reviewed</td></tr>
+      <tr><td>18052026-0002-k2x9…</td><td>2026-05-18 00:02</td><td>03:02</td><td>North-B</td><td>0</td><td>1</td><td>done</td><td>bulk approved</td></tr>
+      <tr><td>18052026-0019-zz…</td><td>2026-05-18 00:19</td><td>03:19</td><td>unassigned</td><td>–</td><td>–</td><td class="bad">corrupt file</td><td>–</td></tr>
+      </tbody></table></div>
+    <div class="bar"><span>Rows 1–100 of 11,960</span><span class="sp"></span><span class="btn">‹</span><span class="btn">›</span></div>
+  </div></div>
+  <p class="wf-cap">The bulk action opens a confirmation panel showing the frozen scope (filter, item count, latest capture time included) and states that items will be recorded as "approved without individual review". Newly arriving items are excluded.</p>
+
+  <h4>D. Investigation screen (still image)</h4>
+  <div class="wf"><div class="wf-inner">
+    <div class="bar"><span class="btn">‹ Prev</span><b style="color:var(--ink)">Image 1,204 of 11,960</b><span class="btn">Next ›</span><span>17052026-2241-aa81f… · North-A · 22:41 UTC / 01:41 local · condition: night</span><span class="sp"></span><span class="btn">Show rejected</span><span class="btn">Original / enhanced view</span></div>
+    <div class="row" style="grid-template-columns:2.2fr 1fr">
+      <div class="img">
+        <div class="road"></div>
+        <svg class="poly" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polygon points="30,38 58,38 96,100 6,100" fill="none" stroke="#8fd3ff" stroke-width=".5" stroke-dasharray="2 1"/><polygon points="70,60 96,60 96,100 82,100" fill="rgba(255,90,90,.12)" stroke="#ff8080" stroke-width=".5"/></svg>
+        <div class="ovl ov-m" style="left:36%;top:62%;width:16%;height:22%"><span>car 0.91</span></div>
+        <div class="ovl ov-c" style="left:46%;top:40%;width:4%;height:4%"><span>light pair · candidate</span></div>
+        <div class="ovl ov-c" style="left:50%;top:36%;width:2.4%;height:3%"><span>single light</span></div>
+        <div class="ovl ov-h" style="left:20%;top:70%;width:14%;height:20%"><span>car · added by operator</span></div>
+        <div class="ovl ov-x" style="left:74%;top:30%;width:5%;height:6%"><span>rejected: streetlight</span></div>
+      </div>
+      <div class="box" style="display:grid;gap:6px;align-content:start">
+        <div class="lbl">Counts (shown separately)</div>
+        <div style="color:var(--ink)">Vehicles: 2 (1 machine, 1 added)<br>Unresolved candidates: 2<br>Rejected: 1</div>
+        <div class="lbl" style="margin-top:6px">Selected object</div>
+        <div class="field"><span>Class</span><span class="inp">car ▾</span></div>
+        <div class="field"><span>Light grouping</span><span class="inp">pair ▾</span></div>
+        <div class="field"><span>Candidate</span><span><span class="btn">Confirm vehicle</span> <span class="btn">Reject</span></span></div>
+        <div class="field"><span>Mark as</span><span class="btn">Persistent background light</span></div>
+        <div class="field"><span>Note</span><span class="inp">…</span></div>
+        <div class="lbl" style="margin-top:6px">Review completeness</div>
+        <div><span class="btn">All vehicles in region checked</span></div>
+        <div class="bar" style="margin-top:6px"><span class="btn">Undo</span><span class="sp"></span><span class="btn pri">Save &amp; approve</span></div>
+      </div>
+    </div>
+  </div></div>
+  <p class="wf-cap">Inclusion region dashed light blue; exclusion region shaded red. Geometry is drawn and stored in original pixel coordinates, independent of zoom. "All vehicles in region checked" sets review completeness to full, which is what allows unmarked areas to count as negatives for training.</p>
+
+  <h4>E. Video event review</h4>
+  <div class="wf"><div class="wf-inner">
+    <div class="row" style="grid-template-columns:1fr 1.5fr">
+      <div class="box" style="padding:0"><table>
+        <thead><tr><th>Thumb</th><th>Video</th><th>Interval</th><th>Event</th><th>Review</th></tr></thead>
+        <tbody>
+        <tr><td><span class="fill" style="display:inline-block;width:40px;height:24px"></span></td><td>cam3_0514.mp4</td><td>00:12:31–00:12:44</td><td>E-0042</td><td>pending</td></tr>
+        <tr><td><span class="fill" style="display:inline-block;width:40px;height:24px"></span></td><td>cam3_0514.mp4</td><td>00:12:45–00:12:49</td><td>E-0043 ⚠ possible duplicate</td><td>pending</td></tr>
+        <tr><td><span class="fill" style="display:inline-block;width:40px;height:24px"></span></td><td>cam3_0514.mp4</td><td>00:31:02–00:31:20</td><td>E-0044</td><td>confirmed</td></tr>
+        </tbody></table></div>
+      <div class="box" style="display:grid;gap:6px">
+        <div class="img" style="height:190px"><div class="road"></div><div class="ovl ov-m" style="left:40%;top:50%;width:26%;height:30%"><span>semi-trailer? 0.62 · T-118</span></div></div>
+        <div class="timeline"><i style="left:30%;width:12%"></i><i style="left:43%;width:4%"></i><i class="h" style="left:70%;width:10%"></i></div>
+        <div class="bar"><span class="btn">−5 s</span><span class="btn">◀ frame</span><span class="btn">▶ Play</span><span class="btn">frame ▶</span><span class="btn">+5 s</span><span>00:12:33.480 · UTC 2026-05-14 06:12:33.480</span><span class="sp"></span><span class="btn">Merge with next</span><span class="btn">Split here</span><span class="btn">Set start / end</span><span class="btn">Reject</span></div>
+      </div>
+    </div>
+  </div></div>
+  <p class="wf-cap">Playback opens at the event start minus the configured context. Timing edits move start and end to frame presentation timestamps. Merge combines two events of the same continuous appearance; split cuts one event at the current frame into two tracks.</p>
+
+  <h4>Keyboard shortcuts <span class="tag t-p">Proposed</span></h4>
+  <div class="tbl"><table><tbody>
+    <tr><td><span class="kbd">J</span> / <span class="kbd">K</span></td><td>Next / previous image or event</td><td><span class="kbd">A</span></td><td>Approve and save</td></tr>
+    <tr><td><span class="kbd">B</span></td><td>Draw a box for a missed object</td><td><span class="kbd">Del</span></td><td>Reject selected object</td></tr>
+    <tr><td><span class="kbd">C</span></td><td>Confirm selected candidate</td><td><span class="kbd">G</span></td><td>Group or ungroup selected lights</td></tr>
+    <tr><td><span class="kbd">1</span>–<span class="kbd">9</span></td><td>Set class of selected object</td><td><span class="kbd">H</span></td><td>Toggle overlays</td></tr>
+    <tr><td><span class="kbd">Space</span></td><td>Play / pause video</td><td><span class="kbd">,</span> / <span class="kbd">.</span></td><td>Step one frame</td></tr>
+    <tr><td><span class="kbd">Ctrl</span>+<span class="kbd">Z</span></td><td>Undo last unsaved edit</td><td><span class="kbd">?</span></td><td>Shortcut help</td></tr>
+  </tbody></table></div>
+
+  <h4>States every screen designs for</h4>
+  <p>Loading (skeleton rows), empty ("No images match this filter. Clear the review filter to see 340 reviewed images."), unavailable source ("D:\Feeds\R6N is not reachable. Monitoring paused at 14:02; it resumes when the folder returns."), and failure with an error code, a plain cause and the next action. Plate text is rendered in bidi-isolated spans so Persian and Arabic characters display in their original order next to Latin UI text.</p>
+</section>
+
+<!-- ============================================================ 05 -->
+<section class="d" id="views">
+  <div class="dh"><span class="n">05</span><h2>Camera-view and nighttime-detection design</h2></div>
+
+  <h3>Camera-view grouping</h3>
+  <p class="intro">Goal: group images by physical view so that different lighting of the same view stays one group, while different angles of the same camera become separate groups. <span class="tag t-p">Proposed</span></p>
+  <ol class="tight">
+    <li><b>Structural signature.</b> For each image, compute a downscaled, illumination-normalized representation focused on fixed structure: gradient-orientation maps and local keypoints. Optionally add a learned image embedding (candidate: DINOv2 small, license to verify) compared against the classical baseline in Deliverable 06.</li>
+    <li><b>Clustering.</b> Density-based clustering on signatures within the mission, conservative so that uncertain images remain unassigned rather than forced into a group.</li>
+    <li><b>Geometric verification.</b> Before two clusters are merged, match keypoints between their representatives and fit a homography with RANSAC; a high inlier ratio with near-identity transform means the same view. This links day and night clusters where fixed structures (poles, signs, lane markings under lights) are visible.</li>
+    <li><b>Operator confirmation.</b> Proposals are shown as groups with representative images per condition, size and a confidence. The operator merges, splits, renames and reassigns. Day/night links the algorithm could not verify are shown as "possible same view".</li>
+    <li><b>Ongoing assignment.</b> New images are matched to existing views by signature plus geometric check. Below the acceptance score they go to an "unassigned" queue and are not analysed with any view's regions.</li>
+  </ol>
+
+  <h4>View-change detection</h4>
+  <p>For each assigned image, the homography to the view reference is stored. If the estimated displacement at the region polygons exceeds a tolerance (operator-set, shown in pixels), or the match fails repeatedly over consecutive captures, the view enters <b>needs review</b>: its regions and background models are not applied to new images until the operator confirms, redraws or creates a new view. The tolerance has no preset value; it will be chosen from measured jitter on your samples.</p>
+
+  <h3>Nighttime detection pipeline</h3>
+  <pre class="mermaid">
+flowchart TD
+  IMG[Original image] --> CND[Measure image condition: luminance, clipping, noise, colour cast]
+  CND -->|day| DAY[Vehicle detector on original]
+  CND -->|dusk / night / glare| NP
+  subgraph NP[Night path - all on original pixels]
+    LC[Light components: local top-hat, components, features]
+    BG[(View x condition background: persistent lights and illumination)]
+    LC --> EXP[Explain by background?]
+    BG --> EXP
+    EXP -->|unexplained| GRP[Group lights: pairs, clusters, singles]
+    GRP --> CTX[Road context: region, row-to-width perspective map]
+    VD[Vehicle detector on original, optional enhanced copy]
+  end
+  CTX --> FUS[Evidence fusion]
+  VD --> FUS
+  DAY --> OUT
+  FUS --> OUT[Detected vehicles + unresolved candidates, counted separately]
+  OUT --> REV[Operator review: confirm, reject, regroup, mark persistent light]
+  REV -.labels.-> BG
+  </pre>
+
+  <h4>Evidence levels</h4>
+  <div class="tbl"><table>
+    <thead><tr><th>Level</th><th>Meaning</th><th>Counted as vehicle?</th></tr></thead>
+    <tbody>
+    <tr><td>Light component</td><td>One connected bright region not explained by the background</td><td>No</td></tr>
+    <tr><td>Light group</td><td>Hypothesis that components belong together: single unresolved, pair, multi-light cluster</td><td>No</td></tr>
+    <tr><td>Vehicle candidate</td><td>A group inside an inclusion region, consistent with road context, with no confirming body evidence</td><td>No. Shown in the unresolved count.</td></tr>
+    <tr><td>Detected vehicle (machine)</td><td>Body evidence from the detector, alone or fused with light evidence, above the operating threshold</td><td>Yes, as machine count</td></tr>
+    <tr><td>Confirmed vehicle (human)</td><td>Operator confirmed a candidate or detection, or drew a missed vehicle</td><td>Yes, as reviewed count</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>Background and persistent lights (stills)</h4>
+  <ul class="tight">
+    <li>Built per view and per measured condition from many images, not from one reference. For each pixel neighbourhood the model keeps how often it is a light source and its typical brightness. Regions lit in a high share of images are persistent-light hypotheses.</li>
+    <li>Operator labels ("persistent background light") are authoritative and override the statistics.</li>
+    <li><b>Stopped vehicles</b> (NGT-03): the model is fitted on a long time horizon and never updated from regions holding a current candidate or confirmed vehicle. A light that becomes frequent only recently is flagged "new persistent light?" for the operator instead of being absorbed automatically.</li>
+    <li>Wet roads and reflections: components below a light source and vertically elongated are scored as possible reflections; they reduce, not remove, candidate scores.</li>
+  </ul>
+
+  <h4>Light grouping</h4>
+  <p>Pair hypotheses consider horizontal alignment, similar size and brightness, and spacing consistent with an expected vehicle width at that image row. The row-to-width map is learned per view from daytime vehicle detections in the same view, or from an operator-drawn lane width, so no physical distance is ever inferred from an unresolved light. Every group carries alternatives when ambiguous (for example "one vehicle with two lights" versus "two vehicles with one light each"), and the unresolved count reflects that ambiguity rather than picking one.</p>
+
+  <h4>Video: one vehicle through three appearances</h4>
+  <pre class="mermaid">
+stateDiagram-v2
+  [*] --> Unresolved: single bright region
+  Unresolved --> Pair: region splits, centroid continuous
+  Pair --> Body: detector sees vehicle, box contains the pair
+  Unresolved --> Body: direct, when resolution jumps
+  Pair --> Unresolved: moving away
+  Body --> Lost: occluded or left frame
+  Lost --> Body: re-acquired within gap limit
+  Lost --> [*]: gap exceeded, event closed
+  </pre>
+  <p>Tracks carry an appearance state. A transition is accepted only when position and motion are continuous and the new evidence contains the old (the pair sits where the blob was; the body box contains the pair). When two explanations fit, both track hypotheses are kept and marked "possible same vehicle"; event consolidation then produces one event with an ambiguity flag, never two silent duplicates. Gap limits and association thresholds are operator-visible parameters calibrated on your recordings.</p>
+
+  <h4>Nighttime evaluation plan</h4>
+  <ul class="tight">
+    <li>Dedicated labelled set from your cameras, split by view and date, with labels at all three appearance levels and explicit "persistent light" labels.</li>
+    <li>Metrics: candidate acceptance rate (share of candidates operators confirm), false alarms per image, recall of operator-identified vehicles broken down by appearance state, count error for confirmed vehicles, and for video the duplicate-event rate across transitions.</li>
+    <li>Slices: view, condition (dusk, night, glare, rain if labelled), distance band, country.</li>
+    <li>Ablations: detector only; light analysis only; fusion; fusion with enhancement. Enhancement is kept only if it measurably helps, and it never adds independent evidence.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ 06 -->
+<section class="d" id="models">
+  <div class="dh"><span class="n">06</span><h2>Model and dataset comparison plan</h2></div>
+  <p class="intro">Candidates below are research leads, not selections. Licenses and versions are to be verified against the official repository, model card and dataset terms at research time, and recorded separately for code, weights and data.</p>
+
+  <h3>Candidates per task</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Task</th><th>Simple baseline</th><th>Pretrained candidates to compare</th><th>License points to verify</th></tr></thead>
+    <tbody>
+    <tr><td>Vehicle detection</td><td>COCO-pretrained small detector, vehicle classes only</td><td>RT-DETR family, D-FINE, RF-DETR, YOLOX, Ultralytics YOLO</td><td>Ultralytics is AGPL-3.0 (or commercial license), which affects distribution. Others reported as Apache-2.0. COCO-trained weights inherit questions about image terms.</td></tr>
+    <tr><td>Small / distant objects</td><td>Same detector at native resolution</td><td>Tiled inference (SAHI-style), higher-resolution input</td><td>Tiling is recorded as preprocessing on the run.</td></tr>
+    <tr><td>Fine subtype (pickup, semi-trailer)</td><td>None claimed from coarse "truck" labels</td><td>Crop classifier trained on target-camera labels; datasets only where labels actually encode the subtype</td><td>Most vehicle-model datasets are research-only.</td></tr>
+    <tr><td>Colour attribute</td><td>Colour histogram in body region with "not observable" outcome at night</td><td>Small crop classifier</td><td>Own labels likely required.</td></tr>
+    <tr><td>Tracking</td><td>IoU tracker with Kalman filter</td><td>ByteTrack, OC-SORT, BoT-SORT</td><td>Reported as MIT; verify each.</td></tr>
+    <tr><td>Night lights</td><td>Threshold + top-hat + pairing rules</td><td>Learned light-pair classifier trained on reviewed groups</td><td>Own data.</td></tr>
+    <tr><td>Plate detection</td><td>Generic detector fine-tuned on plates</td><td>Detector fine-tuned per country</td><td>Dataset rights per country.</td></tr>
+    <tr><td>Plate OCR</td><td>Tesseract with Arabic/Persian traineddata (expected weak; establishes a floor)</td><td>PaddleOCR recognition models; CRNN or PARSeq trained per country layout</td><td>PaddleOCR Apache-2.0 reported; trained weights depend on training data.</td></tr>
+    <tr><td>View signature</td><td>Gradient maps + ORB keypoints + homography</td><td>DINOv2 small embeddings</td><td>DINOv2 reported Apache-2.0; verify weights.</td></tr>
+    <tr><td>Chat interpretation</td><td>Grammar / keyword parser over a fixed vocabulary</td><td>Small instruct LLMs that run offline (for example Qwen, Mistral, Phi, Llama families, whichever are current and permissive at research time)</td><td>Licenses differ by model and even by size within a family.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Country plate facts to verify</h3>
+  <p>Working understanding only, to be checked against official sources and your samples before any layout is encoded:</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Country</th><th>Working understanding</th><th>Data lead</th></tr></thead>
+    <tbody>
+    <tr><td>Iran</td><td>Persian digits and one Persian letter in a two-digit + letter + three-digit block, with a separate two-digit regional code; read right to left in Persian, digits left to right.</td><td>IR-LPR (verify image rights)</td></tr>
+    <tr><td>Lebanon</td><td>Latin letter with digits plus Arabic script and Eastern Arabic numerals on the same plate; several colour-coded categories.</td><td>None named; need your data (Q13)</td></tr>
+    <tr><td>Israel</td><td>Digits only on current private plates in 7- and 8-digit groupings; several legacy and special series.</td><td>None named; need your data</td></tr>
+    <tr><td>Latvia</td><td>EU format, Latin letters and digits; personalised plates exist.</td><td>None named; need your data</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Public datasets from your list</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Dataset</th><th>Useful for</th><th>Conditions to check</th></tr></thead>
+    <tbody>
+    <tr><td>BDD100K</td><td>Diverse driving scenes, day/night, tracking</td><td>Separate data license; dashcam viewpoint differs from fixed roadside cameras.</td></tr>
+    <tr><td>UA-DETRAC</td><td>Fixed-camera traffic detection and tracking, includes night</td><td>Current availability and license (reported non-commercial).</td></tr>
+    <tr><td>AI City Challenge</td><td>Fixed-camera tracking, vehicle retrieval by description</td><td>Access is by request with terms per edition.</td></tr>
+    <tr><td>IR-LPR</td><td>Iranian plate detection and characters</td><td>Rights to underlying images.</td></tr>
+    <tr><td>ExDark</td><td>Supplementary low-light evaluation</td><td>Stated commercial-use restrictions and third-party image conditions.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Benchmark protocol <span class="tag t-p">Proposed</span></h3>
+  <ol class="tight">
+    <li><b>Target data first.</b> Labelled development and frozen test sets from your cameras, split by camera view and by date blocks (for video, by recording) so no near-duplicate frames cross splits.</li>
+    <li><b>Public data second</b>, only where terms permit, reported separately and never used as evidence for night headlight-only detection, Arabic/Persian OCR or a specific country's plates.</li>
+    <li><b>Metrics</b>: precision, recall, F1, AP at stated IoU; per-image count error; candidate acceptance and false alarms; identity consistency and duplicate-event rate; plate exact match and character error rate; throughput, latency, peak RAM and VRAM, disk use.</li>
+    <li><b>Slices</b>: condition, view, object type, country, hardware profile.</li>
+    <li><b>Hardware</b>: every candidate measured under both RAM profiles and each available backend (CUDA, DirectML, CPU) on the real workstation.</li>
+    <li><b>Decision record</b> per task: candidates, measurements with commands, licenses for code, weights and data, maintenance health, chosen model and why. Stored in the repository.</li>
+  </ol>
+</section>
+
+<!-- ============================================================ 07 -->
+<section class="d" id="learning">
+  <div class="dh"><span class="n">07</span><h2>Correction-storage and continuous-learning design</h2></div>
+
+  <h3>Correction storage</h3>
+  <p class="intro">Every human decision is an append-only revision of an annotation. Nothing is updated in place. <span class="tag t-p">Proposed</span></p>
+  <div class="tbl"><table>
+    <thead><tr><th>Field</th><th>annotation_revision</th></tr></thead>
+    <tbody>
+    <tr><td class="mono">rev_id, seq</td><td>Global monotonic sequence within the mission database; defines deterministic order</td></tr>
+    <tr><td class="mono">annotation_id</td><td>Stable identity of the labelled thing (one vehicle in one image, one plate, one event)</td></tr>
+    <tr><td class="mono">kind</td><td>object, candidate_decision, light_grouping, persistent_light, plate_text, class_attribute, event_timing, event_merge, event_split</td></tr>
+    <tr><td class="mono">op</td><td>create, modify, confirm, reject, delete, restore</td></tr>
+    <tr><td class="mono">supersedes_rev</td><td>The revision this one replaces; the latest non-superseded revision is current</td></tr>
+    <tr><td class="mono">prediction_ref</td><td>Machine output it responds to (detection, candidate, plate_read, track), if any</td></tr>
+    <tr><td class="mono">payload</td><td>Geometry in original pixels, class, attributes, text (Unicode, original order), grouping, decision</td></tr>
+    <tr><td class="mono">context</td><td>mission, run, source version and checksum, capture UTC, view, model and preprocessing versions</td></tr>
+    <tr><td class="mono">author, created_at, note, uncertainty</td><td>Operator identity, UTC time, free text, operator confidence</td></tr>
+    <tr><td class="mono">label_role</td><td>analytical label, human reference, or excluded from training</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="tight">
+    <li><b>Current interpretation</b>: for each annotation, the revision with the highest <code>seq</code> that is not superseded. Two edits to the same annotation always resolve the same way.</li>
+    <li><b>Configuration is separate</b>: view reassignments and region edits live in <code>view_assignment</code> and <code>region_revision</code>; they never become object labels.</li>
+    <li><b>Review completeness</b> is recorded per item: <i>full</i> (operator asserted every target object in included regions is marked), <i>partial</i> (some corrections only), <i>bulk</i> (approved without inspection), <i>none</i>.</li>
+  </ul>
+
+  <h3>Training eligibility</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Item state</th><th>Positives</th><th>Negatives (background)</th><th>Human reference for evaluation</th></tr></thead>
+    <tbody>
+    <tr><td>Full review</td><td>Yes</td><td>Yes, within inclusion regions</td><td>Yes</td></tr>
+    <tr><td>Partial review</td><td>Yes, corrected objects only</td><td>No; unmarked areas are ignore regions</td><td>Only for the corrected objects</td></tr>
+    <tr><td>Bulk approved</td><td>No</td><td>No</td><td>No</td></tr>
+    <tr><td>Unreviewed machine output</td><td>No</td><td>No</td><td>No</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>Splits</b>: group-wise by camera view and date block (video: whole recording), with the test set frozen and versioned. A view that appears in test never contributes training frames from the same date block. <b>Cross-mission reuse</b>: off by default; a mission opts in explicitly, and every dataset member keeps its mission provenance.</p>
+
+  <h3>Learning adapters per algorithm</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Algorithm</th><th>Fine-tune</th><th>Full retrain</th><th>Downstream classifier</th><th>Background refit</th><th>Calibration only</th></tr></thead>
+    <tbody>
+    <tr><td>Vehicle detector</td><td>Planned (GPU profile)</td><td>Not planned</td><td>—</td><td>—</td><td>Planned (thresholds per view)</td></tr>
+    <tr><td>Subtype / colour classifier</td><td>—</td><td>Planned (small model, CPU feasible)</td><td>Is itself one</td><td>—</td><td>Planned</td></tr>
+    <tr><td>Night light grouping</td><td>—</td><td>—</td><td>Planned (pair classifier)</td><td>—</td><td>Planned</td></tr>
+    <tr><td>Background model</td><td>—</td><td>—</td><td>—</td><td>Planned</td><td>—</td></tr>
+    <tr><td>Plate detector</td><td>Planned (GPU)</td><td>—</td><td>—</td><td>—</td><td>Planned</td></tr>
+    <tr><td>Plate OCR</td><td>Planned per country (GPU)</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+    <tr><td>Tracker</td><td>—</td><td>—</td><td>—</td><td>—</td><td>Planned (association parameters)</td></tr>
+    <tr><td>View grouping</td><td>—</td><td>—</td><td>—</td><td>—</td><td>Planned (merge thresholds)</td></tr>
+    <tr><td>Chat interpreter</td><td colspan="5">No learning adapter. Vocabulary and prompt revisions only, versioned.</td></tr>
+    </tbody>
+  </table></div>
+  <p>"Planned" means designed, not implemented. The UI shows an adapter as available only after its training and evaluation path has passing tests.</p>
+
+  <h3>Training and promotion flow</h3>
+  <pre class="mermaid">
+flowchart LR
+  E[Eligible reviewed evidence] --> DS[Dataset version: frozen list of revision ids + split]
+  DS --> TR[Training run: base checkpoint, config, class schema, resource profile]
+  TR -->|failure| FD[Failed run kept with logs and diagnostics]
+  TR --> C[Candidate model version]
+  C --> EV[Evaluate vs production on frozen test set]
+  EV --> REP[Report: overall, night, per country, per view - gains and regressions]
+  REP --> D{Operator decision}
+  D -->|promote| PR[Production pointer moves; previous kept]
+  D -->|reject| AR[Candidate archived]
+  PR --> RB[Rollback: move pointer back]
+  </pre>
+
+  <h4>Automatic training policy (structure only)</h4>
+  <p>If enabled, the scheduler may start a training run when <i>all</i> configured criteria hold: a minimum of new eligible labels per affected class since the last run, labels spread over a minimum number of views and date blocks, a cool-down period since the last run, and an idle resource window. It never promotes automatically. Every number in that policy is left empty until you set it; none is inherited or invented.</p>
+</section>
+
+<!-- ============================================================ 08 -->
+<section class="d" id="hw">
+  <div class="dh"><span class="n">08</span><h2>Hardware profiles and resource-management plan</h2></div>
+
+  <h3>Hardware probe</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>What</th><th>How (proposed)</th></tr></thead>
+    <tbody>
+    <tr><td>CPU</td><td>Model, physical and logical cores, instruction sets (AVX2, AVX-512, VNNI)</td></tr>
+    <tr><td>RAM</td><td>Physical total, currently available, page-file size</td></tr>
+    <tr><td>GPU</td><td>All adapters via DXGI; NVIDIA details via NVML: model, VRAM total and free, driver version, compute capability</td></tr>
+    <tr><td>Backends</td><td>Actually create an ONNX Runtime session on each execution provider with a tiny bundled model and compare its output with CPU. A backend is "supported" only if this passes.</td></tr>
+    <tr><td>Disk</td><td>Free space on data, source and output volumes; short sequential read test on source and data paths</td></tr>
+    </tbody>
+  </table></div>
+  <p>The probe runs at first start and on demand. Its result is stored, shown on a System page, and copied into each run record.</p>
+
+  <h3>Profile matrix</h3>
+  <p>RAM tier and accelerator are selected independently, giving six combinations. Values below are starting budgets to be replaced by measured values in Phase 9; they are not performance claims.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Budget</th><th>Conservative (≈16 GB)</th><th>Expanded (≈48 GB)</th></tr></thead>
+    <tbody class="num">
+    <tr><td>Inference workers</td><td>1</td><td>2 (GPU) or up to physical cores / 4 (CPU)</td></tr>
+    <tr><td>Video decode</td><td>1 decoder, bounded frame queue</td><td>2 decoders, larger bounded queue</td></tr>
+    <tr><td>Models resident at once</td><td>One heavy model; others unloaded when idle</td><td>Detector + OCR + tracker together</td></tr>
+    <tr><td>Thumbnail / crop cache</td><td>Small LRU, byte-bounded</td><td>Larger LRU, byte-bounded</td></tr>
+    <tr><td>Language model</td><td>Loaded only during interpretation, then released</td><td>May stay loaded while chat screen is open</td></tr>
+    <tr><td>Training</td><td>Only when no operational job runs; small batches; GPU required for detectors</td><td>Concurrent with light inference at low priority</td></tr>
+    <tr><td>Database write batch</td><td>Small batches, frequent commits</td><td>Larger batches</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Runtime safeguards</h3>
+  <ul class="tight">
+    <li><b>Memory governor</b>: monitors system available memory and per-worker resident size; on pressure it shrinks queues, pauses background training, then defers new work items. It never drops input; deferred items stay queued.</li>
+    <li><b>VRAM governor</b>: models declare their VRAM need at load; the scheduler refuses to co-load beyond free VRAM and falls back to sequential loading.</li>
+    <li><b>Interactive first</b>: review requests bypass the job queue; training checkpoints and pauses when operational work arrives.</li>
+    <li><b>No silent quality loss</b>: any optimization affecting analysis (input resize, tiling, frame stride, FP16/INT8) is written to the run's preprocessing record and shown in the run summary.</li>
+    <li><b>Operator overrides</b>: worker count, backend, frame stride and precision can be changed; the screen shows estimated RAM/VRAM impact from measured model footprints and warns when the override exceeds the profile.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ 09 -->
+<section class="d" id="deploy">
+  <div class="dh"><span class="n">09</span><h2>Offline deployment and update plan</h2></div>
+
+  <h3>Packs</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Pack</th><th>Contents</th><th>Changes</th></tr></thead>
+    <tbody>
+    <tr><td>Runtime</td><td>Embedded Python, pinned wheels, FFmpeg libraries, ONNX Runtime CPU/CUDA/DirectML builds, CUDA and cuDNN runtime DLLs where redistribution is permitted, llama.cpp runtime</td><td>Rarely</td></tr>
+    <tr><td>Model</td><td>Each model in its own versioned folder with weights, model card, license texts, provenance, SHA-256</td><td>When models are added or promoted on staging</td></tr>
+    <tr><td>Map and time zone</td><td>IANA tzdata release, zone boundary polygons, offline basemap tiles, place-name index for search</td><td>When tzdata changes</td></tr>
+    <tr><td>Application</td><td>Backend code, built UI, bundled fonts (Noto families covering Latin, Hebrew, Arabic and Persian), database migrations</td><td>Frequently, small</td></tr>
+    </tbody>
+  </table></div>
+  <p>Every pack has a manifest listing each file's SHA-256 and the pack's dependencies (for example "app 1.4 needs runtime ≥ 2026.10"). The installer verifies hashes before anything is activated.</p>
+
+  <h3>Staging → offline transfer</h3>
+  <ol class="tight">
+    <li>On the connected staging machine, build packs from a locked dependency list; download models and datasets only from approved sources and record their licenses.</li>
+    <li>Run the full automated test suite on staging, then on an air-gapped test VM with networking disabled.</li>
+    <li>Transfer packs by approved removable media; verify manifests on the target.</li>
+  </ol>
+
+  <h3>Install without admin rights <span class="tag t-p">Proposed</span></h3>
+  <ul class="tight">
+    <li>Unpack to a user-writable folder (default under the user profile, or a chosen data drive). No registry writes outside the user hive.</li>
+    <li>Start at logon via a per-user Task Scheduler task or Startup-folder shortcut; both work without admin. A Windows service (starts before logon) only if an administrator approves (Q18).</li>
+    <li>Localhost access works immediately. LAN access needs the backend to listen on the LAN interface and, in most configurations, an inbound firewall rule created once by an administrator.</li>
+    <li>HTTPS with a certificate generated at install, or one issued by your internal CA (Q21). Named local accounts with salted password hashes, session cookies, idle timeout, login throttling.</li>
+  </ul>
+
+  <h3>Updates and rollback</h3>
+  <ul class="tight">
+    <li>Each app version installs side by side; a small launcher points to the active version.</li>
+    <li>Before activation: stop workers at checkpoints, back up <code>control.db</code> and every mission database, run migrations, run a self-check. On failure, restore backups and point back to the previous version.</li>
+    <li>Mission databases, evidence, corrections and model history are never deleted or overwritten by an update. Model packs only add versions; the production pointer changes only through promotion.</li>
+  </ul>
+
+  <h3>Proving it is offline</h3>
+  <p>Acceptance test on a VM with no network adapter and on the target workstation with outbound traffic blocked and logged: full workflow from install through training and export, with zero outbound connection attempts recorded.</p>
+</section>
+
+<!-- ============================================================ 10 -->
+<section class="d" id="roadmap">
+  <div class="dh"><span class="n">10</span><h2>Phased implementation and acceptance-test roadmap</h2></div>
+  <p class="intro">Each phase ends in a demonstrable increment and a delivery report listing what was implemented, what was actually tested with commands and evidence, model versions, limitations, and untested hardware or scenarios. Numerical pass thresholds are filled in only when you set them (Q27).</p>
+
+  <div class="phase"><div class="pn">P0<small>Foundations</small></div><div>
+    <h4>Evidence, repository, packaging proof</h4>
+    <div class="cols">
+      <div><b>Delivers</b><br>Repository and CI; hardware probe tool; sample-data inventory with formats and codecs; offline pack skeleton; install on air-gapped VM without admin.</div>
+      <div><b>Acceptance tests</b><br>Probe report from the real workstation(s); app shell starts offline; no outbound connections; install and start as standard user.</div>
+    </div></div></div>
+
+  <div class="phase"><div class="pn">P1<small>Missions</small></div><div>
+    <h4>Missions, time, ingestion, monitoring</h4>
+    <div class="cols">
+      <div><b>Delivers</b><br>Wizard; mission DB on commit; filename parser with preview; offline tz map; schedules; ingestion with stability checks, notifications + reconciliation, checkpoints; continuous monitoring across restarts; accounts and LAN auth; notifications.</div>
+      <div><b>Acceptance tests</b><br>UTC parsing incl. malformed and impossible dates; minute precision kept; DST conversion across transitions for all four countries; overnight and multi-window schedules incl. DST edges; partial-copy detection; duplicate-notification storm; restart mid-ingest; identical bytes at different times kept distinct; outputs never re-ingested; remote-browser login.</div>
+    </div></div></div>
+
+  <div class="phase"><div class="pn">P2<small>Views</small></div><div>
+    <h4>Camera views and regions</h4>
+    <div class="cols">
+      <div><b>Delivers</b><br>View grouping proposals; merge/split/rename/reassign with history; polygon editor in original coordinates; view-change flag.</div>
+      <div><b>Acceptance tests</b><br>Grouping purity and completeness on labelled samples incl. day/night of the same view; reassignment history; polygon precedence and membership; zoom-independent geometry; simulated camera shift triggers needs-review.</div>
+    </div></div></div>
+
+  <div class="phase"><div class="pn">P3<small>Daytime</small></div><div>
+    <h4>Detection, counting, review, export</h4>
+    <div class="cols">
+      <div><b>Delivers</b><br>Benchmark and selection of vehicle detector; per-image counting within regions and schedules; progress UI with pause/resume/cancel; result table; investigation screen; correction store; individual and bulk approval; xlsx/csv export.</div>
+      <div><b>Acceptance tests</b><br>Precision/recall/F1/AP and per-image count error on frozen target test set; review saves survive restart; revision history and deterministic current state; bulk approval scope frozen and excludes new data; Unicode and leading zeros round-trip in both formats; large export split, not truncated; no overwrite of earlier exports; permission and disk-full failures reported.</div>
+    </div></div></div>
+
+  <div class="phase"><div class="pn">P4<small>Night</small></div><div>
+    <h4>Nighttime still-image pipeline</h4>
+    <div class="cols">
+      <div><b>Delivers</b><br>Condition measurement; per-view background with persistent lights; light components and groups; candidates; fusion; separate counts; review tools for candidates, grouping and persistent lights.</div>
+      <div><b>Acceptance tests</b><br>Night evaluation plan from Deliverable 05; persistent streetlights not counted; stopped-vehicle scenario not absorbed; candidate acceptance and false-alarm rates by view and condition; enhancement ablation.</div>
+    </div></div></div>
+
+  <div class="phase"><div class="pn">P5<small>Plates</small></div><div>
+    <h4>Plate detection and OCR, country by country</h4>
+    <div class="cols">
+      <div><b>Delivers</b><br>Per-country layouts verified from samples; plate detector; OCR with raw and normalized text; partial and unreadable outcomes; plate correction UI. A country is enabled only when its own test set passes review.</div>
+      <div><b>Acceptance tests</b><br>Exact-match and character error rate per country and layout; Persian and Arabic numerals and letters; leading zeros and character order preserved through DB and export; unreadable plates never completed by guessing.</div>
+    </div></div></div>
+
+  <div class="phase"><div class="pn">P6<small>Search</small></div><div>
+    <h4>Chat object search and attributes</h4>
+    <div class="cols">
+      <div><b>Delivers</b><br>Offline interpreter producing a structured spec; confirm/edit screen; attribute classifiers with "not observable"; search runs over still missions.</div>
+      <div><b>Acceptance tests</b><br>Interpretation accuracy on a written request set; schema-invalid output rejected; no code execution path exists; attribute precision/recall incl. night "not observable" behaviour.</div>
+    </div></div></div>
+
+  <div class="phase"><div class="pn">P7<small>Video</small></div><div>
+    <h4>Video detection, tracking, events, clips</h4>
+    <div class="cols">
+      <div><b>Delivers</b><br>Chunked PTS-based decoding; tracking with appearance states; event consolidation across chunks; event table and player; timing edits, merge, split; clip export with context; traceable export links.</div>
+      <div><b>Acceptance tests</b><br>Variable-frame-rate timing against reference timestamps; events identical with and without chunk boundaries; duplicate-event rate; blob→pair→body continuity; occlusion and re-entry rules; multi-hour recording with bounded memory; clip boundaries and links.</div>
+    </div></div></div>
+
+  <div class="phase"><div class="pn">P8<small>Learning</small></div><div>
+    <h4>Datasets, training, evaluation, promotion</h4>
+    <div class="cols">
+      <div><b>Delivers</b><br>Evidence browser; dataset versions with leak-free splits; training runs for adapters that pass tests; candidate evaluation report; promotion and rollback; optional auto-schedule policy once you set its numbers.</div>
+      <div><b>Acceptance tests</b><br>Eligibility rules (partial, bulk, unreviewed); split leakage checks; failed run keeps diagnostics; promotion never automatic; rollback restores previous outputs on a fixed input; training yields to operational work.</div>
+    </div></div></div>
+
+  <div class="phase"><div class="pn">P9<small>Hardening</small></div><div>
+    <h4>Performance, profiles, deployment acceptance</h4>
+    <div class="cols">
+      <div><b>Delivers</b><br>Measured budgets per profile; update and rollback procedure; final traceability matrix and acceptance report.</div>
+      <div><b>Acceptance tests</b><br>Throughput, latency, peak RAM/VRAM, storage on 16 GB and 48 GB where available; CUDA and CPU fallback; DirectML where present; update with migration and rollback; full disconnected install-to-export run.</div>
+    </div></div></div>
+
+  <h3>Traceability matrix (excerpt)</h3>
+  <p>The full matrix lives in the repository and is generated from test annotations, so every requirement shows its design section, implementing modules and latest test evidence.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Req</th><th>Design</th><th>Phase</th><th>Test</th><th>Evidence</th></tr></thead>
+    <tbody>
+    <tr><td class="id">TIME-01</td><td>03 Key rules</td><td>P1</td><td>unit: filename parser incl. malformed set</td><td>Not yet run</td></tr>
+    <tr><td class="id">TIME-05</td><td>03 Key rules</td><td>P1</td><td>unit: DST transitions IR, LB, IL, LV</td><td>Not yet run</td></tr>
+    <tr><td class="id">IMG-02</td><td>03 Schedule boundaries</td><td>P1</td><td>unit: overnight, multi-window, DST edges</td><td>Not yet run</td></tr>
+    <tr><td class="id">ING-03</td><td>03 Data model</td><td>P1</td><td>integration: notification storm, identical bytes</td><td>Not yet run</td></tr>
+    <tr><td class="id">VIEW-03</td><td>03 Region membership</td><td>P2</td><td>unit + browser: precedence, zoom</td><td>Not yet run</td></tr>
+    <tr><td class="id">NGT-03</td><td>05 Background</td><td>P4</td><td>scenario: stopped vehicle at night</td><td>Not yet run</td></tr>
+    <tr><td class="id">VID-02</td><td>05 Video states</td><td>P7</td><td>integration: chunk-boundary invariance</td><td>Not yet run</td></tr>
+    <tr><td class="id">LRN-03</td><td>07 Eligibility</td><td>P8</td><td>unit: eligibility and split leakage</td><td>Not yet run</td></tr>
+    <tr><td class="id">ENV-04</td><td>09 Proving offline</td><td>P0, P9</td><td>system: air-gapped full workflow</td><td>Not yet run</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Next step</h3>
+  <p>Answers to the "Needed before Phase 1" questions, especially sample data (Q01), video time source (Q03), admin setup (Q18) and the repository (Q30). Once a repository exists, Phase 0 starts there.</p>
+</section>
+
+<footer>Design package v0.1 · Prepared 24 October 2026 · Nothing in this document has been implemented, executed or measured.</footer>
+</main>
+</div>
