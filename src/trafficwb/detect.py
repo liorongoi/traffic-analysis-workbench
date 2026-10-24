@@ -97,14 +97,12 @@ def _nms_per_class(dets: list[Detection], iou: float) -> list[Detection]:
 
 
 class YoloxDetector:
-    def __init__(self, pack: ModelPack, settings: DetectorSettings | None = None, providers: list[str] | None = None):
-        import onnxruntime as ort  # imported here so the rest of the app starts without it
+    def __init__(self, pack: ModelPack, settings: DetectorSettings | None = None, accelerator: str | None = None):
+        from .runtime import make_session  # imports onnxruntime here so the rest of the app starts without it
 
         self.pack = pack
         self.settings = settings or DetectorSettings()
-        opts = ort.SessionOptions()
-        opts.log_severity_level = 3
-        self.session = ort.InferenceSession(str(pack.weights), opts, providers=providers or ["CPUExecutionProvider"])
+        self.session, self.runtime = make_session(pack.weights, accelerator)
         self.input_name = self.session.get_inputs()[0].name
         self.size = int(pack.card.get("input_size", 640))
         grids, strides = [], []
@@ -120,6 +118,7 @@ class YoloxDetector:
         return {
             "model": {"name": self.pack.name, "version": self.pack.version, "sha256": self.pack.sha256},
             "providers": self.session.get_providers(),
+            "runtime": self.runtime.record(),
             "preprocessing": {"letterbox": self.size, "pad": 114, "colour": "BGR", "tiles": self.settings.record()},
         }
 

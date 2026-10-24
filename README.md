@@ -2,7 +2,7 @@
 
 Offline road-traffic still-image and video analysis for a single Windows workstation, reachable from browsers on the local network. It is a new, independent application.
 
-Status: **still images (phases 0 to 4), web screens, object search, video part 1, plates part 1 and learning part 1 are done**. Only the pieces below exist. Plate reads are evaluation only until a country passes its own test set.
+Status: **still images (phases 0 to 4), web screens, object search, video part 1, plates part 1, learning part 1 and hardening part 1 (offline install, backups, GPU choice) are done**. Only the pieces below exist. Plate reads are evaluation only until a country passes its own test set.
 
 | Piece | What it does |
 |---|---|
@@ -20,17 +20,23 @@ Status: **still images (phases 0 to 4), web screens, object search, video part 1
 | `trafficwb.video`, `trafficwb.tracker`, `trafficwb.video_process`, `trafficwb.video_review` | Video by frame timestamps in resumable chunks, vehicle tracking, one event per appearance, event review, clips |
 | `trafficwb.plates`, `trafficwb.plate_layout` | Plate finding and reading on each vehicle, raw and normalised text, unreadable kept unreadable, review, country evaluation gate |
 | `trafficwb.learning` | Which reviewed images can teach a model, frozen dataset versions with leak-free splits, COCO export, model evaluation, promotion and rollback (no training yet) |
+| `trafficwb.admin`, `trafficwb.runtime` | Backups, restore, explicit mission deletion with an audit log; CUDA, DirectML or CPU with fallback |
 | `trafficwb.review`, `trafficwb.export` | Results table, corrections, approval, CSV and Excel export |
 | `trafficwb-web` | Local web server and screens: missions, wizard, results, investigation, camera views, regions, search, video events and player, plates, learning |
+| `trafficwb-admin` | Back up, verify, restore, delete a mission, show the audit log |
 | `trafficwb-mission` | Create a mission, scan, detect, list results, export, show status |
 | `trafficwb-inventory` | Read-only report on a sample folder: formats, sizes, EXIF, checksums, name parsing, intervals |
 
-## Run
+## Install on the workstation
+
+Build an offline bundle on a connected staging machine with `scripts/make_bundle.py` and install it with `install.ps1`; see `docs/design/deployment.md` and `packaging/INSTALL.txt`.
+
+## Run (development)
 
 ```
 python -m venv .venv
 .venv\Scripts\activate          # Windows; use source .venv/bin/activate elsewhere
-pip install -e ".[dev,probe]"
+pip install -e ".[dev,probe,cpu]"     # or cuda / directml instead of cpu
 python scripts/fetch_models.py    # staging machine only; copy models\ to the workstation
 python scripts/build_ui.py        # staging machine only (needs Node.js 20+); builds the web screens
 pytest
@@ -54,5 +60,6 @@ trafficwb-mission export --data D:\twb-data --mission <id>
 - `docs/design/video.md`: video timing, tracking, events, review and clips
 - `docs/design/plates.md`: plate reading rules; `docs/decisions/plate-models.md`: which plate models and why
 - `docs/design/learning.md`: training data eligibility, dataset versions, evaluation and promotion
+- `docs/design/deployment.md`: offline bundle, install, update, rollback, backups and GPU choice
 - `docs/traceability.md`: requirement → code → test status
 - `docs/delivery/`: per-phase delivery reports (what was built, what was actually tested)

@@ -58,19 +58,17 @@ class PlateReader(Protocol):
     def describe(self) -> dict: ...
 
 
-def _session(pack: ModelPack, providers=None):
-    import onnxruntime as ort
-    opts = ort.SessionOptions()
-    opts.log_severity_level = 3
-    return ort.InferenceSession(str(pack.weights), opts, providers=providers or ["CPUExecutionProvider"])
+def _session(pack: ModelPack, accelerator=None):
+    from .runtime import make_session
+    return make_session(pack.weights, accelerator)[0]
 
 
 class YoloPlateFinder:
     """End-to-end YOLO plate detector (NMS inside the model). Input: RGB 0..1, centred letterbox."""
 
-    def __init__(self, pack: ModelPack, score_threshold: float = 0.25, providers=None):
+    def __init__(self, pack: ModelPack, score_threshold: float = 0.25, accelerator=None):
         self.pack, self.thr = pack, score_threshold
-        self.s = _session(pack, providers)
+        self.s = _session(pack, accelerator)
         self.inp = self.s.get_inputs()[0].name
         self.size = int(pack.card.get("input_size", 640))
 
@@ -104,13 +102,13 @@ class YoloPlateFinder:
 class SlotPlateReader:
     """Fixed-slot plate reader: one character class per slot, plus a country head."""
 
-    def __init__(self, pack: ModelPack, providers=None):
+    def __init__(self, pack: ModelPack, accelerator=None):
         c = pack.card
         self.pack = pack
         self.alphabet, self.pad, self.slots = c["alphabet"], c["pad_char"], int(c["max_slots"])
         self.h, self.w = c["input_size"]
         self.regions = c.get("region_labels") or []
-        self.s = _session(pack, providers)
+        self.s = _session(pack, accelerator)
         self.inp = self.s.get_inputs()[0].name
 
     def describe(self) -> dict:

@@ -7,6 +7,7 @@ cookie, which blocks cross-site form posts.
 """
 from __future__ import annotations
 
+import json
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -181,6 +182,10 @@ class PreviewBody(BaseModel):
     limit: int = 20
 
 
+class DeleteBody(BaseModel):
+    confirm_name: str
+
+
 class DatasetBody(BaseModel):
     name: str
     ratios: list[float] = Field(default_factory=lambda: [0.7, 0.15, 0.15])
@@ -226,19 +231,26 @@ def default_detector_factory(data_root: Path | str | None = None):
 
 def create_app(data_root: Path | str, detector_factory: Callable | None = None, allow_setup_from: tuple = ("127.0.0.1", "::1", "testclient"),
                monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True,
-               plate_factory: Callable | None = None, model_loader: Callable | None = None) -> FastAPI:
+               plate_factory: Callable | None = None, model_loader: Callable | None = None,
+               backup_dir: Path | str | None = None, backup_at: str = "02:00") -> FastAPI:
     data_root = Path(data_root)
     DataRoot(data_root)  # create folders and control.db
     Auth(connect(data_root / "control.db"))
     jobs = JobManager(data_root, detector_factory or (lambda: default_detector_factory(data_root)), monitor_interval,
                       stability_seconds, plate_factory, model_loader)
     previews: dict[str, tuple[float, dict]] = {}
+    from ..admin import BackupScheduler
+    backups = BackupScheduler(data_root, backup_dir, backup_at) if backup_dir else None
 
     @asynccontextmanager
     async def lifespan(_app):
         if start_monitoring:
             jobs.resume_monitoring()  # monitoring survives restarts (MIS-07)
+        if backups:
+            backups.start()
         yield
+        if backups:
+            backups.stop()
         jobs.shutdown()
 
     app = FastAPI(title="Traffic Analysis Workbench", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -789,6 +801,51 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
                            "Check that the output folder exists, is writable and has free space.") from None
         return {"files": [str(p) for p in paths]}
 
+    # ---------- system and administration ----------
+    @app.get("/api/system")
+    def system(u: User = Depends(user)):
+        from .. import admin
+        root = DataRoot(data_root)
+        last = root.con.execute("SELECT at, author, detail FROM audit_log WHERE action IN ('backup','backup_failed') "
+                                "ORDER BY id DESC LIMIT 1").fetchone()
+        det = jobs._detector
+        rt = det[0].describe().get("runtime") if det and hasattr(det[0], "describe") else None
+        return {"version": __version__, "runtime": rt,
+                "backup": {"folder": str(backup_dir) if backup_dir else None, "at": backup_at if backup_dir else None,
+                           "last": dict(last) | {"detail": json.loads(last["detail"])} if last else None,
+                           "last_error": backups.last_error if backups else None},
+                "audit": admin.audit_log(root, 50) if u.role == "admin" else None}
+
+    @app.post("/api/admin/backup")
+    def backup_now(u: User = Depends(user)):
+        from ..admin import AdminError, backup
+        _admin_only(u)
+        if not backup_dir:
+            raise ApiError(400, "no_backup_folder", "No backup folder is set.",
+                           "Start the server with --backup-dir pointing to another drive.")
+        try:
+            return {"folder": str(backup(data_root, backup_dir, u.username))}
+        except (AdminError, OSError) as exc:
+            raise ApiError(500, "backup_failed", f"Backup failed: {exc}",
+                           "Check that the backup folder exists, is writable and has free space.") from None
+
+    @app.post("/api/missions/{mission_id}/delete")
+    def mission_delete(mission_id: str, body: DeleteBody, u: User = Depends(user)):
+        from ..admin import AdminError, delete_mission
+        _admin_only(u)
+        if jobs.busy(mission_id):
+            raise ApiError(409, "busy", "A job is running for this mission. Cancel it first.")
+        jobs.set_monitoring(mission_id, False)
+        jobs.jobs.pop(mission_id, None)
+        try:
+            return delete_mission(data_root, mission_id, u.username, body.confirm_name)
+        except AdminError as exc:
+            raise ApiError(400, "delete", str(exc)) from None
+
+    def _admin_only(u: User):
+        if u.role != "admin":
+            raise ApiError(403, "admin_only", "Only an administrator can do this.")
+
     # ---------- learning ----------
     def _learn(m: Mission):
         from ..learning import LearningService
@@ -1010,6 +1067,8 @@ def main(argv=None) -> int:
     s.add_argument("--data", required=True)
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--lan", action="store_true", help="accept connections from other computers on the network")
+    s.add_argument("--backup-dir", help="folder for the nightly database backup, ideally on another drive")
+    s.add_argument("--backup-at", default="02:00", help="local time of the nightly backup (HH:MM)")
     a = sub.add_parser("add-account")
     a.add_argument("--data", required=True)
     a.add_argument("--username", required=True)
@@ -1024,7 +1083,7 @@ def main(argv=None) -> int:
         return 0
     if args.cmd == "serve":
         host = "0.0.0.0" if args.lan else "127.0.0.1"
-        uvicorn.run(create_app(args.data), host=host, port=args.port, log_level="info")
+        uvicorn.run(create_app(args.data, backup_dir=args.backup_dir, backup_at=args.backup_at), host=host, port=args.port, log_level="info")
         return 0
     ap.print_help()
     return 1

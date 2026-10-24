@@ -252,3 +252,24 @@ def test_learning_dataset_evaluate_promote_rollback(env, monkeypatch):
     r = c.post("/api/models/promote", json={"name": "det", "version": "2", "mission_id": mid, "evaluation_id": ev["id"]},
                headers=H1)
     assert r.status_code == 403
+
+
+def test_system_backup_and_delete_mission(env):
+    tmp, src, out = env
+    app = create_app(tmp / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
+                     start_monitoring=False, stability_seconds=0, backup_dir=tmp / "bk")
+    c = signed_in(TestClient(app))
+    mid = mission(c, src, out)
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    wait_job(c, mid)
+    s = c.get("/api/system").json()
+    assert s["backup"]["folder"] == str(tmp / "bk") and s["backup"]["last"] is None
+    b = c.post("/api/admin/backup", headers=H1).json()
+    assert os.path.isfile(os.path.join(b["folder"], "manifest.json"))
+    assert c.get("/api/system").json()["backup"]["last"]["detail"]["folder"] == b["folder"]
+    bad = c.post(f"/api/missions/{mid}/delete", json={"confirm_name": "route 6"}, headers=H1)
+    assert bad.status_code == 400
+    assert c.post(f"/api/missions/{mid}/delete", json={"confirm_name": "Route 6"}, headers=H1).status_code == 200
+    assert c.get(f"/api/missions/{mid}").status_code == 404
+    assert c.get("/api/system").json()["audit"][0]["action"] == "mission_deleted"
+    assert len(list(src.glob("*.jpg"))) == 7

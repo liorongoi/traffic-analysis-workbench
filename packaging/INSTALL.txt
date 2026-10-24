@@ -1,0 +1,33 @@
+Traffic Analysis Workbench: offline install and update
+=======================================================
+
+This folder contains everything the workstation needs. Nothing is downloaded during install or use.
+
+Install or update (Windows)
+1. Copy this whole folder to the workstation (USB or internal share).
+2. Open PowerShell in this folder and run:
+     powershell -ExecutionPolicy Bypass -File install.ps1 -Target C:\TrafficWorkbench -Data D:\TrafficData -BackupDir E:\TrafficBackups
+   - Python must be installed, or put the official python-3.x.y-amd64.exe installer in this folder first.
+   - The installer checks every file against SHA256SUMS, installs into C:\TrafficWorkbench\app-<version>,
+     adds the model packs, runs a disconnected install-to-export check, backs up the data (on an update),
+     and only then switches start.cmd to the new version.
+3. Start with C:\TrafficWorkbench\start.cmd and open http://127.0.0.1:8765 on the workstation.
+   The first account (administrator) can only be created from the workstation itself.
+
+Roll back an update
+1. Stop the server.
+2. Open C:\TrafficWorkbench\previous.txt: it names the previous version's folder. Edit start.cmd to use that folder.
+3. If the update changed the database format, restore the backup taken just before the update into a new folder
+   and point start.cmd's --data at it:
+     <previous folder>\Scripts\trafficwb-admin.exe verify E:\TrafficBackups\twb-backup-<time>
+     <previous folder>\Scripts\trafficwb-admin.exe restore E:\TrafficBackups\twb-backup-<time> --data D:\TrafficData-restored
+   Each mission database also keeps an automatic copy from just before each format change, in its backups folder.
+
+Backups
+- With -BackupDir, the server backs up every database each night at 02:00 (change with --backup-at in start.cmd).
+- "Back up now" is on the missions page. trafficwb-admin backup / verify / restore work from the command line.
+- Crops and clips are not in the nightly backup; use trafficwb-admin backup --with-evidence for a full copy.
+
+GPU
+- Models run on an NVIDIA GPU when the CUDA build of ONNX Runtime and a suitable driver are present, else on DirectML,
+  else on the CPU. The missions page shows which is in use and why. Set TWB_ACCELERATOR=cpu in start.cmd to force the CPU.

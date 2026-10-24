@@ -41,7 +41,15 @@ CREATE TABLE IF NOT EXISTS mission (
   created_at TEXT NOT NULL,
   state TEXT NOT NULL DEFAULT 'active'
 );
--- Which model version is in production per task. Append-only; the latest row is current. Never written automatically.
+-- Administrative actions: backups, restores, mission deletions.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY,
+  at TEXT NOT NULL,
+  author TEXT NOT NULL,
+  action TEXT NOT NULL,             -- mission_deleted | backup | backup_failed | restore
+  detail TEXT NOT NULL              -- JSON
+);
+-- Promotions and rollbacks of production models. Append-only; replaying it gives the model in use. Never written automatically.
 CREATE TABLE IF NOT EXISTS model_promotion (
   id INTEGER PRIMARY KEY,
   task TEXT NOT NULL,

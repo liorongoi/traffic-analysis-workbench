@@ -136,6 +136,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
           </div>
         </div>
       </div>
+      <DeleteMission m={m} />
     </div>
   );
 }
@@ -299,6 +300,38 @@ function Views({ missionId }: { missionId: string }) {
           <h2>Not assigned to a view ({data.unassigned.length})</h2>
           <p className="muted">These images did not match any view closely enough (for example rain on the lens). They are analysed without regions.</p>
           <div className="thumbs">{data.unassigned.slice(0, 30).map((id) => <a key={id} href={`#/m/${missionId}/i/${id}`}><img src={`/api/missions/${missionId}/thumbs/${id}?w=200`} alt="" /></a>)}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeleteMission({ m }: { m: any }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <span className="muted">Deleting a mission removes its database, crops and clips. Source images and exported files stay where they are. Administrators only.</span>
+        <button className="danger" onClick={() => { setOpen(true); setName(""); setErr(null); }}>Delete mission…</button>
+      </div>
+      {open && (
+        <div className="dialog-bg" onClick={() => setOpen(false)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <h2>Delete mission</h2>
+            <p>This permanently removes the analysis results, corrections, reviews, datasets and evidence of <b className="bidi">{m.config.name}</b>. It cannot be undone except from a backup. The deletion is recorded in the audit log.</p>
+            <p className="muted">Not touched: the source folder <span className="mono bidi">{m.config.source_dir}</span> and exports in <span className="mono bidi">{m.config.output_dir}</span>.</p>
+            <label>Type the mission's name to confirm<input dir="auto" value={name} onChange={(e) => setName(e.target.value)} /></label>
+            {err && <div className="msg err">{err}</div>}
+            <div className="row" style={{ justifyContent: "flex-end" }}>
+              <button onClick={() => setOpen(false)}>Cancel</button>
+              <button className="danger" disabled={name.trim() !== m.config.name} onClick={async () => {
+                try { await post(`/missions/${m.id}/delete`, { confirm_name: name }); go("/"); }
+                catch (e) { setErr((e as ApiError).message); }
+              }}>Delete permanently</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

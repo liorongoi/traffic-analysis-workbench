@@ -23,9 +23,38 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - name: Build the web screens
         run: python scripts/build_ui.py
-      - run: python -m pip install -e ".[dev,probe]"
+      - run: python -m pip install -e ".[dev,probe,cpu]"
       - name: Fetch model pack (stands in for the staging machine)
         run: python scripts/fetch_models.py
       - run: python -m pytest -v
       - name: Hardware probe report (runner hardware, not the target workstation)
         run: python -m trafficwb.probe
+
+  offline-bundle:
+    # ENV-04: build the Windows offline bundle, then install it and run the install-to-export check
+    # with package downloads turned off and web traffic sent to a dead proxy.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: python scripts/build_ui.py
+      - run: python scripts/fetch_models.py
+      - run: python scripts/make_bundle.py --platform win_amd64 --python 3.12 --out dist
+      - name: Install offline and check
+        shell: pwsh
+        env:
+          PIP_NO_INDEX: "1"
+          HTTPS_PROXY: http://127.0.0.1:9
+          HTTP_PROXY: http://127.0.0.1:9
+        run: |
+          $b = Get-ChildItem dist -Directory | Select-Object -First 1
+          & "$($b.FullName)\install.ps1" -Target "$env:RUNNER_TEMP\twb" -Data "$env:RUNNER_TEMP\twbdata" -BackupDir "$env:RUNNER_TEMP\twbbk"
+          if (-not (Test-Path "$env:RUNNER_TEMP\twb\start.cmd")) { throw "start.cmd was not written" }
+          Get-Content "$env:RUNNER_TEMP\twb\start.cmd"
