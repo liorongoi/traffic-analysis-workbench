@@ -391,6 +391,81 @@ CREATE TABLE light_label (
   created_at TEXT NOT NULL
 );
 """,
+    5: """
+-- Machine attribute readings (colour), cached per object box and algorithm version. Immutable.
+CREATE TABLE object_attribute (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  object_uid TEXT NOT NULL,
+  box TEXT NOT NULL,                -- JSON [x1,y1,x2,y2] the reading was made on
+  attribute TEXT NOT NULL,          -- colour
+  reading TEXT NOT NULL,            -- JSON: state, values, shares, reason
+  algo TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (source_version_id, object_uid, box, attribute, algo)
+);
+-- Operator attribute corrections. Append-only; the latest per object and attribute is current.
+CREATE TABLE attribute_revision (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  object_uid TEXT NOT NULL,
+  attribute TEXT NOT NULL,
+  value TEXT,                       -- a colour, 'not_observable', or NULL to return to the machine reading
+  author TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_attr_rev ON attribute_revision(source_version_id, object_uid, attribute);
+-- Typed search requests, their machine interpretation and the operator's confirmed version.
+CREATE TABLE search_request (
+  id INTEGER PRIMARY KEY,
+  chat_text TEXT NOT NULL,
+  interpreter_version TEXT NOT NULL,
+  spec_json TEXT NOT NULL,          -- interpreter output, never changed
+  confirmed_spec_json TEXT,         -- what the operator confirmed (may be edited)
+  edits_json TEXT,                  -- differences between the two
+  ignored_words TEXT,               -- JSON list of not-understood words the operator chose to ignore
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  confirmed_by TEXT,
+  confirmed_at TEXT
+);
+CREATE TABLE search_run (
+  id INTEGER PRIMARY KEY,
+  request_id INTEGER NOT NULL REFERENCES search_request(id),
+  spec_json TEXT NOT NULL,          -- the confirmed spec actually executed
+  state TEXT NOT NULL,              -- running | finished | cancelled | failed
+  attribute_algo TEXT NOT NULL,
+  summary TEXT,
+  error TEXT,
+  started_by TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE TABLE search_hit (
+  id INTEGER PRIMARY KEY,
+  search_run_id INTEGER NOT NULL REFERENCES search_run(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  object_uid TEXT NOT NULL,
+  status TEXT NOT NULL,             -- match | possible
+  reasons TEXT NOT NULL,            -- JSON list of why it is only possible
+  target INTEGER NOT NULL,          -- index of the spec target it matched best
+  cls TEXT NOT NULL,
+  x1 REAL NOT NULL, y1 REAL NOT NULL, x2 REAL NOT NULL, y2 REAL NOT NULL,
+  colour TEXT NOT NULL,             -- JSON reading used, including operator corrections
+  UNIQUE (search_run_id, source_version_id, object_uid)
+);
+CREATE INDEX ix_hit_run ON search_hit(search_run_id, source_version_id);
+-- Operator verdicts on hits. Append-only; the latest per hit is current.
+CREATE TABLE search_hit_decision (
+  id INTEGER PRIMARY KEY,
+  search_hit_id INTEGER NOT NULL REFERENCES search_hit(id),
+  decision TEXT NOT NULL,           -- correct | not_a_match | undecided
+  author TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
+""",
 }
 
 

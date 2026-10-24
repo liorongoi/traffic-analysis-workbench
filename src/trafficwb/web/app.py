@@ -123,6 +123,25 @@ class ExportBody(BaseModel):
     filter: FilterBody | None = None
 
 
+class AskBody(BaseModel):
+    text: str
+
+
+class ConfirmBody(BaseModel):
+    spec: dict | None = None
+    ignore_unknown: bool = False
+
+
+class HitDecisionBody(BaseModel):
+    decision: str
+    note: str | None = None
+
+
+class ColourBody(BaseModel):
+    value: str | None = None
+    note: str | None = None
+
+
 class MonitoringBody(BaseModel):
     enabled: bool
 
@@ -546,6 +565,98 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
             raise ApiError(500, "export_failed", f"Export failed: {exc}",
                            "Check that the output folder exists, is writable and has free space.") from None
         return {"files": [str(p) for p in paths]}
+
+    # ---------- object search ----------
+    def _search(m: Mission):
+        from ..search import SearchService
+        return SearchService(m)
+
+    def _search_call(fn):
+        from ..search import SearchError
+        try:
+            return fn()
+        except SearchError as exc:
+            raise ApiError(400, "search", str(exc)) from None
+
+    @app.get("/api/missions/{mission_id}/search")
+    def search_home(m: Mission = Depends(mission)):
+        from ..interpret import CATEGORIES, COLOURS, CONDITIONS, SUBTYPES, WEEKDAYS
+        svc = _search(m)
+        return {"requests": svc.requests(), "region_names": list(svc.context().region_names),
+                "vocabulary": {"categories": CATEGORIES, "subtypes": list(SUBTYPES), "colours": COLOURS,
+                               "conditions": CONDITIONS, "weekdays": WEEKDAYS},
+                "mode": m.con.execute("SELECT mode FROM mission").fetchone()[0]}
+
+    @app.post("/api/missions/{mission_id}/search/ask")
+    def search_ask(body: AskBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        return _search_call(lambda: _search(m).ask(body.text, u.username))
+
+    @app.post("/api/missions/{mission_id}/search/{request_id}/confirm")
+    def search_confirm(request_id: int, body: ConfirmBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        return _search_call(lambda: _search(m).confirm(request_id, u.username, body.spec, body.ignore_unknown))
+
+    @app.post("/api/missions/{mission_id}/search/{request_id}/run")
+    def search_run(request_id: int, m: Mission = Depends(mission), u: User = Depends(user)):
+        svc = _search(m)
+        req = _search_call(lambda: svc.request(request_id))
+        if not req["confirmed"]:
+            raise ApiError(400, "search", "Confirm the search before running it.")
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "Another job is running for this mission. Wait for it or cancel it.")
+        return jobs.start(m.id, "search", request_id=request_id, author=u.username).snapshot()
+
+    @app.get("/api/missions/{mission_id}/search-runs/{run_id}")
+    def search_run_get(run_id: int, m: Mission = Depends(mission), status: str | None = None,
+                       decision: str | None = None, offset: int = 0, limit: int = Query(100, ge=1, le=500)):
+        svc = _search(m)
+        info = _search_call(lambda: svc.run_info(run_id))
+        hits, total = svc.hits(run_id, status, decision, offset, limit)
+        return info | {"hits": [h.__dict__ for h in hits], "total": total}
+
+    @app.post("/api/missions/{mission_id}/search-hits/{hit_id}/decision")
+    def search_hit_decide(hit_id: int, body: HitDecisionBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        _search_call(lambda: _search(m).decide(hit_id, body.decision, u.username, body.note))
+        return {"ok": True}
+
+    @app.put("/api/missions/{mission_id}/items/{version_id}/objects/{uid}/colour")
+    def object_colour(version_id: int, uid: str, body: ColourBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        _search_call(lambda: _search(m).set_colour(_vid(m, version_id), uid, body.value, u.username, body.note))
+        return {"ok": True}
+
+    @app.post("/api/missions/{mission_id}/search-runs/{run_id}/export")
+    def search_export(run_id: int, body: ExportBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        from ..search import SearchError, export_search
+        try:
+            paths = export_search(m, run_id, u.username, body.formats)
+        except SearchError as exc:
+            raise ApiError(400, "search", str(exc)) from None
+        except Exception as exc:
+            raise ApiError(500, "export_failed", f"Export failed: {exc}",
+                           "Check that the output folder exists, is writable and has free space.") from None
+        return {"files": [str(p) for p in paths]}
+
+    @app.get("/api/missions/{mission_id}/crops/{version_id}")
+    def crop(version_id: int, box: str, m: Mission = Depends(mission), h: int = Query(110, ge=32, le=400)):
+        try:
+            x1, y1, x2, y2 = (float(v) for v in box.split(","))
+        except ValueError:
+            raise ApiError(400, "bad_box", "box must be x1,y1,x2,y2") from None
+        path = ViewService(m)._path(_vid(m, version_id))
+        if not path.is_file():
+            raise ApiError(410, "source_missing", f"{path.name} is no longer in the source folder.")
+        img = read_image(path)
+        H, W = img.shape[:2]
+        pw, ph = (x2 - x1) * 0.15 + 4, (y2 - y1) * 0.15 + 4
+        a, b = max(0, int(x1 - pw)), max(0, int(y1 - ph))
+        c, d = min(W, int(x2 + pw)), min(H, int(y2 + ph))
+        if c <= a or d <= b:
+            raise ApiError(400, "bad_box", "box is outside the image")
+        part = img[b:d, a:c]
+        scale = h / part.shape[0]
+        part = cv2.resize(part, (max(1, int(part.shape[1] * scale)), h),
+                          interpolation=cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", part, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        return Response(buf.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
 
     # ---------- UI ----------
     if (STATIC_DIR / "index.html").is_file():

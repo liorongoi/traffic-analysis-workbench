@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, Filter, fmtDuration, Job, post, REVIEW_LABEL, ResultRow } from "../api";
 import { go } from "../router";
+import SearchTab from "./Search";
 
 export type SavedQuery = { filter: Filter; sort: string; desc: boolean };
 export const queryKey = (mid: string) => `twb-query-${mid}`;
@@ -12,7 +13,7 @@ export function loadQuery(mid: string): SavedQuery {
   }
 }
 
-export default function MissionPage({ missionId, tab }: { missionId: string; tab: string }) {
+export default function MissionPage({ missionId, tab, extra }: { missionId: string; tab: string; extra?: string }) {
   const [m, setM] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const load = useCallback(() => api(`/missions/${missionId}`).then(setM).catch((e: ApiError) => setErr(e.message)), [missionId]);
@@ -25,7 +26,8 @@ export default function MissionPage({ missionId, tab }: { missionId: string; tab
 
   if (err) return <div className="page"><div className="msg err">{err}</div></div>;
   if (!m) return <div className="page muted">Loading…</div>;
-  const tabs = [["overview", "Overview"], ["results", "Results"], ["views", "Camera views"]];
+  const tabs = [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
+    ["results", "Results"], ["views", "Camera views"]];
   return (
     <div className="page">
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -38,6 +40,7 @@ export default function MissionPage({ missionId, tab }: { missionId: string; tab
       {tab === "overview" && <Overview m={m} reload={load} />}
       {tab === "results" && <Results missionId={missionId} />}
       {tab === "views" && <Views missionId={missionId} />}
+      {tab === "search" && <SearchTab missionId={missionId} runId={extra ? Number(extra) : null} />}
     </div>
   );
 }
@@ -52,7 +55,7 @@ function JobCard({ job, mid, reload }: { job: Job | null; mid: string; reload: (
   const pct = job && job.total ? Math.round((100 * job.done) / job.total) : 0;
   return (
     <div className="card">
-      <h2>Processing</h2>
+      <h2>{job?.kind === "search" ? "Search" : "Processing"}</h2>
       {!job && <p className="muted">Nothing has run since the server started.</p>}
       {job && (
         <>

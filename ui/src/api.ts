@@ -128,6 +128,7 @@ export type Job = {
   eta_s: number | null;
   eta_basis: string;
   error: string | null;
+  result?: { search_run?: number };
 };
 
 export function fmtDuration(s: number | null | undefined): string {

@@ -110,9 +110,9 @@ def _finish(tmp: Path, final: Path) -> None:
     os.rename(tmp, final)  # Windows refuses to rename onto an existing file; checked above for POSIX
 
 
-def write_csv(out_dir: Path, stem: str, images, objects) -> list[Path]:
+def write_sheets_csv(out_dir: Path, stem: str, sheets: list[tuple[str, list[str], list[list[str]]]]) -> list[Path]:
     paths = []
-    for name, cols, rows in (("images", IMAGE_COLUMNS, images), ("objects", OBJECT_COLUMNS, objects)):
+    for name, cols, rows in sheets:
         final = _unique_path(out_dir, f"{stem}_{name}", "csv")
         tmp = final.with_name(final.name + ".partial")
         with open(tmp, "x", encoding="utf-8-sig", newline="") as f:
@@ -124,14 +124,15 @@ def write_csv(out_dir: Path, stem: str, images, objects) -> list[Path]:
     return paths
 
 
-def write_xlsx(out_dir: Path, stem: str, images, objects, max_rows: int = XLSX_MAX_ROWS) -> list[Path]:
+def write_sheets_xlsx(out_dir: Path, stem: str, sheets: list[tuple[str, list[str], list[list[str]]]],
+                      max_rows: int = XLSX_MAX_ROWS) -> list[Path]:
     from openpyxl import Workbook
 
     final = _unique_path(out_dir, stem, "xlsx")
     tmp = final.with_name(final.name + ".partial")
     wb = Workbook(write_only=True)
     per_sheet = max_rows - 1
-    for name, cols, rows in (("images", IMAGE_COLUMNS, images), ("objects", OBJECT_COLUMNS, objects)):
+    for name, cols, rows in sheets:
         chunks = [rows[i:i + per_sheet] for i in range(0, len(rows), per_sheet)] or [[]]
         for k, chunk in enumerate(chunks, 1):
             ws = wb.create_sheet(name if k == 1 else f"{name}_{k}")
@@ -142,6 +143,15 @@ def write_xlsx(out_dir: Path, stem: str, images, objects, max_rows: int = XLSX_M
         wb.save(f)
     _finish(tmp, final)
     return [final]
+
+
+def write_csv(out_dir: Path, stem: str, images, objects) -> list[Path]:
+    return write_sheets_csv(out_dir, stem, [("images", IMAGE_COLUMNS, images), ("objects", OBJECT_COLUMNS, objects)])
+
+
+def write_xlsx(out_dir: Path, stem: str, images, objects, max_rows: int = XLSX_MAX_ROWS) -> list[Path]:
+    return write_sheets_xlsx(out_dir, stem, [("images", IMAGE_COLUMNS, images), ("objects", OBJECT_COLUMNS, objects)],
+                             max_rows)
 
 
 def export(mission: Mission, author: str, formats: list[str] | None = None, flt: Filter | None = None,

@@ -20,7 +20,7 @@ from ..store import DataRoot
 @dataclass
 class Job:
     mission_id: str
-    kind: str                         # scan_and_process | process
+    kind: str                         # scan_and_process | process | search
     started: float = field(default_factory=time.time)
     finished: float | None = None
     control: RunControl = field(default_factory=RunControl)
@@ -32,6 +32,8 @@ class Job:
     error: str | None = None
     report: list = field(default_factory=list)
     thread: threading.Thread | None = None
+    params: dict = field(default_factory=dict)
+    result: dict = field(default_factory=dict)
 
     def snapshot(self) -> dict:
         now = self.finished or time.time()
@@ -41,7 +43,7 @@ class Job:
             eta = round(per * max(0, self.total - self.done))
         state = "paused" if self.state == "running" and self.control.paused else self.state
         return {"kind": self.kind, "state": state, "stage": self.control.stage, "done": self.done, "total": self.total,
-                "elapsed_s": round(now - self.started), "eta_s": eta, "error": self.error,
+                "elapsed_s": round(now - self.started), "eta_s": eta, "error": self.error, "result": self.result,
                 "eta_basis": "measured on this run" if eta is not None else "not enough images yet"}
 
 
@@ -70,11 +72,11 @@ class JobManager:
         j = self.jobs.get(mission_id)
         return j is not None and j.state in ("running", "paused")
 
-    def start(self, mission_id: str, kind: str = "scan_and_process") -> Job:
+    def start(self, mission_id: str, kind: str = "scan_and_process", **params) -> Job:
         with self._lock:
             if self.busy(mission_id):
                 return self.jobs[mission_id]
-            job = Job(mission_id, kind)
+            job = Job(mission_id, kind, params=params)
             job.thread = threading.Thread(target=self._run, args=(job,), name=f"job-{mission_id}", daemon=True)
             self.jobs[mission_id] = job
         job.thread.start()
@@ -84,6 +86,9 @@ class JobManager:
         try:
             root = DataRoot(self.data_root)
             m = root.open_mission(job.mission_id)
+            if job.kind == "search":
+                self._search(job, m)
+                return
             if job.kind == "scan_and_process":
                 job.control.stage = "scanning source folder"
                 cycle(m, stability_seconds=self.stability)
@@ -112,6 +117,22 @@ class JobManager:
                 pass
         finally:
             job.finished = time.time()
+
+    def _search(self, job: Job, m) -> None:
+        from ..search import SearchService
+
+        def progress(n, total):
+            job.total = total
+            job.done = n
+            job.rate_done += 1
+            if job.rate_start is None:
+                job.rate_start = time.time()
+                job.rate_done = 0
+
+        run_id = SearchService(m).run(job.params["request_id"], job.params["author"], control=job.control,
+                                      progress=progress)
+        job.result = {"search_run": run_id}
+        job.state = "cancelled" if job.control.cancelled else "finished"
 
     # ---------- monitoring ----------
     def set_monitoring(self, mission_id: str, enabled: bool) -> None:

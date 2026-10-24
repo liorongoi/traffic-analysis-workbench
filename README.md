@@ -16,6 +16,7 @@ Status: **Phases 0 to 4 done for still images, without screens yet**. Only the p
 | `trafficwb.models`, `trafficwb.detect` | Verified offline model packs; vehicle detection (YOLOX-s, Apache-2.0) with tiling |
 | `trafficwb.night`, `trafficwb.night_service` | Day/dusk/night from image content, headlights, street-lamp background, vehicle candidates at night |
 | `trafficwb.process` | Resumable processing runs |
+| `trafficwb.interpret`, `trafficwb.attributes`, `trafficwb.search` | Typed object search: request to confirmed spec, vehicle colour with "not observable", match/possible results |
 | `trafficwb.review`, `trafficwb.export` | Results table, corrections, approval, CSV and Excel export |
 | `trafficwb-web` | Local web server and screens: missions, wizard, results, investigation, camera views, regions |
 | `trafficwb-mission` | Create a mission, scan, detect, list results, export, show status |
@@ -45,6 +46,7 @@ trafficwb-mission export --data D:\twb-data --mission <id>
 - `docs/design/design-package.html`: the ten design deliverables and open questions
 - `docs/design/time-and-schedules.md`: timestamp and schedule rules
 - `docs/design/ingestion.md`: mission and ingestion rules
+- `docs/design/object-search.md`: object search rules
 - `docs/design/web-ui.md`: web server, sign-in and screen rules
 - `docs/traceability.md`: requirement → code → test status
 - `docs/delivery/`: per-phase delivery reports (what was built, what was actually tested)
