@@ -23,7 +23,7 @@ Date: 24 Oct 2026. Status: **evaluation only**, chosen by Lior on 24 Oct 2026 ("
 
 - **Image rights**: neither author documents the training images. Before operational use, ask the authors or replace the weights with ones trained on data you hold rights to.
 - **YOLOv9 origin**: the architecture comes from a GPL-3.0 repository. Whether that affects weights exported by a third party is not settled.
-- **Scripts**: the reader cannot read Persian or Arabic characters. Lebanese and Iranian plates are found but not read, and say so. A reader for them needs your labelled plates (Q13) or a dataset with clear rights (IR-LPR's image rights are still to be checked).
+- **Scripts**: the reader cannot read Persian or Arabic characters. Iranian plates are found but not read, and say so. Lebanese plates carry a Latin area letter and digits, which the reader covers; any Arabic text on them is not read. A reader for them needs your labelled plates (Q13) or a dataset with clear rights (IR-LPR's image rights are still to be checked).
 - **Non-plates**: on the Finnish sample the reader read a square yellow road sign as "T1" with high confidence. Boxes that are not plate-shaped (width/height under 1.8) or that the finder is unsure of (score under 0.5) are therefore never marked "full".
 
 ## Replacing them

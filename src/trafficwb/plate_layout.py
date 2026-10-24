@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"     # U+06F0..U+06F9
 ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩"      # U+0660..U+0669
 _DIGIT_MAP = {ord(c): str(i) for i, c in enumerate(PERSIAN_DIGITS)} | {ord(c): str(i) for i, c in enumerate(ARABIC_DIGITS)}
-SEPARATORS = re.compile(r"[\s\-_.·•|/]+")
+SEPARATORS = re.compile(r"[\s\-_.·•|/\u0640]+")   # includes the Arabic tatweel, as in "هـ"
 UNSURE = "?"
 
 READABILITY = ("full", "partial", "unreadable")
@@ -63,25 +63,37 @@ class CountryPlates:
     max_len: int = 10
 
 
+# Sources: English Wikipedia "Vehicle registration plates of Israel / Latvia / Iran / Lebanon" (read 24 Oct 2026)
+# and licenseplatemania.com for Lebanon. Not yet checked against official sources or camera samples.
+IR_PRIVATE_LETTERS = "بجدسصطقلمنوهی"
+IR_OTHER_LETTERS = "اپتثزژشعفکگ"
+LB_AREA_LETTERS = "ABYGNOSTKZJRM"
+
 COUNTRIES: dict[str, CountryPlates] = {
     "IL": CountryPlates(
         "IL", "Israel", "digits", True,
-        (Layout("private-8", r"\d{8}", (3, 2, 3), "current private, 8 digits"),
-         Layout("private-7", r"\d{7}", (2, 3, 2), "older private, 7 digits")),
+        (Layout("private-8", r"\d{8}", (3, 2, 3), "current private (since 2017), 123-45-678"),
+         Layout("private-7", r"\d{7}", (2, 3, 2), "1980–2017 private; taxis and buses still, 12-345-67"),
+         Layout("legacy-6", r"\d{6}", (3, 3), "older plates, 123-456"),
+         Layout("legacy-5", r"\d{5}", (2, 3), "older plates, 12-345")),
         min_len=5, max_len=8),
     "LV": CountryPlates(
         "LV", "Latvia", "Latin letters and digits", True,
-        (Layout("standard", r"[A-Z]{1,2}\d{1,4}", (), "EU format: one or two letters, up to four digits"),
-         Layout("personalised", r"[A-Z0-9]{2,8}", (), "personalised plates exist")),
+        (Layout("standard", r"[A-Z]{2}\d{1,4}", (), "two letters and one to four digits, AB-1234 (taxis TX/TQ, diplomatic CD)"),
+         Layout("trailer", r"[A-Z]\d{4}|[A-Z]\d{3}[A-Z]", (), "trailers: A-1234 or A-123B"),
+         Layout("personalised", r"(?!.*(.)\1\1\1)[A-Z0-9]{2,8}", (), "personalised: 2 to 8 letters or digits, no symbol more than three times in a row")),
         min_len=2, max_len=8),
     "IR": CountryPlates(
         "IR", "Iran", "Persian digits and letters", False,
-        (Layout("private", r"\d{2}[^\dA-Z]\d{3}\d{2}", (), "two digits, one Persian letter, three digits, two-digit region code"),),
-        min_len=7, max_len=8),
+        (Layout("private", rf"\d{{2}}[{IR_PRIVATE_LETTERS}]\d{{3}}\d{{2}}", (), "two digits, letter, three digits, two-digit province code"),
+         Layout("other", rf"\d{{2}}[{IR_OTHER_LETTERS}]\d{{3}}\d{{2}}", (), "same order with a government, police, taxi or other service letter")),
+        min_len=8, max_len=8),
     "LB": CountryPlates(
-        "LB", "Lebanon", "Latin letter, digits and Arabic script", False,
-        (Layout("private", r"[A-Z]\d{1,6}", (), "Latin letter and digits; Arabic text on the same plate"),),
-        min_len=2, max_len=8),
+        "LB", "Lebanon", "Latin area letter and digits (Arabic name on the blue band)", True,
+        (Layout("private", rf"[{LB_AREA_LETTERS}]\d{{1,6}}", (), "area letter and up to six digits, B 123456"),
+         Layout("rl", r"RL\d{6}", (), "RL and six digits"),
+         Layout("parliament", r"(?:MP)?(?:12[0-8]|1[01]\d|\d{1,2})", (), "members of parliament, 1 to 128")),
+        min_len=1, max_len=8),
 }
 
 

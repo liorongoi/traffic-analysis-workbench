@@ -31,14 +31,14 @@ The plate stage runs after night analysis in the same job. If it is cancelled, t
 
 ## Countries
 
-| Country | Plates carry | Read by the installed reader | Layouts (working hypotheses, to be checked) |
+| Country | Plates carry | Read by the installed reader | Layouts |
 |---|---|---|---|
-| Israel | digits | yes | 8 digits as 123-45-678; 7 digits as 12-345-67 |
-| Latvia | Latin letters and digits | yes | one or two letters and up to four digits; personalised 2–8 characters |
-| Iran | Persian digits and letters | no: found, not read | two digits, letter, three digits, two-digit region |
-| Lebanon | Latin letter, digits, Arabic script | no: found, not read | letter and up to six digits |
+| Israel | digits | yes | 8 digits as 123-45-678 (since 2017); 7 digits as 12-345-67 (1980–2017, taxis and buses still); older 123-456 and 12-345. Police (מ) and military (צ) plates start with a Hebrew letter the reader cannot read |
+| Latvia | Latin letters and digits | yes | two letters and one to four digits (AB-1234; taxis TX/TQ, diplomatic CD); trailers A-1234 or A-123B; personalised 2–8 letters or digits, no symbol more than three times in a row |
+| Iran | Persian digits and letters | no: found, not read | two digits, one letter, three digits, two-digit province code. Private letters ب ج د س ص ط ق ل م ن و هـ ی; other letters mark government, police, taxi and other services |
+| Lebanon | Latin area letter and digits; Arabic name on the blue band | the letter and digits, yes; Arabic text on commercial plates, no | area letter (B Beirut, T Tripoli, S Sidon …) and up to six digits; RL and six digits; members of parliament 1–128 |
 
-Q12 default: current standard private plates only. The layouts come from the design package's working understanding and are not verified against official sources or your samples.
+Sources, read on 24 Oct 2026: English Wikipedia, "Vehicle registration plates of Israel", "… of Latvia", "… of Iran" and "… of Lebanon", plus licenseplatemania.com for Lebanon. These are secondary sources: official sources and your samples are still needed before a country is enabled. Wikipedia does not say whether Lebanese private plates also carry Eastern Arabic numerals; a sample will tell. Q12 default: current standard private plates only.
 
 ## Evaluation only, and enabling a country
 

@@ -44,6 +44,14 @@ def test_layouts_and_display():
     assert layout_of("AB1234", "LV").name == "standard"
     assert layout_of("RIGA2026", "LV").name == "personalised"
     assert layout_of("12ب34567", "IR").name == "private"
+    assert layout_of("12ت34567", "IR").name == "other"          # taxi letter
+    assert layout_of("A123B", "LV").name == "trailer"
+    assert layout_of("AAAA12", "LV") is None                      # no symbol four times in a row
+    assert layout_of("A1234", "LV").name == "trailer"             # one letter is a trailer, not a car
+    assert layout_of("B123456", "LB").name == "private" and layout_of("RL123456", "LB").name == "rl"
+    assert layout_of("MP45", "LB").name == "parliament" and layout_of("129", "LB") is None
+    assert assess(slots("123456"), PAD, "IL").display == "123-456"
+    assert normalize("۱۲هـ۳۴۵۶۷") == "12ه34567"                   # tatweel removed, letter kept
 
 
 def test_unsure_characters_are_never_filled():
