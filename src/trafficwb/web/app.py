@@ -142,6 +142,23 @@ class ColourBody(BaseModel):
     note: str | None = None
 
 
+class ReviseBody(BaseModel):
+    action: str
+    note: str | None = None
+    of: str | None = None
+    first_t: float | None = None
+    last_t: float | None = None
+    cls: str | None = None
+    target: int | None = None
+    t: float | None = None
+
+
+class ClipBody(BaseModel):
+    before_s: float | None = None
+    after_s: float | None = None
+    method: str = "copy"
+
+
 class MonitoringBody(BaseModel):
     enabled: bool
 
@@ -657,6 +674,102 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
                           interpolation=cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA)
         ok, buf = cv2.imencode(".jpg", part, [cv2.IMWRITE_JPEG_QUALITY, 88])
         return Response(buf.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+    # ---------- video ----------
+    def _video(m: Mission):
+        from ..video_review import VideoService
+        if m.input_type != "video":
+            raise ApiError(400, "not_video", "This mission analyses still images, not video.")
+        return VideoService(m)
+
+    def _video_call(fn):
+        from ..video_review import VideoError
+        try:
+            return fn()
+        except VideoError as exc:
+            raise ApiError(400, "video", str(exc)) from None
+
+    def _event_dict(e) -> dict:
+        d = {k: v for k, v in e.__dict__.items() if not k.startswith("_")}
+        d["parts"] = e.parts
+        return d
+
+    @app.get("/api/missions/{mission_id}/recordings")
+    def recordings(m: Mission = Depends(mission)):
+        return {"recordings": _video(m).recordings()}
+
+    @app.get("/api/missions/{mission_id}/videos/{version_id}")
+    def video_file(version_id: int, m: Mission = Depends(mission)):
+        path = _video(m).path(_vid(m, version_id))
+        if not path.is_file():
+            raise ApiError(410, "source_missing", f"{path.name} is no longer in the source folder.")
+        return FileResponse(path, headers={"Cache-Control": "private, no-transform"})
+
+    @app.get("/api/missions/{mission_id}/videos/{version_id}/frame")
+    def video_frame(version_id: int, t: float = Query(..., ge=0), m: Mission = Depends(mission),
+                    w: int = Query(1280, ge=64, le=3840)):
+        """One decoded frame, for browsers that cannot play the recording's codec. X-Frame-Time is its exact time."""
+        from ..video import frame_at
+        path = _video(m).path(_vid(m, version_id))
+        if not path.is_file():
+            raise ApiError(410, "source_missing", f"{path.name} is no longer in the source folder.")
+        f = frame_at(path, t)
+        if f is None:
+            raise ApiError(404, "no_frame", "No frame at or after that time.")
+        img = f.image
+        if img.shape[1] > w:
+            img = cv2.resize(img, (w, int(img.shape[0] * w / img.shape[1])), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        return Response(buf.tobytes(), media_type="image/jpeg",
+                        headers={"X-Frame-Time": f"{f.t:.6f}", "Cache-Control": "private, max-age=3600"})
+
+    @app.get("/api/missions/{mission_id}/events")
+    def events(m: Mission = Depends(mission), version_id: int | None = None, status: str | None = None,
+               flag: str | None = None):
+        return {"events": [_event_dict(e) for e in _video(m).events(version_id, status, flag)]}
+
+    @app.get("/api/missions/{mission_id}/events/{event_id}")
+    def event_get(event_id: int, m: Mission = Depends(mission)):
+        svc = _video(m)
+        e = _video_call(lambda: svc.event(event_id))
+        return _event_dict(e) | {"observations": svc.observations(event_id), "clips": svc.clips(event_id)}
+
+    @app.get("/api/missions/{mission_id}/events/{event_id}/thumb")
+    def event_thumb(event_id: int, m: Mission = Depends(mission), h: int = Query(120, ge=32, le=400)):
+        svc = _video(m)
+        data = _video_call(lambda: svc.thumbnail(event_id, h))
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.post("/api/missions/{mission_id}/events/{event_id}/revise")
+    def event_revise(event_id: int, body: ReviseBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        svc = _video(m)
+        payload = {k: v for k, v in body.model_dump().items() if k not in ("action", "note") and v is not None}
+        try:
+            e = _video_call(lambda: svc.revise(event_id, body.action, u.username, body.note, **payload))
+        except KeyError as exc:
+            raise ApiError(400, "video", f"Missing field: {exc.args[0]}") from None
+        return _event_dict(e)
+
+    @app.post("/api/missions/{mission_id}/events/{event_id}/clip")
+    def event_clip(event_id: int, body: ClipBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        svc = _video(m)
+        try:
+            return _video_call(lambda: svc.clip(event_id, body.before_s, body.after_s, body.method, u.username))
+        except ApiError:
+            raise
+        except Exception as exc:
+            raise ApiError(500, "clip_failed", f"Clip export failed: {exc}",
+                           "Check that the output folder exists, is writable and has free space.") from None
+
+    @app.post("/api/missions/{mission_id}/events/export")
+    def events_export(body: ExportBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        svc = _video(m)
+        try:
+            paths = svc.export(u.username, body.formats)
+        except Exception as exc:
+            raise ApiError(500, "export_failed", f"Export failed: {exc}",
+                           "Check that the output folder exists, is writable and has free space.") from None
+        return {"files": [str(p) for p in paths]}
 
     # ---------- UI ----------
     if (STATIC_DIR / "index.html").is_file():

@@ -94,7 +94,12 @@ def main(argv: list[str] | None = None) -> int:
         pack = models.find(a.model, a.model_version)
         det = YoloxDetector(pack, DetectorSettings(tiles=(cols, rows)))
         m = root.open_mission(a.mission)
-        reps = Processor(m, det, pack.card, region_rule=a.rule).process_all(
+        if m.input_type == "video":
+            from .video_process import VideoProcessor
+            proc = VideoProcessor(m, det, pack.card)
+        else:
+            proc = Processor(m, det, pack.card, region_rule=a.rule)
+        reps = proc.process_all(
             progress=lambda n, t: print(f"\r{n}/{t}", end="", file=sys.stderr, flush=True))
         print(file=sys.stderr)
         print(json.dumps([r.__dict__ for r in reps], indent=2, ensure_ascii=False))
@@ -109,6 +114,11 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "export":
         from .export import export
         m = root.open_mission(a.mission)
+        if m.input_type == "video":
+            from .video_review import VideoService
+            for p in VideoService(m).export(a.author, a.formats.split(",") if a.formats else None):
+                print(p)
+            return 0
         for p in export(m, a.author, a.formats.split(",") if a.formats else None):
             print(p)
         return 0

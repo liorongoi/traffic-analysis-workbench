@@ -120,7 +120,12 @@ class Ingestor:
             )
         res.ignored_by_extension = ignored
         res.waiting_for_stability = self.con.execute("SELECT COUNT(*) FROM pending_file").fetchone()[0]
-        if res.malformed:
+        if res.malformed and self.m.input_type == "video":
+            # Video times are relative to the stream start, so a recording is still analysed; it gets no absolute UTC.
+            self.m.notify("warning", "malformed_names",
+                          f"{len(res.malformed)} recording(s) have names without a start time. They are analysed, "
+                          "but their events have no absolute UTC.", examples=res.malformed[:10])
+        elif res.malformed:
             self.m.notify("warning", "malformed_names",
                           f"{len(res.malformed)} file(s) have names without a valid capture time and were not queued.",
                           examples=res.malformed[:10])
@@ -259,8 +264,9 @@ def cycle(mission: Mission, now: datetime | None = None, stability_seconds: int 
         return res, None  # wait until the snapshot is complete
     # Queue every eligible current version not yet in any run, not just this scan's finds,
     # so files ingested by an interrupted or deferred cycle are never left behind.
+    parse_ok = "v.parse_status IN ('ok','malformed')" if mission.input_type == "video" else "v.parse_status='ok'"
     todo = [r[0] for r in mission.con.execute(
-        "SELECT v.id FROM source_version v WHERE v.superseded_by IS NULL AND v.parse_status='ok' "
+        f"SELECT v.id FROM source_version v WHERE v.superseded_by IS NULL AND {parse_ok} "
         "AND v.integrity IN ('ok','unverified') AND NOT EXISTS "
         "(SELECT 1 FROM run_item i WHERE i.source_version_id=v.id) ORDER BY v.id")]
     run_id = mission.create_run("initial" if not has_runs else "continuous_batch", todo)

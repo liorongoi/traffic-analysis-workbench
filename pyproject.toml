@@ -14,7 +14,9 @@ dependencies = [
     "opencv-python-headless>=4.8",
     "onnxruntime>=1.17",
     "openpyxl>=3.1",
-    "fastapi>=0.110",
+    "fastapi>=0.115",
+    "starlette>=0.39",   # byte-range responses for video playback
+    "av>=12",            # FFmpeg libraries for video decoding and clips
     "uvicorn>=0.29",
 ]
 

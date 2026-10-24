@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, Filter, fmtDuration, Job, post, REVIEW_LABEL, ResultRow } from "../api";
 import { go } from "../router";
 import SearchTab from "./Search";
+import EventsTab from "./Events";
 
 export type SavedQuery = { filter: Filter; sort: string; desc: boolean };
 export const queryKey = (mid: string) => `twb-query-${mid}`;
@@ -26,8 +27,9 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
 
   if (err) return <div className="page"><div className="msg err">{err}</div></div>;
   if (!m) return <div className="page muted">Loading…</div>;
+  const isVideo = m.config.input_type === "video";
   const tabs = [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
-    ["results", "Results"], ["views", "Camera views"]];
+    ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["views", "Camera views"]])];
   return (
     <div className="page">
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -38,14 +40,15 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
         {tabs.map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""}>{l}</a>)}
       </nav>
       {tab === "overview" && <Overview m={m} reload={load} />}
-      {tab === "results" && <Results missionId={missionId} />}
-      {tab === "views" && <Views missionId={missionId} />}
+      {tab === "results" && !isVideo && <Results missionId={missionId} />}
+      {tab === "views" && !isVideo && <Views missionId={missionId} />}
+      {tab === "events" && isVideo && <EventsTab missionId={missionId} eventId={extra ? Number(extra) : null} />}
       {tab === "search" && <SearchTab missionId={missionId} runId={extra ? Number(extra) : null} />}
     </div>
   );
 }
 
-function JobCard({ job, mid, reload }: { job: Job | null; mid: string; reload: () => void }) {
+function JobCard({ job, mid, reload, unit }: { job: Job | null; mid: string; reload: () => void; unit: string }) {
   const [err, setErr] = useState<string | null>(null);
   const act = async (path: string) => {
     setErr(null);
@@ -61,7 +64,7 @@ function JobCard({ job, mid, reload }: { job: Job | null; mid: string; reload: (
         <>
           <div className="row" style={{ justifyContent: "space-between" }}>
             <b>{job.state === "paused" ? "Paused" : job.state === "running" ? job.stage : job.state}</b>
-            <span className="muted">{job.done} of {job.total} images</span>
+            <span className="muted">{job.done} of {job.total} {unit}</span>
           </div>
           <div className="progress" style={{ margin: "8px 0" }}><div style={{ width: `${pct}%` }} /></div>
           <div className="muted">Elapsed {fmtDuration(job.elapsed_s)} · remaining {job.eta_s != null ? `about ${fmtDuration(job.eta_s)}` : "–"} ({job.eta_basis})</div>
@@ -95,7 +98,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
         {stats.map(([l, n]) => <div key={l} className="card stat"><div className="n">{n}</div><div className="l">{l}</div></div>)}
       </div>
       <div className="grid cols-2">
-        <JobCard job={m.job} mid={m.id} reload={reload} />
+        <JobCard job={m.job} mid={m.id} reload={reload} unit={m.config.input_type === "video" ? "recordings" : "images"} />
         <div className="card">
           <h2>Monitoring</h2>
           {m.config.processing === "continuous" ? (

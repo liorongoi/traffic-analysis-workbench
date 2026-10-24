@@ -104,7 +104,11 @@ class JobManager:
                     job.rate_start = time.time()
                     job.rate_done = 0
 
-            proc = Processor(m, det, card, control=job.control)
+            if m.input_type == "video":
+                from ..video_process import VideoProcessor
+                proc = VideoProcessor(m, det, card, control=job.control)
+            else:
+                proc = Processor(m, det, card, control=job.control)
             job.report = [r.__dict__ for r in proc.process_all(progress)]
             job.state = "cancelled" if job.control.cancelled else "finished"
         except Exception as exc:  # surface, never crash the server

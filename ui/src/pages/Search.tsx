@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, Box, fmtDuration, Job, post } from "../api";
 import { go } from "../router";
+import { fmtT } from "./Events";
 
 type Target = { category: string; subtype: string | null; colours: string[]; exclude_colours: string[] };
 type Win = { days: string[]; start: string; end: string };
@@ -23,7 +24,7 @@ type Request = {
 type Vocab = { categories: string[]; subtypes: string[]; colours: string[]; conditions: string[]; weekdays: string[] };
 type Home = { requests: Request[]; region_names: string[]; vocabulary: Vocab; mode: string };
 type Hit = {
-  id: number; source_version_id: number; filename: string; capture_local: string | null; object_uid: string;
+  id: number; source_version_id: number; filename: string; capture_local: string | null; object_uid: string; event_t?: number | null;
   status: "match" | "possible"; reasons: string[]; target: number; cls: string; box: Box;
   colour: { state: string; values?: string[]; reason?: string | null; algo?: string }; decision: string;
 };
@@ -289,6 +290,7 @@ function RunView({ missionId, runId, vocab }: { missionId: string; runId: number
 
   if (!data) return msg ? <div className={`msg ${msg.kind}`}>{msg.text}</div> : <div className="muted">Loading…</div>;
   const s = data.summary ?? {};
+  const isVideo = s.events_total != null;
   const pages = Math.ceil(data.total / LIMIT);
   return (
     <div className="grid">
@@ -306,18 +308,27 @@ function RunView({ missionId, runId, vocab }: { missionId: string; runId: number
         <div className="grid cols-4">
           <div className="card stat"><div className="n">{s.hits_match ?? 0}</div><div className="l">matches</div></div>
           <div className="card stat"><div className="n">{s.hits_possible ?? 0}</div><div className="l">possible (a fact could not be checked)</div></div>
-          <div className="card stat"><div className="n">{s.images_with_hits ?? 0}</div><div className="l">images with results, of {s.images_searched ?? 0} searched</div></div>
-          <div className="card stat"><div className="n">{s.unresolved_night_candidates_not_searched ?? 0}</div><div className="l">unresolved night lights not searched (type and colour unknown)</div></div>
+          {isVideo ? <>
+            <div className="card stat"><div className="n">{s.recordings_with_hits ?? 0}</div><div className="l">recordings with results</div></div>
+            <div className="card stat"><div className="n">{s.events_searched ?? 0}</div><div className="l">events searched, of {s.events_total ?? 0}</div></div>
+          </> : <>
+            <div className="card stat"><div className="n">{s.images_with_hits ?? 0}</div><div className="l">images with results, of {s.images_searched ?? 0} searched</div></div>
+            <div className="card stat"><div className="n">{s.unresolved_night_candidates_not_searched ?? 0}</div><div className="l">unresolved night lights not searched (type and colour unknown)</div></div>
+          </>}
         </div>
       </div>
+      {s.note && <div className="muted">{s.note}</div>}
       <details className="card">
-        <summary>Why images or objects were left out</summary>
+        <summary>Why {isVideo ? "events" : "images or objects"} were left out</summary>
         <table className="t" style={{ marginTop: 8 }}><tbody>
-          {[["Images outside the time or dates", s.images_outside_time], ["Images in another light condition", s.images_other_condition],
+          {(isVideo ? [["Events rejected, duplicate or merged", s.events_not_counted], ["Events outside the time or dates", s.events_outside_time],
+            ["Events with no absolute time (time limits need it)", s.events_time_unknown], ["Events in another light condition", s.events_other_condition],
+            ["Recordings with too few results", s.recordings_below_min_count], ["Possible results left out (only certain matches)", s.possible_left_out],
+            ["Colour readings: observed / uncertain / not observable", s.colour ? `${s.colour.observed} / ${s.colour.uncertain} / ${s.colour.not_observable}` : "–"]] : [["Images outside the time or dates", s.images_outside_time], ["Images in another light condition", s.images_other_condition],
             ["Images with condition not measured", s.images_condition_unknown], ["Images whose view has none of the named regions", s.images_without_named_region],
             ["Images not processed yet", s.images_not_processed], ["Images with too few results", s.images_below_min_count],
             ["Possible results left out (only certain matches)", s.possible_left_out], ["Objects checked", s.objects_checked],
-            ["Colour readings: observed / uncertain / not observable", s.colour ? `${s.colour.observed} / ${s.colour.uncertain} / ${s.colour.not_observable}` : "–"]]
+            ["Colour readings: observed / uncertain / not observable", s.colour ? `${s.colour.observed} / ${s.colour.uncertain} / ${s.colour.not_observable}` : "–"]])
             .map(([k, v]) => <tr key={k as string}><td>{k}</td><td className="num">{v ?? 0}</td></tr>)}
         </tbody></table>
       </details>
@@ -333,15 +344,21 @@ function RunView({ missionId, runId, vocab }: { missionId: string; runId: number
       <div className="hits">
         {data.hits.map((h: Hit) => (
           <div key={h.id} className={`card hit ${h.status}`}>
-            <a href={`#/m/${missionId}/i/${h.source_version_id}`} title="Open the image">
-              <img src={`/api/missions/${missionId}/crops/${h.source_version_id}?box=${h.box.map((v) => v.toFixed(1)).join(",")}`} alt={`${h.cls} in ${h.filename}`} loading="lazy" />
-            </a>
+            {h.object_uid.startsWith("ev") ? (
+              <a href={`#/m/${missionId}/events/${h.object_uid.slice(2)}`} title="Open the event in the player">
+                <img src={`/api/missions/${missionId}/events/${h.object_uid.slice(2)}/thumb?h=130`} alt={`${h.cls} in ${h.filename}`} loading="lazy" />
+              </a>
+            ) : (
+              <a href={`#/m/${missionId}/i/${h.source_version_id}`} title="Open the image">
+                <img src={`/api/missions/${missionId}/crops/${h.source_version_id}?box=${h.box.map((v) => v.toFixed(1)).join(",")}`} alt={`${h.cls} in ${h.filename}`} loading="lazy" />
+              </a>
+            )}
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span className={`badge ${h.status === "match" ? "approved" : "bulk_approved_unreviewed"}`}>{h.status === "match" ? "Match" : "Possible"}</span>
               <span>{h.cls}{h.colour.state !== "not_needed" ? ` · ${h.colour.state === "observed" ? h.colour.values?.[0] : h.colour.state === "uncertain" ? `${h.colour.values?.join(" or ")}?` : "colour not observable"}` : ""}</span>
             </div>
             {h.reasons.length > 0 && <ul className="reasons">{h.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>}
-            <div className="mono muted" style={{ fontSize: 11.5 }}>{h.filename}<br />{h.capture_local?.replace("T", " ") ?? ""}</div>
+            <div className="mono muted" style={{ fontSize: 11.5 }}>{h.filename}{h.event_t != null ? ` at ${fmtT(h.event_t)}` : ""}<br />{h.capture_local?.replace("T", " ") ?? (h.event_t != null ? "absolute time unknown" : "")}</div>
             <div className="row" style={{ marginTop: 6, gap: 4 }}>
               <button className={h.decision === "correct" ? "primary" : ""} onClick={() => decide(h, h.decision === "correct" ? "undecided" : "correct")}>Correct</button>
               <button className={h.decision === "not_a_match" ? "primary" : ""} onClick={() => decide(h, h.decision === "not_a_match" ? "undecided" : "not_a_match")}>Not a match</button>

@@ -61,6 +61,8 @@ class Hit:
     box: tuple[float, float, float, float]
     colour: dict
     decision: str = "undecided"
+    capture_utc: str | None = None          # for a video event: the event's start
+    event_t: float | None = None            # for a video event: seconds from the start of the recording
 
 
 @dataclass
@@ -206,7 +208,11 @@ class SearchService:
     def set_colour(self, version_id: int, obj_uid: str, value: str | None, author: str, note: str | None = None) -> None:
         if value is not None and value not in COLOURS and value != "not_observable":
             raise SearchError(f"Colour must be one of {', '.join(COLOURS)}, or not_observable.")
-        known = {o.uid for o in self.rs.objects(version_id)} | {c.uid for c in self.rs.candidates(version_id)}
+        if obj_uid.startswith("ev") and obj_uid[2:].isdigit():
+            known = {f"ev{r[0]}" for r in self.con.execute(
+                "SELECT id FROM video_event WHERE source_version_id=?", (version_id,))}
+        else:
+            known = {o.uid for o in self.rs.objects(version_id)} | {c.uid for c in self.rs.candidates(version_id)}
         if obj_uid not in known:
             raise SearchError("No such object in this image.")
         self.con.execute(
@@ -299,6 +305,8 @@ class SearchService:
             "ORDER BY v.capture_utc, v.id").fetchall()
 
     def _execute(self, run_id: int, spec: dict, control, progress) -> dict:
+        if self.m.input_type == "video":
+            return self._execute_video(run_id, spec, control, progress)
         from .views import ViewService
         vs = ViewService(self.m)
         zone = self.m.zone
@@ -414,6 +422,107 @@ class SearchService:
                     progress(n, len(rows))
         return s
 
+    def _execute_video(self, run_id: int, spec: dict, control, progress) -> dict:
+        """Search video events: one object per event, read on its best frame. Regions are not applied to video yet."""
+        from .night import measure_condition
+        from .video import frame_at
+        from .video_review import VideoService
+        vsv = VideoService(self.m)
+        zone = self.m.zone
+        s = {"events_total": 0, "events_searched": 0, "events_not_counted": 0, "events_outside_time": 0,
+             "events_time_unknown": 0, "events_other_condition": 0, "hits_match": 0, "hits_possible": 0,
+             "possible_left_out": 0, "recordings_with_hits": 0, "recordings_below_min_count": 0,
+             "objects_checked": 0, "colour": {"observed": 0, "uncertain": 0, "not_observable": 0},
+             "note": "Analysis regions are not applied to video in this version."}
+        events = vsv.events()
+        s["events_total"] = len(events)
+        timed = bool(spec["time"]["windows"] or spec["time"]["date_from"] or spec["time"]["date_to"])
+        by_rec: dict[int, list] = {}
+        for n, e in enumerate(events, 1):
+            if hasattr(control, "checkpoint"):
+                control.checkpoint()
+            if control.cancelled:
+                break
+            control.stage = "searching"
+            try:
+                if e.status in ("rejected", "duplicate", "merged"):
+                    s["events_not_counted"] += 1
+                    continue
+                if timed:
+                    if not e.first_utc:
+                        s["events_time_unknown"] += 1
+                        continue
+                    utc = datetime.fromisoformat(e.first_utc.replace("Z", "+00:00")).astimezone(timezone.utc)
+                    local = to_local(utc, zone).local.replace(tzinfo=None)
+                    span = Precision(e.utc_precision or "second").span
+                    if not time_ok(spec, local, span):
+                        s["events_outside_time"] += 1
+                        continue
+                cache: dict = {}
+
+                def frame(ev=e):
+                    if "f" not in cache:
+                        f = frame_at(vsv.path(ev.source_version_id), ev.thumb_t)
+                        if f is None:
+                            raise SearchError(f"Frame {ev.thumb_t:.3f} s not found in {ev.file}.")
+                        cache["f"] = f.image
+                        cache["cond"] = measure_condition(f.image)
+                    return cache["f"]
+
+                if spec["time"]["conditions"]:
+                    frame()
+                    if cache["cond"].label not in spec["time"]["conditions"]:
+                        s["events_other_condition"] += 1
+                        continue
+                s["events_searched"] += 1
+                s["objects_checked"] += 1
+                memo: dict = {}
+
+                def colour_of(ev=e):
+                    if "c" not in memo:
+                        img = frame()
+                        c = cache["cond"]
+                        memo["c"] = self.colour(ev.source_version_id, f"ev{ev.id}", ev.thumb_box, lambda: img,
+                                                c.label, c.monochrome)
+                        s["colour"][memo["c"].state] += 1
+                    return memo["c"]
+
+                d, ti = self._match(spec, e.cls, colour_of)
+                if d.status is None:
+                    continue
+                reasons = list(d.reasons)
+                if "class_uncertain" in e.flags:
+                    reasons.append(f"class uncertain over the track ({round(e.cls_share * 100)}% {e.cls})")
+                    d = _Decision("possible", reasons)
+                reading = memo.get("c")
+                by_rec.setdefault(e.source_version_id, []).append(
+                    (f"ev{e.id}", d.status, reasons, ti, e.cls, e.thumb_box, reading.as_dict() if reading else None))
+            finally:
+                if progress:
+                    progress(n, len(events))
+        for vid, hits in by_rec.items():
+            if spec["uncertain"] == "exclude":
+                s["possible_left_out"] += sum(h[1] == "possible" for h in hits)
+                hits = [h for h in hits if h[1] == "match"]
+            if len(hits) < spec["min_count"]:
+                if hits:
+                    s["recordings_below_min_count"] += 1
+                continue
+            if not hits:
+                continue
+            s["recordings_with_hits"] += 1
+            nm = sum(h[1] == "match" for h in hits)
+            s["hits_match"] += nm
+            s["hits_possible"] += len(hits) - nm
+            self.con.executemany(
+                "INSERT INTO search_hit(search_run_id,source_version_id,object_uid,status,reasons,target,cls,x1,y1,x2,y2,colour) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                [(run_id, vid, uid, st, json.dumps(rs), ti, cls, *[float(v) for v in box],
+                  json.dumps(col or {"state": "not_needed"})) for uid, st, rs, ti, cls, box, col in hits])
+        s["images_with_hits"] = s["recordings_with_hits"]
+        s["images_searched"] = s["events_searched"]
+        return s
+
     # ---------- results ----------
     def run_info(self, run_id: int) -> dict:
         r = self.con.execute("SELECT * FROM search_run WHERE id=?", (run_id,)).fetchone()
@@ -434,6 +543,10 @@ class SearchService:
             " (SELECT d.decision FROM search_hit_decision d WHERE d.search_hit_id=h.id ORDER BY d.id DESC LIMIT 1) AS decision "
             "FROM search_hit h JOIN source_version v ON v.id=h.source_version_id JOIN source_file f ON f.id=v.source_file_id "
             "WHERE h.search_run_id=? ORDER BY (h.status='match') DESC, v.capture_utc, h.id", (run_id,)).fetchall()
+        ev_start: dict[int, tuple[float, str | None]] = {}
+        if any(r["object_uid"].startswith("ev") for r in rows):
+            from .video_review import VideoService
+            ev_start = {e.id: (e.first_t, e.first_utc) for e in VideoService(self.m).events()}
         out = []
         for r in rows:
             dec = r["decision"] or "undecided"
@@ -441,13 +554,16 @@ class SearchService:
                 continue
             if decision and dec != decision:
                 continue
-            local = None
-            if r["capture_utc"]:
-                utc = datetime.fromisoformat(r["capture_utc"].replace("Z", "+00:00")).astimezone(timezone.utc)
-                local = to_local(utc, zone).local.isoformat()
-            out.append(Hit(r["id"], r["source_version_id"], r["rel_path"], local, r["object_uid"], r["status"],
+            local, cap, et = None, r["capture_utc"], None
+            uid = r["object_uid"]
+            if uid.startswith("ev") and uid[2:].isdigit() and int(uid[2:]) in ev_start:
+                et, cap = ev_start[int(uid[2:])]
+            if cap:
+                utc = datetime.fromisoformat(cap.replace("Z", "+00:00")).astimezone(timezone.utc)
+                local = to_local(utc, zone).local.isoformat(timespec="milliseconds" if et is not None else "seconds")
+            out.append(Hit(r["id"], r["source_version_id"], r["rel_path"], local, uid, r["status"],
                            json.loads(r["reasons"]), r["target"], r["cls"], (r["x1"], r["y1"], r["x2"], r["y2"]),
-                           json.loads(r["colour"]), dec))
+                           json.loads(r["colour"]), dec, cap, et))
         total = len(out)
         return out[offset: offset + limit if limit else None], total
 
@@ -462,7 +578,7 @@ class SearchService:
 
 HIT_COLUMNS = ["mission_id", "search_run_id", "request", "source_version_id", "file", "sha256", "capture_utc",
                "capture_local", "view", "object_id", "status", "reasons", "target", "detected_class",
-               "x1", "y1", "x2", "y2", "colour_state", "colour_values", "colour_source", "operator_decision"]
+               "x1", "y1", "x2", "y2", "colour_state", "colour_values", "colour_source", "operator_decision", "event_start_s"]
 SPEC_COLUMNS = ["search_run_id", "request", "interpreter", "confirmed_by", "confirmed_at", "operator_edits",
                 "spec_json", "plain_english", "summary_json", "colour_algorithm"]
 
@@ -489,10 +605,10 @@ def export_search(mission: Mission, run_id: int, author: str, formats: list[str]
     for h in hits:
         mrow = meta[h.source_version_id]
         rows.append([_fmt(x) for x in (
-            mission.id, run_id, info["text"], h.source_version_id, h.filename, mrow["sha256"], mrow["capture_utc"],
+            mission.id, run_id, info["text"], h.source_version_id, h.filename, mrow["sha256"], h.capture_utc,
             h.capture_local, mrow["view"], h.object_uid, h.status, "; ".join(h.reasons), h.target + 1, h.cls,
             *[round(v, 1) for v in h.box], h.colour.get("state"), "/".join(h.colour.get("values") or []),
-            h.colour.get("algo"), h.decision)])
+            h.colour.get("algo"), h.decision, "" if h.event_t is None else round(h.event_t, 3))])
     spec_rows = [[_fmt(x) for x in (run_id, info["text"], req["interpreter_version"], req["confirmed_by"],
                                      req["confirmed_at"], json.loads(req["edits_json"] or "{}"), info["spec"],
                                      " ".join(info["description"]), info["summary"], info["attribute_algo"])]]

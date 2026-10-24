@@ -466,6 +466,95 @@ CREATE TABLE search_hit_decision (
   created_at TEXT NOT NULL
 );
 """,
+    6: """
+-- Video: what the decoder found in each recording.
+CREATE TABLE video_probe (
+  source_version_id INTEGER PRIMARY KEY REFERENCES source_version(id),
+  container TEXT, codec TEXT, width INTEGER, height INTEGER,
+  duration_s REAL, nominal_fps REAL, frame_count INTEGER,
+  variable_frame_rate INTEGER,      -- 1 when frame intervals differ by more than 10%
+  creation_time TEXT,               -- container tag, informative only
+  start_utc TEXT,                   -- absolute start, from the confirmed source below; NULL when unknown
+  start_precision TEXT,
+  start_source TEXT,                -- filename | none
+  error TEXT,
+  probed_at TEXT NOT NULL
+);
+-- Resumable position inside a recording: decoding restarts after last_t with the saved tracker state.
+CREATE TABLE video_checkpoint (
+  run_item_id INTEGER PRIMARY KEY REFERENCES run_item(id),
+  last_t REAL NOT NULL,             -- seconds from the stream start, last analysed frame
+  next_sample_t REAL NOT NULL,
+  frames_analysed INTEGER NOT NULL,
+  tracker_state TEXT NOT NULL,
+  prev_signature BLOB,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE track (
+  id INTEGER PRIMARY KEY,
+  run_item_id INTEGER NOT NULL REFERENCES run_item(id),
+  track_key TEXT NOT NULL,          -- T1, T2, ... within the recording
+  state TEXT NOT NULL,              -- tentative | confirmed | closed | discarded
+  closed_reason TEXT,               -- left_frame | lost | scene_cut | end_of_recording | too_short
+  UNIQUE (run_item_id, track_key)
+);
+CREATE TABLE track_observation (
+  id INTEGER PRIMARY KEY,
+  track_id INTEGER NOT NULL REFERENCES track(id),
+  t REAL NOT NULL,                  -- seconds from the stream start (presentation time)
+  x1 REAL NOT NULL, y1 REAL NOT NULL, x2 REAL NOT NULL, y2 REAL NOT NULL,
+  cls TEXT NOT NULL, score REAL NOT NULL,
+  appearance TEXT NOT NULL DEFAULT 'body'
+);
+CREATE INDEX ix_obs_track ON track_observation(track_id, t);
+CREATE TABLE video_marker (
+  id INTEGER PRIMARY KEY,
+  run_item_id INTEGER NOT NULL REFERENCES run_item(id),
+  t REAL NOT NULL,
+  kind TEXT NOT NULL                -- scene_cut
+);
+-- One machine event per confirmed track. Immutable; review decisions are appended to event_revision.
+CREATE TABLE video_event (
+  id INTEGER PRIMARY KEY,
+  run_item_id INTEGER NOT NULL REFERENCES run_item(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  event_key TEXT NOT NULL,          -- E-0001 within the recording
+  track_id INTEGER NOT NULL REFERENCES track(id),
+  first_t REAL NOT NULL, last_t REAL NOT NULL,
+  cls TEXT NOT NULL, cls_share REAL NOT NULL,
+  class_votes TEXT NOT NULL,
+  entry TEXT NOT NULL, exit TEXT NOT NULL,   -- JSON [x, y] relative to frame size
+  end_reason TEXT NOT NULL,
+  flags TEXT NOT NULL,              -- JSON list: possible_duplicate, touches_edge_at_start, short, ...
+  related TEXT NOT NULL,            -- JSON list of event keys this one may duplicate
+  thumb_t REAL NOT NULL,
+  thumb_box TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (run_item_id, event_key)
+);
+CREATE TABLE event_revision (
+  id INTEGER PRIMARY KEY,
+  event_id INTEGER NOT NULL REFERENCES video_event(id),
+  action TEXT NOT NULL,             -- confirm | reject | duplicate | set_times | set_class | merge_into | reopen
+  payload TEXT NOT NULL,
+  author TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_event_rev ON event_revision(event_id);
+CREATE TABLE clip (
+  id INTEGER PRIMARY KEY,
+  event_id INTEGER NOT NULL REFERENCES video_event(id),
+  path TEXT NOT NULL,
+  method TEXT NOT NULL,             -- copy | reencode
+  encoder TEXT,
+  context_before_s REAL NOT NULL, context_after_s REAL NOT NULL,
+  requested_start_t REAL NOT NULL, requested_end_t REAL NOT NULL,
+  actual_start_t REAL, actual_end_t REAL,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+""",
 }
 
 
