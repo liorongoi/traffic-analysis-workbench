@@ -17,3 +17,5 @@ Requirement IDs come from the design package (`docs/design/design-package.html`,
 | ING-03 identical bytes are distinct captures | `inventory` keeps per-file rows | `tests/test_inventory.py` | Tested (unit) |
 
 All other requirements: not started.
+
+Evidence for each phase is in `docs/delivery/`.
