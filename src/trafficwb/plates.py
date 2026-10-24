@@ -410,8 +410,8 @@ class PlateService:
             norm = normalize(text.strip())
             if "?" in norm:
                 raise PlateError("A corrected plate must be fully readable. Mark it unreadable instead of guessing.")
-            if box is not None and (len(box) != 4 or box[2] <= box[0] or box[3] <= box[1]):
-                raise PlateError("The plate box must be x1,y1,x2,y2 with x2>x1 and y2>y1.")
+            if box is not None:
+                box = self._check_box(p, box)
             text = text.strip()
         else:
             text, box = None, None
@@ -420,6 +420,24 @@ class PlateService:
             "VALUES (?,?,?,?,?,?,?,?,?)",
             (p.source_version_id, p.object_uid, action, text, norm, json.dumps(box) if box else None, author, note, utcnow()))
         return self.plate(plate_id)
+
+    def _check_box(self, p: PlateView, box) -> list[float]:
+        """An operator's plate box: inside the image, and its centre on the vehicle (10% margin)."""
+        if len(box) != 4 or box[2] <= box[0] or box[3] <= box[1]:
+            raise PlateError("The plate box must be x1,y1,x2,y2 with x2>x1 and y2>y1.")
+        box = [round(float(v), 1) for v in box]
+        sig = self.con.execute("SELECT width, height FROM view_signature WHERE source_version_id=?",
+                               (p.source_version_id,)).fetchone()
+        if sig and (box[0] < 0 or box[1] < 0 or box[2] > sig["width"] or box[3] > sig["height"]):
+            raise PlateError("The plate box is outside the image.")
+        if box[2] - box[0] < 4 or box[3] - box[1] < 2:
+            raise PlateError("The plate box is too small to be a plate.")
+        x1, y1, x2, y2 = p.vehicle_box
+        mx, my = 0.1 * (x2 - x1), 0.1 * (y2 - y1)
+        cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        if not (x1 - mx <= cx <= x2 + mx and y1 - my <= cy <= y2 + my):
+            raise PlateError("The plate box is not on this vehicle. Select the vehicle the plate belongs to.")
+        return box
 
     # ---------- evaluation gate ----------
     def evaluate(self, author: str, min_plates: int = 100, min_exact: float = 0.90, max_cer: float = 0.05,
@@ -447,7 +465,9 @@ class PlateService:
         n = sum(v["plates"] for v in per.values())
         exact = sum(v["exact"] for v in per.values()) / n if n else 0.0
         cer_all = sum(v["cer_sum"] for v in per.values()) / n if n else 1.0
-        result = {"country": country, "reviewed_plates": n, "operator_unreadable": sum(p.review == "unreadable" for p in reviewed),
+        missed = sum(1 for p in self.plates() if p.country == country and p.review == "corrected" and p.operator_box
+                     and p.outcome in ("no_plate_found", "vehicle_too_small"))
+        result = {"country": country, "reviewed_plates": n, "finder_missed": missed, "operator_unreadable": sum(p.review == "unreadable" for p in reviewed),
                   "machine_guesses_on_unreadable": guesses, "exact_match": round(exact, 4), "cer": round(cer_all, 4),
                   "per_layout": {k: {"plates": v["plates"], "exact_match": round(v["exact"] / v["plates"], 4) if v["plates"] else None,
                                      "cer": round(v["cer_sum"] / v["plates"], 4) if v["plates"] else None} for k, v in per.items()},
@@ -495,12 +515,14 @@ class PlateService:
             fid, rid = ids.get(p.id, (None, None))
             rows.append([_fmt(x) for x in (
                 self.m.id, p.source_version_id, p.file, sha.get(p.source_version_id), p.capture_utc, p.object_uid,
-                p.vehicle_cls, p.outcome, *(p.box or ["", "", "", ""]), p.det_score, p.raw_text,
+                p.vehicle_cls, p.outcome, *(p.box or ["", "", "", ""]), p.det_score,
+                *(p.operator_box or ["", "", "", ""]), p.raw_text,
                 " ".join(f"{c}:{v:.2f}" for c, v in p.chars), p.machine_text, p.machine_display, p.machine_readability,
                 p.layout, p.country, p.region_label, p.region_conf, "; ".join(p.reasons), p.review, p.text, p.readability,
                 p.revisions, "yes" if p.evaluation_only else "no", models.get(fid, ""), models.get(rid, ""))])
         cols = ["mission_id", "source_version_id", "file", "sha256", "capture_utc", "vehicle_id", "vehicle_class",
-                "outcome", "plate_x1", "plate_y1", "plate_x2", "plate_y2", "plate_score", "raw_text", "char_confidences",
+                "outcome", "plate_x1", "plate_y1", "plate_x2", "plate_y2", "plate_score",
+                "operator_x1", "operator_y1", "operator_x2", "operator_y2", "raw_text", "char_confidences",
                 "machine_text", "machine_display", "machine_readability", "layout", "country", "reader_country_guess",
                 "reader_country_conf", "reasons", "review", "plate_text", "readability", "operator_revisions",
                 "evaluation_only", "plate_finder", "plate_reader"]

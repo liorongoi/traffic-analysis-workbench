@@ -14,6 +14,7 @@
   --machine: #d62f2f;
   --human: #1f7a3d;
   --candidate: #c97a00;
+  --plate: #b0129f;
   --exclude: #b3261e;
   --include: #1f5fbf;
   --radius: 6px;
@@ -36,6 +37,7 @@
     --machine: #ff6b6b;
     --human: #5ad08a;
     --candidate: #ffb547;
+    --plate: #ff6bd8;
     --exclude: #ff7b72;
     --include: #6cb0ff;
     color-scheme: dark;

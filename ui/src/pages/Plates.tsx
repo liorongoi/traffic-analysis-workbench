@@ -11,7 +11,7 @@ type Plate = {
   raw_text: string | null; chars: [string, number][]; machine_text: string | null; machine_display: string | null;
   machine_readability: string | null; layout: string | null; region_label: string | null; region_conf: number | null;
   reasons: string[]; country: string; evaluation_only: boolean; text: string | null; readability: string | null;
-  review: string; revisions: number;
+  review: string; revisions: number; operator_box: number[] | null;
 };
 
 const OUTCOME: Record<string, string> = {
@@ -57,7 +57,7 @@ export default function PlatesTab({ missionId }: { missionId: string }) {
           <h2 style={{ margin: 0 }}>{c.name} plates: {c.enabled ? "enabled" : "evaluation only"}</h2>
           <div className="row">
             <button onClick={() => act(() => post(`/missions/${missionId}/plates/country/evaluate`),
-              (r) => `Evaluation on ${r.reviewed_plates} reviewed plates: exact match ${(r.exact_match * 100).toFixed(1)}%, character error rate ${(r.cer * 100).toFixed(1)}%. ${r.passed ? "Passed." : "Not passed."}`)}>Evaluate on reviewed plates</button>
+              (r) => `Evaluation on ${r.reviewed_plates} reviewed plates: exact match ${(r.exact_match * 100).toFixed(1)}%, character error rate ${(r.cer * 100).toFixed(1)}%. ${r.passed ? "Passed." : "Not passed."}${r.finder_missed ? ` Plates the finder missed and you drew: ${r.finder_missed}.` : ""}`)}>Evaluate on reviewed plates</button>
             {!c.enabled && <button className="primary" disabled={!ev?.passed} onClick={() => act(() => post(`/missions/${missionId}/plates/country/enable`, { enabled: true }))}>Enable {c.name}</button>}
             {c.enabled && <button className="danger" onClick={() => act(() => post(`/missions/${missionId}/plates/country/enable`, { enabled: false }))}>Back to evaluation only</button>}
           </div>
@@ -118,7 +118,8 @@ function PlateRow({ p, missionId, act }: { p: Plate; missionId: string; act: (fn
         <img className="veh" src={`/api/missions/${missionId}/crops/${p.source_version_id}?box=${vbox}&h=90`} alt={`${p.vehicle_cls} in ${p.file}`} loading="lazy" />
       </a>
       <div className="grid" style={{ gap: 4, alignContent: "start" }}>
-        {p.box ? <img className="pl" src={`/api/missions/${missionId}/plates/${p.id}/crop?h=56`} alt="plate" loading="lazy" /> : <span className="muted">{OUTCOME[p.outcome]}</span>}
+        {p.operator_box ? <><img className="pl" src={`/api/missions/${missionId}/crops/${p.source_version_id}?box=${p.operator_box.join(",")}&h=56`} alt="plate (box drawn by an operator)" loading="lazy" /><span className="muted" style={{ fontSize: 11.5 }}>box drawn by an operator</span></>
+          : p.box ? <img className="pl" src={`/api/missions/${missionId}/plates/${p.id}/crop?h=56`} alt="plate" loading="lazy" /> : <span className="muted">{OUTCOME[p.outcome]}</span>}
         {p.chars.length > 0 && p.raw_text != null && (
           <div className="chars" title="Each character the reader produced, shaded by its confidence">
             {p.chars.filter(([ch, cf]) => !(ch === "_" && cf >= 0.6)).map(([ch, cf], i) =>
@@ -152,7 +153,7 @@ function PlateRow({ p, missionId, act }: { p: Plate; missionId: string; act: (fn
           <input dir="auto" placeholder="Type the plate as read" value={text} onChange={(e) => setText(e.target.value)} style={{ width: 170 }} />
           <button className="primary" disabled={!text.trim()} onClick={() => { rv("correct", { text }); setText(""); }}>Save</button>
         </div>
-        <span className="muted" style={{ fontSize: 12 }}>Type only what you can read. If a character is unclear, mark the plate unreadable.</span>
+        <span className="muted" style={{ fontSize: 12 }}>Type only what you can read. If a character is unclear, mark the plate unreadable. To draw a missed plate's box, <a href={`#/m/${missionId}/i/${p.source_version_id}`}>open the image</a> and select the vehicle.</span>
       </div>
     </div>
   );

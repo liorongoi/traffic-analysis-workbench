@@ -311,3 +311,27 @@ def test_installed_reader_on_rendered_plates():
     # A blank plate gives no confident text.
     o = reader.read(np.full((110, 520, 3), 200, np.uint8))
     assert assess(o.slots, o.pad, "IL").readability != "full"
+
+
+def test_operator_plate_box_where_the_finder_missed(api):
+    c, make, out, _ = api
+    mid = make()
+    v = by_box([p for p in c.get(f"/api/missions/{mid}/plates").json()["plates"]][:4])
+    small = v[(880.0, 480.0, 900.0, 495.0)]                     # the finder never looked: vehicle too small
+    a = v[(100.0, 200.0, 300.0, 360.0)]
+    rv = lambda pid, **body: c.post(f"/api/missions/{mid}/plates/{pid}/revise", json=body, headers=H1)
+    assert "not on this vehicle" in rv(small["id"], action="correct", text="12345", box=[100, 300, 140, 320]).json()["message"]
+    assert "outside the image" in rv(small["id"], action="correct", text="12345", box=[885, 485, 970, 494]).json()["message"]
+    assert rv(small["id"], action="correct", text="12345", box=[884, 488, 886, 489]).status_code == 400   # too small
+    got = rv(small["id"], action="correct", text="12345", box=[882, 486, 898, 493]).json()
+    assert got["operator_box"] == [882, 486, 898, 493] and got["text"] == "12345" and got["outcome"] == "vehicle_too_small"
+    # The operator can also move a box the finder got wrong.
+    got = rv(a["id"], action="correct", text="0123456", box=[141, 301, 259, 325]).json()
+    assert got["operator_box"] == [141, 301, 259, 325] and got["box"] == pytest.approx([140, 300, 260, 326], abs=1.5)
+    assert rv(a["id"], action="reopen").json()["operator_box"] is None
+    ev = c.post(f"/api/missions/{mid}/plates/country/evaluate", headers=H1).json()
+    assert ev["finder_missed"] == 1
+    files = c.post(f"/api/missions/{mid}/plates/export", json={"formats": ["csv"]}, headers=H1).json()["files"]
+    rows = list(csv.DictReader(open(files[0], encoding="utf-8-sig")))
+    row = next(r for r in rows if r["plate_text"] == "12345")
+    assert (row["operator_x1"], row["operator_x2"], row["plate_x1"]) == ("882", "898", "")

@@ -52,18 +52,23 @@ Sources, read on 24 Oct 2026: English Wikipedia, "Vehicle registration plates of
 | Action | Meaning |
 |---|---|
 | Confirm | The machine read is right (only for full reads) |
-| Correct | The operator types the plate. It must be fully readable: "?" is refused. Persian and Arabic input is stored as typed and normalised for comparison |
+| Correct | The operator types the plate. It must be fully readable: "?" is refused. Persian and Arabic input is stored as typed and normalised for comparison. A plate box may be drawn with it (see below) |
 | Unreadable | The operator cannot read it either |
 | No plate | Not a plate, or no plate visible |
 | Reopen | Back to the machine read |
 
+## On the investigation screen
+
+- In plate recognition missions, plate boxes are drawn on the image with their text: solid for the finder's box, dashed for a box an operator drew. "plate unreadable" is shown instead of text when nothing can be read.
+- Selecting a vehicle shows its plate: the crop, the machine read and reasons, and the same review buttons as on the Plates tab.
+- **Draw plate box**: where the finder missed a plate, found the wrong thing, or never looked (vehicle too small), the operator drags a box around the plate and types the text. The box must lie inside the image and its centre on the selected vehicle (10% margin); otherwise it is refused with "not on this vehicle". The machine's own box and read are kept unchanged beside it.
+- The evaluation reports how many plates the finder missed that an operator then drew (`finder_missed`), as a measure of the finder, apart from the reader's scores.
+
 ## Export
 
-One row per vehicle looked at: file, checksum, capture time, vehicle, outcome, plate box, raw text, character confidences, machine text and readability, layout, country, the reader's country guess, reasons, review, final text and readability, number of operator changes, evaluation only (yes/no), and the finder and reader versions. Plate text is always written as text, so Excel keeps leading zeros.
+One row per vehicle looked at: file, checksum, capture time, vehicle, outcome, plate box, the operator's plate box, raw text, character confidences, machine text and readability, layout, country, the reader's country guess, reasons, review, final text and readability, number of operator changes, evaluation only (yes/no), and the finder and reader versions. Plate text is always written as text, so Excel keeps leading zeros.
 
 ## Not in this version
 
 - Reading Persian and Arabic plates (needs a reader trained on such plates).
 - Plates in video.
-- Drawing a plate box by hand where the finder found none (the API accepts a box with a correction; the screen does not offer it yet).
-- Plate overlays on the investigation screen.
