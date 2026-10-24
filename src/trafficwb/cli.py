@@ -3,6 +3,9 @@
 trafficwb-mission create --data DIR --name N --source DIR --output DIR --country IL --zone Asia/Jerusalem [...]
 trafficwb-mission scan   --data DIR --mission ID [--stability 30]
 trafficwb-mission status --data DIR [--mission ID]
+trafficwb-mission detect --data DIR --mission ID [--model yolox-s] [--tiles 3x2]
+trafficwb-mission results --data DIR --mission ID [--limit 50]
+trafficwb-mission export --data DIR --mission ID [--formats csv,xlsx]
 """
 from __future__ import annotations
 
@@ -37,6 +40,22 @@ def main(argv: list[str] | None = None) -> int:
     st = sub.add_parser("status")
     st.add_argument("--data", required=True)
     st.add_argument("--mission")
+    d = sub.add_parser("detect")
+    d.add_argument("--data", required=True)
+    d.add_argument("--mission", required=True)
+    d.add_argument("--model", default="yolox-s")
+    d.add_argument("--model-version")
+    d.add_argument("--tiles", default="3x2", help="columns x rows, 1x1 to disable tiling")
+    d.add_argument("--rule", default="bottom_center", choices=["bottom_center", "centroid", "overlap"])
+    r = sub.add_parser("results")
+    r.add_argument("--data", required=True)
+    r.add_argument("--mission", required=True)
+    r.add_argument("--limit", type=int, default=50)
+    e = sub.add_parser("export")
+    e.add_argument("--data", required=True)
+    e.add_argument("--mission", required=True)
+    e.add_argument("--formats")
+    e.add_argument("--author", default="operator")
     a = ap.parse_args(argv)
 
     root = DataRoot(a.data)
@@ -66,6 +85,32 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "status":
         ids = [a.mission] if a.mission else [r["id"] for r in root.missions()]
         print(json.dumps({i: root.open_mission(i).status() for i in ids}, indent=2))
+        return 0
+    if a.cmd == "detect":
+        from . import models
+        from .detect import DetectorSettings, YoloxDetector
+        from .process import Processor
+        cols, rows = (int(x) for x in a.tiles.lower().split("x"))
+        pack = models.find(a.model, a.model_version)
+        det = YoloxDetector(pack, DetectorSettings(tiles=(cols, rows)))
+        m = root.open_mission(a.mission)
+        reps = Processor(m, det, pack.card, region_rule=a.rule).process_all(
+            progress=lambda n, t: print(f"\r{n}/{t}", end="", file=sys.stderr, flush=True))
+        print(file=sys.stderr)
+        print(json.dumps([r.__dict__ for r in reps], indent=2, ensure_ascii=False))
+        return 0
+    if a.cmd == "results":
+        from .review import ReviewService
+        m = root.open_mission(a.mission)
+        for row in ReviewService(m).results(limit=a.limit):
+            print(f"{row.filename}\t{row.capture_local}\t{row.view or '-'}\t{row.vehicle_count}\t"
+                  f"{row.processing_state}\t{row.review_status}\t{','.join(row.flags)}")
+        return 0
+    if a.cmd == "export":
+        from .export import export
+        m = root.open_mission(a.mission)
+        for p in export(m, a.author, a.formats.split(",") if a.formats else None):
+            print(p)
         return 0
     return 1
 

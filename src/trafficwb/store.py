@@ -228,6 +228,83 @@ CREATE TABLE region_revision (
   created_at TEXT NOT NULL
 );
 """,
+    3: """
+-- Model identity used by runs in this mission (copied from the pack's card).
+CREATE TABLE model_version (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  version TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  task TEXT NOT NULL,
+  license TEXT NOT NULL,
+  card TEXT NOT NULL,
+  first_used TEXT NOT NULL,
+  UNIQUE(name, version, sha256)
+);
+-- Machine output. Immutable: never updated or deleted; corrections live in annotation_revision.
+CREATE TABLE detection (
+  id INTEGER PRIMARY KEY,
+  run_item_id INTEGER NOT NULL REFERENCES run_item(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  view_id INTEGER REFERENCES camera_view(id),
+  x1 REAL NOT NULL, y1 REAL NOT NULL, x2 REAL NOT NULL, y2 REAL NOT NULL,   -- original pixels
+  cls TEXT NOT NULL,
+  score REAL NOT NULL,
+  class_scores TEXT NOT NULL,
+  in_region INTEGER,               -- 1 inside, 0 outside, NULL regions not applied (view needs review)
+  region_rule TEXT,
+  model_version_id INTEGER NOT NULL REFERENCES model_version(id),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_detection_version ON detection(source_version_id);
+-- Human decisions on objects. Append-only: the latest revision per object_uid is current.
+-- An object is either a machine detection (detection_id set) or added by a person (detection_id NULL).
+CREATE TABLE annotation_revision (
+  id INTEGER PRIMARY KEY,
+  object_uid TEXT NOT NULL,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  detection_id INTEGER REFERENCES detection(id),
+  action TEXT NOT NULL,            -- removed | added | reclassed | moved | restored
+  status TEXT NOT NULL,            -- present | removed
+  x1 REAL, y1 REAL, x2 REAL, y2 REAL,
+  cls TEXT,
+  label_role TEXT NOT NULL DEFAULT 'analytical',   -- analytical | human_reference | excluded_from_training
+  author TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_annotation_object ON annotation_revision(object_uid);
+CREATE INDEX ix_annotation_version ON annotation_revision(source_version_id);
+-- Review status per source version, separate from processing status. Append-only.
+CREATE TABLE review_decision (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  decision TEXT NOT NULL,          -- approved | bulk_approved | reopened
+  bulk_approval_id INTEGER REFERENCES bulk_approval(id),
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_review_version ON review_decision(source_version_id);
+-- "Approve all": a fixed list of items at the moment of approval. Not a human review, not ground truth.
+CREATE TABLE bulk_approval (
+  id INTEGER PRIMARY KEY,
+  scope TEXT NOT NULL,             -- JSON description of the filter shown to the operator
+  item_count INTEGER NOT NULL,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE export (
+  id INTEGER PRIMARY KEY,
+  format TEXT NOT NULL,
+  path TEXT,
+  scope TEXT NOT NULL,
+  rows INTEGER,
+  status TEXT NOT NULL,            -- completed | failed
+  error TEXT,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+""",
 }
 
 

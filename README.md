@@ -2,7 +2,7 @@
 
 Offline road-traffic still-image and video analysis for a single Windows workstation, reachable from browsers on the local network. It is a new, independent application.
 
-Status: **Phase 0 done, Phase 1 in progress**. Only the pieces below exist. Nothing here detects vehicles yet.
+Status: **Phases 0 to 3 done for still images, without screens yet**. Only the pieces below exist. Night handling, plates, video and the web UI come later.
 
 | Piece | What it does |
 |---|---|
@@ -12,7 +12,11 @@ Status: **Phase 0 done, Phase 1 in progress**. Only the pieces below exist. Noth
 | `trafficwb-probe` | Reports CPU, RAM, GPU, ONNX Runtime providers and disk space |
 | `trafficwb.store` | Mission registry and one SQLite database per mission |
 | `trafficwb.ingest` | Folder scanning with stability checks, file versions, runs, background monitoring |
-| `trafficwb-mission` | Create a mission, scan it, show its status |
+| `trafficwb.views`, `trafficwb.regions` | Camera views (day and night together), camera-shift detection, include and exclude areas |
+| `trafficwb.models`, `trafficwb.detect` | Verified offline model packs; vehicle detection (YOLOX-s, Apache-2.0) with tiling |
+| `trafficwb.process` | Resumable processing runs |
+| `trafficwb.review`, `trafficwb.export` | Results table, corrections, approval, CSV and Excel export |
+| `trafficwb-mission` | Create a mission, scan, detect, list results, export, show status |
 | `trafficwb-inventory` | Read-only report on a sample folder: formats, sizes, EXIF, checksums, name parsing, intervals |
 
 ## Run
@@ -21,11 +25,15 @@ Status: **Phase 0 done, Phase 1 in progress**. Only the pieces below exist. Noth
 python -m venv .venv
 .venv\Scripts\activate          # Windows; use source .venv/bin/activate elsewhere
 pip install -e ".[dev,probe]"
+python scripts/fetch_models.py    # staging machine only; copy models\ to the workstation
 pytest
 trafficwb-probe --paths D:\ E:\
 trafficwb-inventory path\to\sample-folder --json inventory.json
 trafficwb-mission create --data D:\twb-data --name "Route 6" --country IL --zone Asia/Jerusalem --source D:\Feeds\R6 --output E:\Exports\R6
 trafficwb-mission scan --data D:\twb-data --mission <id printed by create>
+trafficwb-mission detect --data D:\twb-data --mission <id>
+trafficwb-mission results --data D:\twb-data --mission <id>
+trafficwb-mission export --data D:\twb-data --mission <id>
 ```
 
 ## Documents

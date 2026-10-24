@@ -5,3 +5,6 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
+
+# model packs are prepared by scripts/fetch_models.py, not committed
+/models/

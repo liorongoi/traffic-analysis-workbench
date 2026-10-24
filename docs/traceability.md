@@ -30,6 +30,17 @@ Requirement IDs come from the design package (`docs/design/design-package.html`,
 | VIEW-03 inclusion/exclusion polygons, precedence, original coordinates, membership rule | `src/trafficwb/regions.py` | `tests/test_views_regions.py` | Tested (unit). Drawing screen not built. |
 | VIEW-04 flag a view when it changes | `views.ViewService.check_drift` | `tests/test_views_regions.py` | Tested on synthetic shifts. Not seen on a real moved camera. |
 
+| IMG-01 per-image vehicle detection and counts, never unique vehicles | `src/trafficwb/detect.py`, `process.py`, `review.py` | `tests/test_detect_review.py`, sample run | Tested (unit with a stand-in detector; real detector smoke test; sample run). Accuracy not measured: needs labelled images. |
+| HW-06 every resize, tile and threshold recorded on the run | `process.Processor.process_run`, `detect.YoloxDetector.describe` | `tests/test_detect_review.py` | Tested (unit) |
+| ENV-05 / ENV-06 no runtime downloads; models prepared on staging | `src/trafficwb/models.py`, `scripts/fetch_models.py` | `tests/test_detect_review.py` | Checksum verification tested. Offline VM proof not done. |
+| PRG-01 recover after interruption | `process.Processor` | `tests/test_detect_review.py` | Resume without duplicates tested. Pause, cancel, ETA and live progress screen not built. |
+| PRG-02 processing status separate from review status | `run_item.processing_state`, `review_decision` | `tests/test_detect_review.py` | Tested (unit) |
+| REV-01 results table, search, sort | `review.ReviewService.results` | `tests/test_detect_review.py` | Logic tested. Screen not built. |
+| REV-02 approve all: scope and count, bulk not reviewed, no later data | `review.ReviewService.approve_all_preview/commit` | `tests/test_detect_review.py` | Tested (unit). Screen not built. |
+| REV-03 remove false, add missed, correct class, approve, prev/next, index of total | `review.ReviewService` | `tests/test_detect_review.py` | Logic tested for vehicles. Grouping, candidate and plate corrections come with Phases 4 and 5. Screen not built. |
+| COR-01 corrections append-only with provenance | `annotation_revision`, `review_decision` | `tests/test_detect_review.py` | Tested for object corrections. Other correction types later. |
+| EXP-01 exports: formats, ids, Unicode, leading zeros, prediction vs correction vs approval, no overwrite, failures reported | `src/trafficwb/export.py` | `tests/test_detect_review.py` | Tested (unit, CSV and Excel) |
+
 All other requirements: not started.
 
 Evidence for each phase is in `docs/delivery/`.

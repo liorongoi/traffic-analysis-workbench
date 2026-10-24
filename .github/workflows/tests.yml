@@ -17,6 +17,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -e ".[dev,probe]"
+      - name: Fetch model pack (stands in for the staging machine)
+        run: python scripts/fetch_models.py
       - run: python -m pytest -v
       - name: Hardware probe report (runner hardware, not the target workstation)
         run: python -m trafficwb.probe
