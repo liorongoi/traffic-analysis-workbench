@@ -92,3 +92,22 @@ def find(name: str, version: str | None = None, root: Path | None = None) -> Mod
     if v not in versions:
         raise ModelPackError(f"Model '{name}' version {v} is not installed (have: {', '.join(versions)}).")
     return ModelPack.load(base / v)
+
+
+def installed(task: str | None = None, root: Path | None = None) -> list[dict]:
+    """Model packs on disk (cards only, weights not checked here), optionally for one task."""
+    base = root or models_root()
+    out = []
+    if not base.is_dir():
+        return out
+    for card_path in sorted(base.glob("*/*/model.json")):
+        try:
+            card = json.loads(card_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if task and card.get("task") != task:
+            continue
+        out.append({"name": card.get("name"), "version": card.get("version"), "task": card.get("task"),
+                    "license": card.get("license"), "evaluation_only": bool(card.get("evaluation_only")),
+                    "sha256": card.get("sha256")})
+    return out

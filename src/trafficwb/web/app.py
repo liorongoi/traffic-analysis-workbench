@@ -181,21 +181,57 @@ class PreviewBody(BaseModel):
     limit: int = 20
 
 
-def default_detector_factory():
+class DatasetBody(BaseModel):
+    name: str
+    ratios: list[float] = Field(default_factory=lambda: [0.7, 0.15, 0.15])
+    block_days: int = 1
+    seed: int = 0
+
+
+class EvaluateBody(BaseModel):
+    dataset_id: int
+    split: str = "test"
+    name: str | None = None           # model pack; empty means the model in production use
+    version: str | None = None
+    iou: float = Field(0.5, ge=0.1, le=0.95)
+
+
+class PromoteBody(BaseModel):
+    task: str = "vehicle_detection"
+    name: str
+    version: str
+    mission_id: str
+    evaluation_id: int
+    note: str | None = None
+
+
+class RollbackBody(BaseModel):
+    task: str = "vehicle_detection"
+    note: str | None = None
+
+
+def default_detector_factory(data_root: Path | str | None = None):
+    """The vehicle detector in production use: the last promoted pack, else the built-in default."""
     from .. import models
     from ..detect import YoloxDetector
-    pack = models.find("yolox-s")
+    pack = None
+    if data_root is not None:
+        from ..learning import ModelRegistry
+        prod = ModelRegistry(data_root).production("vehicle_detection")
+        if prod:
+            pack = models.find(prod["name"], prod["version"])
+    pack = pack or models.find("yolox-s")
     return YoloxDetector(pack), pack.card
 
 
 def create_app(data_root: Path | str, detector_factory: Callable | None = None, allow_setup_from: tuple = ("127.0.0.1", "::1", "testclient"),
                monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True,
-               plate_factory: Callable | None = None) -> FastAPI:
+               plate_factory: Callable | None = None, model_loader: Callable | None = None) -> FastAPI:
     data_root = Path(data_root)
     DataRoot(data_root)  # create folders and control.db
     Auth(connect(data_root / "control.db"))
-    jobs = JobManager(data_root, detector_factory or default_detector_factory, monitor_interval, stability_seconds,
-                      plate_factory)
+    jobs = JobManager(data_root, detector_factory or (lambda: default_detector_factory(data_root)), monitor_interval,
+                      stability_seconds, plate_factory, model_loader)
     previews: dict[str, tuple[float, dict]] = {}
 
     @asynccontextmanager
@@ -752,6 +788,102 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
             raise ApiError(500, "export_failed", f"Export failed: {exc}",
                            "Check that the output folder exists, is writable and has free space.") from None
         return {"files": [str(p) for p in paths]}
+
+    # ---------- learning ----------
+    def _learn(m: Mission):
+        from ..learning import LearningService
+        if m.input_type != "images":
+            raise ApiError(400, "not_images", "Training datasets are built from reviewed still images only, for now.")
+        return LearningService(m)
+
+    def _learn_call(fn):
+        from ..learning import LearningError
+        try:
+            return fn()
+        except LearningError as exc:
+            raise ApiError(400, "learning", str(exc)) from None
+
+    @app.get("/api/missions/{mission_id}/learning")
+    def learning_summary(m: Mission = Depends(mission)):
+        from .. import models
+        from ..learning import ADAPTERS, ModelRegistry
+        ls = _learn(m)
+        reg = ModelRegistry(data_root)
+        prod = reg.production("vehicle_detection")
+        default = [x for x in models.installed("vehicle_detection") if x["name"] == "yolox-s"]
+        in_use = ({"name": prod["name"], "version": prod["version"]} if prod else
+                  ({"name": "yolox-s", "version": default[-1]["version"]} if default else None))
+        return {"in_use": in_use, "eligibility": ls.eligibility(), "datasets": ls.datasets(), "evaluations": ls.evaluations(),
+                "adapters": ADAPTERS, "models": models.installed("vehicle_detection"),
+                "production": prod, "history": reg.history("vehicle_detection")[:20]}
+
+    @app.post("/api/missions/{mission_id}/learning/datasets")
+    def dataset_create(body: DatasetBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        ls = _learn(m)
+        return _learn_call(lambda: ls.create_dataset(body.name, u.username, tuple(body.ratios), body.block_days, body.seed))
+
+    @app.get("/api/missions/{mission_id}/learning/datasets/{dataset_id}")
+    def dataset_get(dataset_id: int, m: Mission = Depends(mission)):
+        ls = _learn(m)
+        return _learn_call(lambda: ls.dataset(dataset_id))
+
+    @app.post("/api/missions/{mission_id}/learning/datasets/{dataset_id}/export")
+    def dataset_export(dataset_id: int, m: Mission = Depends(mission)):
+        ls = _learn(m)
+        try:
+            return {"folder": str(_learn_call(lambda: ls.export_dataset(dataset_id)))}
+        except OSError as exc:
+            raise ApiError(500, "export_failed", f"Export failed: {exc}",
+                           "Check that the output folder exists, is writable and has free space.") from None
+
+    @app.post("/api/missions/{mission_id}/learning/evaluate")
+    def evaluate_start(body: EvaluateBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        ls = _learn(m)
+        _learn_call(lambda: ls.dataset(body.dataset_id))
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "Another job is running for this mission. Wait for it or cancel it first.")
+        if bool(body.name) != bool(body.version):
+            raise ApiError(400, "model", "Give both the model name and version, or neither for the model in use.")
+        return jobs.start(m.id, kind="evaluate", dataset_id=body.dataset_id, split=body.split, name=body.name,
+                          version=body.version, iou=body.iou, author=u.username).snapshot()
+
+    @app.get("/api/missions/{mission_id}/learning/evaluations/{evaluation_id}")
+    def evaluation_get(evaluation_id: int, m: Mission = Depends(mission)):
+        ls = _learn(m)
+        return _learn_call(lambda: ls.evaluation(evaluation_id))
+
+    def _admin(u: User):
+        if u.role != "admin":
+            raise ApiError(403, "admin_only", "Only an administrator can change the model in production use.")
+
+    @app.post("/api/models/promote")
+    def model_promote(body: PromoteBody, u: User = Depends(user)):
+        from .. import models
+        from ..learning import LearningService, ModelRegistry
+        _admin(u)
+        try:
+            m = DataRoot(data_root).open_mission(body.mission_id)
+        except KeyError:
+            raise ApiError(404, "no_mission", "That mission does not exist.") from None
+        ev = _learn_call(lambda: LearningService(m).evaluation(body.evaluation_id))
+        mdl = ev["model"].get("model", {})
+        if ev["state"] != "completed" or (mdl.get("name"), mdl.get("version")) != (body.name, body.version):
+            raise ApiError(400, "evaluation", "That evaluation is not a completed evaluation of this model version.")
+        try:
+            prod = _learn_call(lambda: ModelRegistry(data_root).promote(body.task, body.name, body.version, u.username,
+                                                                        body.mission_id, body.evaluation_id, body.note))
+        except models.ModelPackError as exc:
+            raise ApiError(400, "model", str(exc)) from None
+        jobs.reset_detector()
+        return {"production": prod}
+
+    @app.post("/api/models/rollback")
+    def model_rollback(body: RollbackBody, u: User = Depends(user)):
+        from ..learning import ModelRegistry
+        _admin(u)
+        prod = _learn_call(lambda: ModelRegistry(data_root).rollback(body.task, u.username, body.note))
+        jobs.reset_detector()
+        return {"production": prod}
 
     # ---------- video ----------
     def _video(m: Mission):

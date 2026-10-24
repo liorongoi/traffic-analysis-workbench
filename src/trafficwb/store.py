@@ -41,6 +41,20 @@ CREATE TABLE IF NOT EXISTS mission (
   created_at TEXT NOT NULL,
   state TEXT NOT NULL DEFAULT 'active'
 );
+-- Which model version is in production per task. Append-only; the latest row is current. Never written automatically.
+CREATE TABLE IF NOT EXISTS model_promotion (
+  id INTEGER PRIMARY KEY,
+  task TEXT NOT NULL,
+  name TEXT NOT NULL,
+  version TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  action TEXT NOT NULL,             -- promote | rollback
+  mission_id TEXT,                  -- where the evaluation behind it lives
+  evaluation_id INTEGER,
+  author TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
 """
 
 MISSION_SCHEMA = """
@@ -607,6 +621,45 @@ CREATE TABLE plate_country_status (
   author TEXT NOT NULL,
   note TEXT,
   created_at TEXT NOT NULL
+);
+""",
+    8: """
+-- A dataset version is a frozen list of reviewed images with their labels and split (LRN-03).
+CREATE TABLE training_dataset (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  task TEXT NOT NULL,                -- vehicle_detection
+  params TEXT NOT NULL,              -- JSON: ratios, block_days, seed, eligibility rules
+  stats TEXT NOT NULL,               -- JSON: counts per split, review kind, condition, view
+  frozen_test_from INTEGER REFERENCES training_dataset(id),
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE dataset_member (
+  dataset_id INTEGER NOT NULL REFERENCES training_dataset(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  sha256 TEXT NOT NULL,
+  view_key TEXT NOT NULL,
+  block TEXT NOT NULL,               -- local date block, e.g. 2026-10-21
+  split TEXT NOT NULL,               -- train | val | test
+  review TEXT NOT NULL,              -- full | partial
+  condition TEXT,
+  labels TEXT NOT NULL,              -- JSON snapshot: positives, ignore boxes and polygons
+  last_revision_id INTEGER,          -- newest annotation revision included
+  PRIMARY KEY(dataset_id, source_version_id)
+);
+CREATE INDEX ix_member_split ON dataset_member(dataset_id, split);
+CREATE TABLE evaluation (
+  id INTEGER PRIMARY KEY,
+  dataset_id INTEGER NOT NULL REFERENCES training_dataset(id),
+  split TEXT NOT NULL,
+  model TEXT NOT NULL,               -- JSON: name, version, sha256, preprocessing
+  state TEXT NOT NULL,               -- running | completed | failed | cancelled
+  report TEXT,                       -- JSON
+  error TEXT,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  finished_at TEXT
 );
 """,
 }

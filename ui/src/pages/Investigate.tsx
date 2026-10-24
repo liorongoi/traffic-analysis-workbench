@@ -111,7 +111,8 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
           <button className={drawing ? "primary" : ""} onClick={() => setDrawing(!drawing)}>{drawing ? "Drawing: drag a box" : "Draw missed vehicle"} <kbd>B</kbd></button>
           <select value={drawCls} onChange={(e) => setDrawCls(e.target.value)}>{CLASSES.map((c, i) => <option key={c} value={c}>{i + 1} {c}</option>)}</select>
           <button onClick={() => setOverlays(!overlays)}>{overlays ? "Hide" : "Show"} overlays <kbd>H</kbd></button>
-          <button className="primary" onClick={approve} disabled={item.processing_state !== "done"}>Approve <kbd>A</kbd></button>
+          <button className="primary" onClick={approve} disabled={item.processing_state !== "done"}
+            title="Approve means every vehicle inside the included regions is marked correctly. The image can then train and test models, and unmarked areas count as road with no vehicle.">Approve <kbd>A</kbd></button>
           <button onClick={() => setHelp(true)}><kbd>?</kbd></button>
         </div>
       </div>

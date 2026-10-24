@@ -20,7 +20,7 @@ from ..store import DataRoot
 @dataclass
 class Job:
     mission_id: str
-    kind: str                         # scan_and_process | process | search
+    kind: str                         # scan_and_process | process | search | evaluate
     started: float = field(default_factory=time.time)
     finished: float | None = None
     control: RunControl = field(default_factory=RunControl)
@@ -50,8 +50,10 @@ class Job:
 class JobManager:
     def __init__(self, data_root: Path, detector_factory: Callable[[], tuple[object, dict]],
                  monitor_interval: float = 60, stability_seconds: int = 30,
-                 plate_factory: Callable[[], tuple] | None = None):
+                 plate_factory: Callable[[], tuple] | None = None,
+                 model_loader: Callable[[str, str], object] | None = None):
         self.data_root = Path(data_root)
+        self.model_loader = model_loader
         self.detector_factory = detector_factory
         self.plate_factory = plate_factory
         self._detector = None
@@ -67,6 +69,18 @@ class JobManager:
             if self._detector is None:
                 self._detector = self.detector_factory()
             return self._detector
+
+    def reset_detector(self) -> None:
+        """After a promotion or rollback, the next job loads the new production model."""
+        with self._lock:
+            self._detector = None
+
+    def load_model(self, name: str, version: str):
+        if self.model_loader:
+            return self.model_loader(name, version)
+        from .. import models
+        from ..detect import YoloxDetector
+        return YoloxDetector(models.find(name, version))
 
     def plate_models(self):
         with self._lock:
@@ -98,6 +112,9 @@ class JobManager:
             m = root.open_mission(job.mission_id)
             if job.kind == "search":
                 self._search(job, m)
+                return
+            if job.kind == "evaluate":
+                self._evaluate(job, m)
                 return
             if job.kind == "scan_and_process":
                 job.control.stage = "scanning source folder"
@@ -150,6 +167,32 @@ class JobManager:
                                       progress=progress)
         job.result = {"search_run": run_id}
         job.state = "cancelled" if job.control.cancelled else "finished"
+
+    def _evaluate(self, job: Job, m) -> None:
+        from ..learning import LearningService
+        p = job.params
+        job.control.stage = "loading model"
+        det = self.load_model(p["name"], p["version"]) if p.get("name") else self.detector()[0]
+        job.control.stage = "evaluating"
+
+        def progress(n, total):
+            job.total = total
+            job.done = n
+            job.rate_done += 1
+            if job.rate_start is None:
+                job.rate_start = time.time()
+                job.rate_done = 0
+
+        try:
+            ev = LearningService(m).evaluate(p["dataset_id"], det, p["author"], split=p.get("split", "test"),
+                                             iou=p.get("iou", 0.5), control=job.control, progress=progress)
+            job.result = {"evaluation": ev["id"]}
+            job.state = "finished"
+        except Exception as exc:
+            from ..process import RunCancelled
+            if not isinstance(exc, RunCancelled):
+                raise
+            job.state = "cancelled"
 
     # ---------- monitoring ----------
     def set_monitoring(self, mission_id: str, enabled: bool) -> None:

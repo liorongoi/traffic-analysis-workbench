@@ -194,3 +194,61 @@ def test_views_and_regions(env):
     assert bad.status_code == 400
     assert c.delete(f"/api/missions/{mid}/views/{vid}/regions/{r.json()['uid']}", headers=H1).status_code == 200
     assert c.get(f"/api/missions/{mid}/views/{vid}/regions").json()["regions"] == []
+
+
+class Named(Fake):
+    def __init__(self, name, version):
+        super().__init__()
+        self.n, self.v = name, version
+
+    def describe(self):
+        return {"model": {"name": self.n, "version": self.v, "sha256": "1" * 64}, "preprocessing": {}}
+
+
+def test_learning_dataset_evaluate_promote_rollback(env, monkeypatch):
+    import json
+    from trafficwb.models import sha256_file
+    tmp, src, out = env
+    models = tmp / "models"
+    d = models / "det" / "2"
+    d.mkdir(parents=True)
+    (d / "model.onnx").write_bytes(b"w2")
+    (d / "model.json").write_text(json.dumps({"name": "det", "version": "2", "task": "vehicle_detection",
+                                              "license": "MIT", "sha256": sha256_file(d / "model.onnx")}))
+    monkeypatch.setenv("TWB_MODELS", str(models))
+    app = create_app(tmp / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
+                     start_monitoring=False, stability_seconds=0, model_loader=lambda n, v: Named(n, v))
+    c = signed_in(TestClient(app))
+    mid = mission(c, src, out)
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    wait_job(c, mid)
+    s = c.get(f"/api/missions/{mid}/learning").json()
+    assert s["eligibility"]["eligible"] == 0 and s["production"] is None and s["models"][0]["name"] == "det"
+    for r in c.post(f"/api/missions/{mid}/results", json={}, headers=H1).json()["rows"]:
+        c.post(f"/api/missions/{mid}/items/{r['source_version_id']}/decision/approve", headers=H1)
+    ds = c.post(f"/api/missions/{mid}/learning/datasets", json={"name": "v1", "ratios": [0, 0, 1]}, headers=H1).json()
+    assert ds["stats"]["images"] == 6 and ds["leakage"] == []
+    bad = c.post(f"/api/missions/{mid}/learning/datasets", json={"name": "x", "ratios": [1, 1, 1]}, headers=H1)
+    assert bad.status_code == 400
+    ex = c.post(f"/api/missions/{mid}/learning/datasets/{ds['id']}/export", headers=H1).json()
+    assert os.path.isdir(ex["folder"])
+    c.post(f"/api/missions/{mid}/learning/evaluate", json={"dataset_id": ds["id"], "name": "det", "version": "2"}, headers=H1)
+    job = wait_job(c, mid)
+    assert job["kind"] == "evaluate" and job["state"] == "finished", job
+    ev = c.get(f"/api/missions/{mid}/learning/evaluations/{job['result']['evaluation']}").json()
+    assert ev["report"]["overall"]["recall"] == 1.0 and ev["model"]["model"]["name"] == "det"
+    # The evaluation must be of the model being promoted.
+    wrong = c.post("/api/models/promote", json={"name": "det", "version": "3", "mission_id": mid,
+                                                "evaluation_id": ev["id"]}, headers=H1)
+    assert wrong.status_code == 400
+    p = c.post("/api/models/promote", json={"name": "det", "version": "2", "mission_id": mid, "evaluation_id": ev["id"]},
+               headers=H1).json()
+    assert p["production"]["version"] == "2"
+    assert c.get(f"/api/missions/{mid}/learning").json()["production"]["name"] == "det"
+    assert c.post("/api/models/rollback", json={}, headers=H1).json()["production"] is None
+    # Operators cannot change the production model.
+    c.post("/api/accounts", json={"username": "dana", "password": "anotherpass"}, headers=H1)
+    c.post("/api/login", json={"username": "dana", "password": "anotherpass", "take_over": True}, headers=H1)
+    r = c.post("/api/models/promote", json={"name": "det", "version": "2", "mission_id": mid, "evaluation_id": ev["id"]},
+               headers=H1)
+    assert r.status_code == 403
