@@ -40,6 +40,8 @@ def size_mb(p: Path) -> float:
 
 
 def main(argv=None) -> int:
+    from trafficwb import safe_console
+    safe_console()
     ap = argparse.ArgumentParser()
     ap.add_argument("--images", required=True)
     ap.add_argument("--work", required=True)

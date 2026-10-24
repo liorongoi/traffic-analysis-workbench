@@ -57,6 +57,8 @@ def web_check(data: Path) -> tuple[str, dict]:
 
 
 def main(argv=None) -> int:
+    from trafficwb import safe_console
+    safe_console()
     ap = argparse.ArgumentParser()
     ap.add_argument("--work", required=True)
     ap.add_argument("--models")

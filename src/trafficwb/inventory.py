@@ -168,6 +168,8 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from trafficwb import safe_console
+    safe_console()
     ap = argparse.ArgumentParser(description="Inventory a sample folder (read-only).")
     ap.add_argument("folder")
     ap.add_argument("--recursive", action="store_true")

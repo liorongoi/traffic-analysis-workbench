@@ -210,6 +210,8 @@ def probe(paths: list[str] | None = None) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from trafficwb import safe_console
+    safe_console()
     ap = argparse.ArgumentParser(description="Report workstation hardware for profile selection.")
     ap.add_argument("--paths", nargs="*", default=None, help="folders whose volumes to check for free space")
     ap.add_argument("--json", dest="json_out", help="write the report to this file")

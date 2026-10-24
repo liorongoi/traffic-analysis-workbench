@@ -207,6 +207,8 @@ def delete_mission(data_root: Path | str, mission_id: str, author: str, confirm_
 
 
 def main(argv=None) -> int:
+    from trafficwb import safe_console
+    safe_console()
     import argparse
     import getpass
 

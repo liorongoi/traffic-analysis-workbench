@@ -1056,6 +1056,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
 
 
 def main(argv=None) -> int:
+    from trafficwb import safe_console
+    safe_console()
     import argparse
     import getpass
 

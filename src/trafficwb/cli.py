@@ -18,6 +18,8 @@ from .store import DataRoot, MissionConfig, MissionValidationError, validate
 
 
 def main(argv: list[str] | None = None) -> int:
+    from trafficwb import safe_console
+    safe_console()
     ap = argparse.ArgumentParser(prog="trafficwb-mission")
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("create")
