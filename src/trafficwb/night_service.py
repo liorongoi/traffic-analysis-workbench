@@ -145,7 +145,8 @@ class NightService:
                 (view_id, condition, bg.image_count, "ready", png(bg.persistent * 255),
                  png((bg.frequency * 255).astype(np.uint8)), dumps(bg.new_lights), dumps(params), dumps(versions),
                  utcnow())).lastrowid
-            if bg.new_lights:
+            prev_new = json.loads(cur["new_lights"]) if cur is not None and cur["new_lights"] else []
+            if bg.new_lights and len(bg.new_lights) != len(prev_new):
                 self.m.notify("info", "new_persistent_light",
                               f"{len(bg.new_lights)} light(s) became frequent only recently in view {view_id} ({condition}). "
                               "Mark them as persistent background or leave them as possible vehicles.",

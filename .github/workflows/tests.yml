@@ -16,6 +16,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build the web screens
+        run: python scripts/build_ui.py
       - run: python -m pip install -e ".[dev,probe]"
       - name: Fetch model pack (stands in for the staging machine)
         run: python scripts/fetch_models.py

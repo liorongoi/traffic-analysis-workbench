@@ -22,6 +22,40 @@ from .views import ViewService, read_image
 MAX_ATTEMPTS = 3
 
 
+class RunCancelled(Exception):
+    pass
+
+
+class RunControl:
+    """Pause, resume and cancel from another thread. Checked between images, never mid-write."""
+
+    def __init__(self):
+        import threading
+        self._go = threading.Event()
+        self._go.set()
+        self.cancelled = False
+        self.stage = "idle"
+
+    def pause(self) -> None:
+        self._go.clear()
+
+    def resume(self) -> None:
+        self._go.set()
+
+    def cancel(self) -> None:
+        self.cancelled = True
+        self._go.set()
+
+    @property
+    def paused(self) -> bool:
+        return not self._go.is_set()
+
+    def checkpoint(self) -> None:
+        self._go.wait()
+        if self.cancelled:
+            raise RunCancelled()
+
+
 @dataclass
 class RunReport:
     run_id: int
@@ -47,7 +81,7 @@ def register_model(con, describe: dict, card: dict) -> int:
 
 class Processor:
     def __init__(self, mission: Mission, detector: Detector, card: dict | None = None,
-                 region_rule: str = "bottom_center", min_overlap: float = 0.5):
+                 region_rule: str = "bottom_center", min_overlap: float = 0.5, control: RunControl | None = None):
         if region_rule not in RULES:
             raise ValueError(f"region rule must be one of {RULES}")
         self.m = mission
@@ -58,6 +92,7 @@ class Processor:
         self.min_overlap = min_overlap
         self.views = ViewService(mission)
         self.night = NightService(mission)
+        self.control = control or RunControl()
 
     def pending_runs(self) -> list[int]:
         # Includes runs interrupted after their last image but before night analysis and completion.
@@ -83,6 +118,7 @@ class Processor:
                          "WHERE id=?", (utcnow(), json.dumps(models), json.dumps(pre), run_id))
 
         # Group new images into views first so regions can be applied.
+        self.control.stage = "grouping views"
         self.views.assign_or_propose()
 
         items = self.con.execute(
@@ -91,7 +127,18 @@ class Processor:
             "ORDER BY i.id", (run_id,)).fetchall()
         total = len(items)
         region_cache: dict[int, RegionSet] = {}
+        self.control.stage = "detecting vehicles"
         for n, it in enumerate(items, 1):
+            try:
+                self.control.checkpoint()
+            except RunCancelled:
+                self.con.execute("UPDATE run_item SET processing_state='cancelled' WHERE run_id=? AND "
+                                 "processing_state IN ('queued','running')", (run_id,))
+                self.con.execute("UPDATE run SET state='cancelled', finished_at=? WHERE id=?", (utcnow(), run_id))
+                self.m.notify("warning", "run_cancelled", f"Run {run_id} was cancelled after {rep.done} image(s).",
+                              run_id=run_id)
+                self.control.stage = "cancelled"
+                return rep
             if it["attempts"] >= MAX_ATTEMPTS:
                 self.con.execute("UPDATE run_item SET processing_state='failed', error_code='too_many_attempts' WHERE id=?",
                                  (it["id"],))
@@ -140,7 +187,9 @@ class Processor:
             if progress:
                 progress(n, total)
         # Night: backgrounds need many images, so lights are grouped once the images are in.
+        self.control.stage = "night analysis"
         rep.night = self.night.refresh()
+        self.control.stage = "finished"
         left = self.con.execute("SELECT COUNT(*) FROM run_item WHERE run_id=? AND processing_state IN ('queued','running')",
                                 (run_id,)).fetchone()[0]
         if not left:

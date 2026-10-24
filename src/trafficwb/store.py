@@ -21,6 +21,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SCHEMA_VERSION = 1  # base schema; later versions are applied by MISSION_MIGRATIONS
 TARGET_COUNTRIES = {"IR": "Iran", "LB": "Lebanon", "IL": "Israel", "LV": "Latvia"}
+# Suggested zone per country for the wizard; the operator can pick any IANA zone.
+COUNTRY_ZONES = {"IR": "Asia/Tehran", "LB": "Asia/Beirut", "IL": "Asia/Jerusalem", "LV": "Europe/Riga", "FI": "Europe/Helsinki"}
 INPUT_TYPES = {"images", "video"}
 MODES = {
     "images": {"general_traffic", "object_search", "plate_recognition"},
@@ -428,7 +430,9 @@ def utcnow() -> str:
 
 
 def connect(path: Path) -> sqlite3.Connection:
-    con = sqlite3.connect(path, isolation_level=None)  # explicit transactions
+    # One connection is never used by two threads at once, but web requests may open and close it
+    # on different worker threads, so the same-thread check is off.
+    con = sqlite3.connect(path, isolation_level=None, check_same_thread=False)  # explicit transactions
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=FULL")

@@ -1,0 +1,139 @@
+/* System fonts only: nothing is downloaded at run time. */
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --panel-2: #f0f2f5;
+  --text: #1b1f24;
+  --muted: #5d6673;
+  --line: #d9dde3;
+  --accent: #1f5fbf;
+  --accent-text: #ffffff;
+  --ok: #1b7a3d;
+  --warn: #9a6200;
+  --bad: #b3261e;
+  --machine: #d62f2f;
+  --human: #1f7a3d;
+  --candidate: #c97a00;
+  --exclude: #b3261e;
+  --include: #1f5fbf;
+  --radius: 6px;
+  --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171b;
+    --panel: #1c2026;
+    --panel-2: #242a31;
+    --text: #e6e9ed;
+    --muted: #9aa4b1;
+    --line: #333a43;
+    --accent: #5b9cf5;
+    --accent-text: #0b1220;
+    --ok: #4cc27a;
+    --warn: #e0a640;
+    --bad: #f07167;
+    --machine: #ff6b6b;
+    --human: #5ad08a;
+    --candidate: #ffb547;
+    --exclude: #ff7b72;
+    --include: #6cb0ff;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Hebrew", "Noto Sans Arabic", sans-serif;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1 { font-size: 20px; margin: 0 0 12px; }
+h2 { font-size: 16px; margin: 0 0 10px; }
+h3 { font-size: 14px; margin: 0 0 8px; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.bidi { unicode-bidi: isolate; }
+
+.top {
+  display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5;
+}
+.top .brand { font-weight: 600; }
+.top .spacer { flex: 1; }
+.page { padding: 16px; max-width: 1400px; margin: 0 auto; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.tabs a { padding: 8px 12px; border-bottom: 2px solid transparent; color: var(--muted); }
+.tabs a.on { color: var(--text); border-color: var(--accent); }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+.grid { display: grid; gap: 12px; }
+.cols-4 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.cols-2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.stat .n { font-size: 22px; font-weight: 600; }
+.stat .l { color: var(--muted); font-size: 12px; }
+
+button, .btn {
+  font: inherit; padding: 6px 12px; border-radius: var(--radius); border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--text); cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: 0.5; cursor: default; }
+input, select, textarea {
+  font: inherit; padding: 6px 8px; border-radius: var(--radius); border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); min-width: 0;
+}
+label.field { display: grid; gap: 4px; margin-bottom: 10px; }
+label.field > span { font-size: 12px; color: var(--muted); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.msg { padding: 8px 12px; border-radius: var(--radius); margin: 8px 0; border: 1px solid; }
+.msg.err { color: var(--bad); border-color: var(--bad); }
+.msg.warn { color: var(--warn); border-color: var(--warn); }
+.msg.ok { color: var(--ok); border-color: var(--ok); }
+
+table.t { width: 100%; border-collapse: collapse; background: var(--panel); }
+table.t th, table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+table.t th { font-size: 12px; color: var(--muted); font-weight: 600; cursor: pointer; user-select: none; }
+table.t tr.click:hover td { background: var(--panel-2); cursor: pointer; }
+td.num, th.num { text-align: right; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+
+.badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 12px; border: 1px solid var(--line); }
+.badge.approved { color: var(--ok); border-color: var(--ok); }
+.badge.bulk_approved_unreviewed { color: var(--warn); border-color: var(--warn); border-style: dashed; }
+.badge.failed { color: var(--bad); border-color: var(--bad); }
+.badge.flag { color: var(--muted); }
+
+.progress { height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+.progress > div { height: 100%; background: var(--accent); }
+
+.dialog-bg { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: grid; place-items: center; z-index: 20; }
+.dialog { background: var(--panel); border-radius: var(--radius); padding: 18px; width: min(520px, 92vw); border: 1px solid var(--line); }
+
+/* investigation screen */
+.inv { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; height: calc(100vh - 110px); }
+.stage { position: relative; background: #000; border-radius: var(--radius); overflow: hidden; }
+.stage img, .stage svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.stage img { object-fit: contain; }
+.side { overflow-y: auto; display: grid; gap: 10px; align-content: start; }
+.objrow { display: flex; gap: 6px; align-items: center; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
+.objrow.sel { background: var(--panel-2); outline: 1px solid var(--accent); }
+.objrow .k { width: 18px; text-align: center; font-size: 12px; }
+.legend { display: grid; gap: 4px; font-size: 12px; }
+.legend svg { vertical-align: middle; }
+kbd { font-family: var(--mono); font-size: 11px; padding: 1px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: var(--panel-2); }
+
+.thumbs { display: flex; gap: 6px; flex-wrap: wrap; }
+.thumbs img { height: 90px; border-radius: 4px; border: 1px solid var(--line); }
+@media (max-width: 900px) {
+  .inv { grid-template-columns: 1fr; height: auto; }
+  .stage { height: 56vw; }
+}
+
+button.primary kbd { background: transparent; color: inherit; border-color: currentColor; }

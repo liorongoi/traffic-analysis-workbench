@@ -1,0 +1,596 @@
+"""FastAPI application: JSON API under /api and the built UI as static files.
+
+Browsers never touch database files (ARC-02); every read and write goes through here.
+Each request opens its own database connections, so request threads never share one.
+Mutating requests need the X-TWB header in addition to the SameSite=Strict session
+cookie, which blocks cross-site form posts.
+"""
+from __future__ import annotations
+
+import os
+import secrets
+from contextlib import asynccontextmanager
+import time
+import zoneinfo
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any, Callable
+
+import cv2
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from .. import __version__
+from ..detect import VEHICLE_CLASSES
+from ..export import export as run_export
+from ..localtime import to_local
+from ..regions import RegionEditor, RegionSet
+from ..review import Filter, ReviewService
+from ..store import (COUNTRY_ZONES, MODES, TARGET_COUNTRIES, DataRoot, Mission, MissionConfig, MissionValidationError,
+                     connect, utcnow, validate)
+from ..timeparse import MalformedName, parse_capture_time
+from ..views import ViewService, read_image
+from .auth import Auth, AuthError, User
+from .jobs import JobManager
+
+COOKIE = "twb_session"
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+class ApiError(HTTPException):
+    def __init__(self, status: int, code: str, message: str, action: str | None = None):
+        super().__init__(status, {"error": code, "message": message, "action": action})
+
+
+# ---------- request bodies ----------
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
+    take_over: bool = False
+
+
+class AccountBody(BaseModel):
+    username: str
+    display_name: str = ""
+    password: str
+    role: str = "operator"
+
+
+class MissionBody(BaseModel):
+    name: str
+    input_type: str = "images"
+    mode: str = "general_traffic"
+    country: str
+    iana_zone: str
+    source_dir: str
+    include_subdirs: bool = True
+    processing: str = "one_time"
+    output_dir: str
+    export_formats: list[str] = Field(default_factory=lambda: ["xlsx", "csv"])
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class ObjectBody(BaseModel):
+    box: list[float] | None = None
+    cls: str | None = None
+    action: str | None = None   # remove | restore | reclass | move
+    note: str | None = None
+
+
+class CandidateBody(BaseModel):
+    action: str                 # confirm | reject | restore | persistent
+    box: list[float] | None = None
+    cls: str = "car"
+    note: str | None = None
+
+
+class RegroupBody(BaseModel):
+    light_ids: list[int]
+
+
+class FilterBody(BaseModel):
+    search: str | None = None
+    view_id: int | None = None
+    review_status: str | None = None
+    processing_state: str | None = None
+    local_date_from: str | None = None
+    local_date_to: str | None = None
+    min_vehicles: int | None = None
+
+
+class CommitBody(BaseModel):
+    token: str
+
+
+class ViewBody(BaseModel):
+    name: str | None = None
+    absorb: int | None = None
+
+
+class RegionBody(BaseModel):
+    kind: str
+    polygon: list[list[float]]
+    name: str | None = None
+    region_uid: str | None = None
+
+
+class ExportBody(BaseModel):
+    formats: list[str] | None = None
+    filter: FilterBody | None = None
+
+
+class MonitoringBody(BaseModel):
+    enabled: bool
+
+
+class PreviewBody(BaseModel):
+    source_dir: str
+    include_subdirs: bool = True
+    limit: int = 20
+
+
+def default_detector_factory():
+    from .. import models
+    from ..detect import YoloxDetector
+    pack = models.find("yolox-s")
+    return YoloxDetector(pack), pack.card
+
+
+def create_app(data_root: Path | str, detector_factory: Callable | None = None, allow_setup_from: tuple = ("127.0.0.1", "::1", "testclient"),
+               monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True) -> FastAPI:
+    data_root = Path(data_root)
+    DataRoot(data_root)  # create folders and control.db
+    Auth(connect(data_root / "control.db"))
+    jobs = JobManager(data_root, detector_factory or default_detector_factory, monitor_interval, stability_seconds)
+    previews: dict[str, tuple[float, dict]] = {}
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        if start_monitoring:
+            jobs.resume_monitoring()  # monitoring survives restarts (MIS-07)
+        yield
+        jobs.shutdown()
+
+    app = FastAPI(title="Traffic Analysis Workbench", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
+    app.state.jobs = jobs
+
+    @app.exception_handler(AuthError)
+    def _auth_error(_req, exc: AuthError):
+        status = 401 if exc.code in ("not_signed_in", "bad_credentials") else (409 if exc.code == "operator_active" else 400)
+        return JSONResponse({"error": exc.code, "message": exc.message}, status_code=status)
+
+    @app.exception_handler(HTTPException)
+    def _http_error(_req, exc: HTTPException):
+        body = exc.detail if isinstance(exc.detail, dict) else {"error": "error", "message": str(exc.detail)}
+        return JSONResponse(body, status_code=exc.status_code)
+
+    @app.middleware("http")
+    async def _csrf(request: Request, call_next):
+        if request.url.path.startswith("/api/") and request.method in ("POST", "PUT", "PATCH", "DELETE") \
+                and request.headers.get("x-twb") != "1":
+            return JSONResponse({"error": "missing_header", "message": "Requests must come from the application."},
+                                status_code=403)
+        return await call_next(request)
+
+    # ---------- dependencies ----------
+    def control_con():
+        con = connect(data_root / "control.db")
+        try:
+            yield con
+        finally:
+            con.close()
+
+    def user(request: Request, con=Depends(control_con)) -> User:
+        return Auth(con).user_for(request.cookies.get(COOKIE))
+
+    def mission(mission_id: str, _u: User = Depends(user)) -> Mission:
+        try:
+            m = DataRoot(data_root).open_mission(mission_id)
+        except KeyError:
+            raise ApiError(404, "no_mission", "That mission does not exist.") from None
+        return m
+
+    def flt(b: FilterBody | None) -> Filter:
+        return Filter(**b.model_dump()) if b else Filter()
+
+    # ---------- session ----------
+    @app.get("/api/session")
+    def session(request: Request, con=Depends(control_con)):
+        a = Auth(con)
+        try:
+            u = a.user_for(request.cookies.get(COOKIE))
+            return {"signed_in": True, "user": asdict(u), "needs_setup": False}
+        except AuthError as exc:
+            return {"signed_in": False, "needs_setup": not a.has_accounts(), "message": exc.message}
+
+    @app.post("/api/setup")
+    def setup(body: AccountBody, request: Request, con=Depends(control_con)):
+        a = Auth(con)
+        if a.has_accounts():
+            raise ApiError(409, "already_set_up", "Accounts already exist. Ask an administrator to add yours.")
+        if request.client and request.client.host not in allow_setup_from:
+            raise ApiError(403, "local_only", "The first account must be created on the workstation itself.")
+        u = a.create_account(body.username, body.display_name, body.password, "admin")
+        return {"user": asdict(u)}
+
+    @app.post("/api/login")
+    def login(body: LoginBody, request: Request, response: Response, con=Depends(control_con)):
+        token, u = Auth(con).login(body.username, body.password, request.client.host if request.client else None,
+                                   body.take_over)
+        response.set_cookie(COOKIE, token, httponly=True, samesite="strict", path="/")
+        return {"user": asdict(u)}
+
+    @app.post("/api/logout")
+    def logout(request: Request, response: Response, con=Depends(control_con)):
+        tok = request.cookies.get(COOKIE)
+        if tok:
+            Auth(con).logout(tok)
+        response.delete_cookie(COOKIE, path="/")
+        return {"ok": True}
+
+    @app.post("/api/accounts")
+    def add_account(body: AccountBody, u: User = Depends(user), con=Depends(control_con)):
+        if u.role != "admin":
+            raise ApiError(403, "admin_only", "Only an administrator can add accounts.")
+        return {"user": asdict(Auth(con).create_account(body.username, body.display_name, body.password, body.role))}
+
+    # ---------- reference data ----------
+    @app.get("/api/reference")
+    def reference(_u: User = Depends(user)):
+        return {"countries": TARGET_COUNTRIES, "country_zones": COUNTRY_ZONES, "modes": {k: sorted(v) for k, v in MODES.items()},
+                "zones": sorted(zoneinfo.available_timezones()), "classes": list(VEHICLE_CLASSES), "version": __version__}
+
+    @app.post("/api/source-preview")
+    def source_preview(body: PreviewBody, _u: User = Depends(user)):
+        """First files in a source folder with their parsed capture time, for the wizard."""
+        root = Path(body.source_dir)
+        if not root.is_dir():
+            raise ApiError(400, "no_folder", f"{root} is not a folder on this workstation.")
+        it = root.rglob("*") if body.include_subdirs else root.glob("*")
+        out = []
+        for p in it:
+            if not p.is_file():
+                continue
+            row: dict[str, Any] = {"file": str(p.relative_to(root))}
+            try:
+                ct = parse_capture_time(p.name)
+                row.update(ok=True, utc=ct.utc.isoformat().replace("+00:00", "Z"), precision=ct.precision.value,
+                           pattern=ct.pattern, fields=ct.fields)
+            except MalformedName as exc:
+                row.update(ok=False, reason=exc.reason)
+            out.append(row)
+            if len(out) >= body.limit:
+                break
+        return {"files": out}
+
+    # ---------- missions ----------
+    @app.get("/api/missions")
+    def missions(_u: User = Depends(user)):
+        root = DataRoot(data_root)
+        out = []
+        for r in root.missions():
+            m = root.open_mission(r["id"])
+            cfg = m.config()
+            out.append({"id": r["id"], "name": r["name"], "input_type": r["input_type"], "mode": r["mode"],
+                        "processing": cfg.processing, "monitoring": cfg.monitoring_enabled, "created_at": r["created_at"],
+                        "status": m.status(), "job": jobs.current(r["id"]).snapshot() if jobs.current(r["id"]) else None})
+        return {"missions": out}
+
+    @app.post("/api/missions/validate")
+    def mission_validate(body: MissionBody, _u: User = Depends(user)):
+        v = validate(MissionConfig(**body.model_dump()), data_root)
+        return {"errors": v.errors, "warnings": v.warnings}
+
+    @app.post("/api/missions")
+    def mission_create(body: MissionBody, u: User = Depends(user)):
+        try:
+            m = DataRoot(data_root).create_mission(MissionConfig(**body.model_dump()), u.username)
+        except MissionValidationError as exc:
+            raise ApiError(400, "invalid", " ".join(exc.validation.errors)) from None
+        return {"id": m.id}
+
+    @app.get("/api/missions/{mission_id}")
+    def mission_get(m: Mission = Depends(mission)):
+        cfg = m.config()
+        job = jobs.current(m.id)
+        counts = dict(m.con.execute(
+            "SELECT processing_state, COUNT(*) FROM run_item i WHERE i.id IN (SELECT MAX(id) FROM run_item GROUP BY "
+            "source_version_id) GROUP BY processing_state").fetchall())
+        runs = [dict(r) for r in m.con.execute("SELECT id, kind, state, created_at, started_at, finished_at FROM run "
+                                               "ORDER BY id DESC LIMIT 10")]
+        notes = [dict(r) for r in m.con.execute("SELECT id, created_at, severity, code, message, acknowledged FROM "
+                                                "notification ORDER BY id DESC LIMIT 30")]
+        return {"id": m.id, "config": asdict(cfg), "status": m.status(), "processing_counts": counts, "runs": runs,
+                "job": job.snapshot() if job else None, "notifications": notes, "monitor_running": m.id in jobs.monitors}
+
+    @app.post("/api/missions/{mission_id}/job")
+    def job_start(m: Mission = Depends(mission)):
+        return jobs.start(m.id).snapshot()
+
+    @app.post("/api/missions/{mission_id}/job/{action}")
+    def job_control(action: str, m: Mission = Depends(mission)):
+        job = jobs.current(m.id)
+        if job is None or job.state not in ("running", "paused"):
+            raise ApiError(409, "no_job", "Nothing is running for this mission.")
+        if action == "pause":
+            job.control.pause()
+        elif action == "resume":
+            job.control.resume()
+        elif action == "cancel":
+            job.control.cancel()
+        else:
+            raise ApiError(400, "bad_action", "Use pause, resume or cancel.")
+        return job.snapshot()
+
+    @app.put("/api/missions/{mission_id}/monitoring")
+    def monitoring(body: MonitoringBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        cfg = m.config()
+        if cfg.processing != "continuous":
+            raise ApiError(400, "one_time", "Monitoring applies to continuous missions only.")
+        m.update_config(u.username, "monitoring " + ("on" if body.enabled else "off"), monitoring_enabled=body.enabled)
+        jobs.set_monitoring(m.id, body.enabled)
+        return {"enabled": body.enabled}
+
+    @app.post("/api/missions/{mission_id}/notifications/ack")
+    def ack(m: Mission = Depends(mission)):
+        m.con.execute("UPDATE notification SET acknowledged=1 WHERE acknowledged=0")
+        return {"ok": True}
+
+    # ---------- results ----------
+    @app.post("/api/missions/{mission_id}/results")
+    def results(body: FilterBody, m: Mission = Depends(mission), sort: str = "capture_utc", desc: bool = False,
+                offset: int = 0, limit: int = Query(50, le=500)):
+        rs = ReviewService(m)
+        try:
+            rows = rs.results(flt(body), sort, desc)
+        except ValueError as exc:
+            raise ApiError(400, "bad_query", str(exc)) from None
+        return {"total": len(rows), "rows": [r.__dict__ for r in rows[offset: offset + limit]]}
+
+    def _vid(m: Mission, version_id: int) -> int:
+        if m.con.execute("SELECT 1 FROM source_version WHERE id=?", (version_id,)).fetchone() is None:
+            raise ApiError(404, "no_image", "That image is not part of this mission.")
+        return version_id
+
+    @app.get("/api/missions/{mission_id}/images/{version_id}")
+    def image(version_id: int, m: Mission = Depends(mission)):
+        path = ViewService(m)._path(_vid(m, version_id))
+        if not path.is_file():
+            raise ApiError(410, "source_missing", f"{path.name} is no longer in the source folder.")
+        return FileResponse(path, headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.get("/api/missions/{mission_id}/thumbs/{version_id}")
+    def thumb(version_id: int, m: Mission = Depends(mission), w: int = Query(320, ge=64, le=800)):
+        sha = m.con.execute("SELECT sha256 FROM source_version WHERE id=?", (_vid(m, version_id),)).fetchone()[0]
+        cache = m.dir / "evidence" / "thumbs" / f"{sha}_{w}.jpg"
+        if not cache.is_file():
+            img = read_image(ViewService(m)._path(version_id))
+            h = round(img.shape[0] * w / img.shape[1])
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            ok, buf = cv2.imencode(".jpg", cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, 85])
+            tmp = cache.with_suffix(".tmp")
+            tmp.write_bytes(buf.tobytes())
+            os.replace(tmp, cache)
+        return FileResponse(cache, headers={"Cache-Control": "private, max-age=86400"})
+
+    def _item(m: Mission, version_id: int, body: FilterBody | None, sort: str, desc: bool) -> dict:
+        from ..night_service import NightService
+        rs = ReviewService(m)
+        vs = ViewService(m)
+        r = m.con.execute("SELECT v.*, f.rel_path FROM source_version v JOIN source_file f ON f.id=v.source_file_id "
+                          "WHERE v.id=?", (version_id,)).fetchone()
+        sig = m.con.execute("SELECT width, height FROM view_signature WHERE source_version_id=?", (version_id,)).fetchone()
+        cond = m.con.execute("SELECT * FROM image_condition WHERE source_version_id=?", (version_id,)).fetchone()
+        view_id = vs.current_view(version_id)
+        local = None
+        if r["capture_utc"]:
+            from datetime import datetime, timezone
+            lt = to_local(datetime.fromisoformat(r["capture_utc"].replace("Z", "+00:00")).astimezone(timezone.utc), m.zone)
+            local = {"time": lt.local.isoformat(), "abbreviation": lt.abbreviation, "dst": lt.is_dst}
+        regions = RegionSet.load(m.con, view_id) if view_id else RegionSet([])
+        item = rs._latest_item(version_id)
+        return {
+            "id": version_id, "file": r["rel_path"], "sha256": r["sha256"], "capture_utc": r["capture_utc"],
+            "capture_precision": r["capture_precision"], "local": local, "zone": m.zone,
+            "width": sig["width"] if sig else None, "height": sig["height"] if sig else None,
+            "view": {"id": view_id, "name": m.con.execute("SELECT name FROM camera_view WHERE id=?", (view_id,)).fetchone()[0]
+                     if view_id else None, "regions_applied": vs.regions_applicable(view_id) if view_id else None},
+            "condition": dict(cond) if cond else None,
+            "processing_state": item["processing_state"] if item else "not_queued",
+            "error": item["error_detail"] if item else None,
+            "review_status": rs.review_status(version_id),
+            "objects": [{**o.__dict__, "counted": o.counted} for o in rs.objects(version_id)],
+            "candidates": [c.__dict__ for c in rs.candidates(version_id)],
+            "lights": [li.__dict__ for li in NightService(m).lights(version_id)],
+            "regions": [{"uid": x.uid, "kind": x.kind, "name": x.name, "polygon": x.polygon}
+                        for x in regions.include + regions.exclude],
+            "position": rs.position(version_id, flt(body), sort, desc),
+        }
+
+    @app.post("/api/missions/{mission_id}/items/{version_id}")
+    def item_get(version_id: int, body: FilterBody | None = None, sort: str = "capture_utc", desc: bool = False,
+                 m: Mission = Depends(mission)):
+        return _item(m, _vid(m, version_id), body, sort, desc)
+
+    def _edit(fn):
+        try:
+            fn()
+        except (ValueError, KeyError) as exc:
+            raise ApiError(400, "invalid_edit", str(exc).strip("'")) from None
+
+    @app.post("/api/missions/{mission_id}/items/{version_id}/objects")
+    def object_add(version_id: int, body: ObjectBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        rs = ReviewService(m)
+        out = {}
+        _edit(lambda: out.update(uid=rs.add(_vid(m, version_id), body.box, body.cls or "car", u.username, body.note)))
+        return out
+
+    @app.patch("/api/missions/{mission_id}/items/{version_id}/objects/{uid}")
+    def object_edit(version_id: int, uid: str, body: ObjectBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        rs = ReviewService(m)
+        v = _vid(m, version_id)
+        acts = {"remove": lambda: rs.remove(v, uid, u.username, body.note),
+                "restore": lambda: rs.restore(v, uid, u.username),
+                "reclass": lambda: rs.reclass(v, uid, body.cls or "", u.username, body.note),
+                "move": lambda: rs.move(v, uid, body.box, u.username)}
+        if body.action not in acts:
+            raise ApiError(400, "bad_action", "Use remove, restore, reclass or move.")
+        _edit(acts[body.action])
+        return {"ok": True}
+
+    @app.post("/api/missions/{mission_id}/items/{version_id}/candidates/{uid}")
+    def candidate_edit(version_id: int, uid: str, body: CandidateBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        rs = ReviewService(m)
+        v = _vid(m, version_id)
+        acts = {"confirm": lambda: rs.confirm_candidate(v, uid, u.username, body.box, body.cls, body.note),
+                "reject": lambda: rs.reject_candidate(v, uid, u.username, body.note),
+                "restore": lambda: rs.restore_candidate(v, uid, u.username),
+                "persistent": lambda: rs.mark_persistent_light(v, uid, u.username)}
+        if body.action not in acts:
+            raise ApiError(400, "bad_action", "Use confirm, reject, restore or persistent.")
+        _edit(acts[body.action])
+        return {"ok": True}
+
+    @app.post("/api/missions/{mission_id}/items/{version_id}/regroup")
+    def regroup(version_id: int, body: RegroupBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        out = {}
+        _edit(lambda: out.update(uid=ReviewService(m).regroup(_vid(m, version_id), body.light_ids, u.username)))
+        return out
+
+    @app.post("/api/missions/{mission_id}/items/{version_id}/decision/{decision}")
+    def decide(version_id: int, decision: str, m: Mission = Depends(mission), u: User = Depends(user)):
+        rs = ReviewService(m)
+        v = _vid(m, version_id)
+        if decision == "approve":
+            _edit(lambda: rs.approve(v, u.username))
+        elif decision == "reopen":
+            rs.reopen(v, u.username)
+        else:
+            raise ApiError(404, "unknown", "Unknown decision.")
+        return {"review_status": rs.review_status(v)}
+
+    @app.post("/api/missions/{mission_id}/approve-all/preview")
+    def approve_all_preview(body: FilterBody, m: Mission = Depends(mission)):
+        p = ReviewService(m).approve_all_preview(flt(body))
+        token = secrets.token_urlsafe(16)
+        now = time.time()
+        for k in [k for k, (t, _) in previews.items() if now - t > 600]:
+            previews.pop(k, None)
+        previews[token] = (now, {**p, "mission_id": m.id})
+        return {"token": token, "count": p["count"], "scope": p["scope"], "excluded_not_processed": p["excluded_not_processed"]}
+
+    @app.post("/api/missions/{mission_id}/approve-all/commit")
+    def approve_all_commit(body: CommitBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        entry = previews.pop(body.token, None)
+        if entry is None or entry[1]["mission_id"] != m.id or time.time() - entry[0] > 600:
+            raise ApiError(409, "preview_expired", "The approval preview expired. Check the count again before approving.")
+        bid = ReviewService(m).approve_all_commit(entry[1], u.username)
+        return {"bulk_approval_id": bid}
+
+    # ---------- views and regions ----------
+    @app.get("/api/missions/{mission_id}/views")
+    def views(m: Mission = Depends(mission)):
+        vs = ViewService(m)
+        return {"views": vs.views(), "unassigned": vs.unassigned()}
+
+    @app.post("/api/missions/{mission_id}/views/{view_id}/actions/{action}")
+    def view_action(view_id: int, action: str, body: ViewBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        vs = ViewService(m)
+        if action == "rename" and body.name:
+            vs.rename(view_id, body.name, u.username)
+        elif action == "confirm":
+            vs.confirm(view_id, u.username)
+        elif action == "merge" and body.absorb:
+            vs.merge(view_id, body.absorb, u.username)
+        else:
+            raise ApiError(400, "bad_action", "Use rename (with name), confirm, or merge (with absorb).")
+        return {"ok": True}
+
+    @app.get("/api/missions/{mission_id}/views/{view_id}/regions")
+    def regions_get(view_id: int, m: Mission = Depends(mission)):
+        r = m.con.execute("SELECT ref_width, ref_height FROM camera_view WHERE id=?", (view_id,)).fetchone()
+        if r is None:
+            raise ApiError(404, "no_view", "That camera view does not exist.")
+        rs = RegionSet.load(m.con, view_id)
+        rep = ViewService(m).representatives(view_id, 1)
+        return {"width": r["ref_width"], "height": r["ref_height"], "representatives": rep,
+                "regions": [{"uid": x.uid, "kind": x.kind, "name": x.name, "polygon": x.polygon}
+                            for x in rs.include + rs.exclude]}
+
+    @app.post("/api/missions/{mission_id}/views/{view_id}/regions")
+    def regions_save(view_id: int, body: RegionBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        out = {}
+        _edit(lambda: out.update(uid=RegionEditor(m.con).save(view_id, body.kind, [tuple(p) for p in body.polygon],
+                                                              u.username, body.name, body.region_uid)))
+        from ..night_service import NightService
+        NightService(m).refresh()  # night candidates follow the new regions at once
+        return out
+
+    @app.delete("/api/missions/{mission_id}/views/{view_id}/regions/{uid}")
+    def regions_delete(view_id: int, uid: str, m: Mission = Depends(mission), u: User = Depends(user)):
+        RegionEditor(m.con).delete(view_id, uid, u.username)
+        from ..night_service import NightService
+        NightService(m).refresh()
+        return {"ok": True}
+
+    # ---------- export ----------
+    @app.post("/api/missions/{mission_id}/export")
+    def export_(body: ExportBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        try:
+            paths = run_export(m, u.username, body.formats, flt(body.filter))
+        except Exception as exc:
+            raise ApiError(500, "export_failed", f"Export failed: {exc}",
+                           "Check that the output folder exists, is writable and has free space.") from None
+        return {"files": [str(p) for p in paths]}
+
+    # ---------- UI ----------
+    if (STATIC_DIR / "index.html").is_file():
+        app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+
+        @app.get("/{path:path}", include_in_schema=False)
+        def spa(path: str):
+            if path.startswith("api/"):
+                raise ApiError(404, "not_found", "No such API endpoint.")
+            return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+    else:
+        @app.get("/", include_in_schema=False)
+        def no_ui():
+            return HTMLResponse("<h1>Traffic Analysis Workbench</h1><p>The UI has not been built. "
+                                "Run <code>python scripts/build_ui.py</code> on the staging machine.</p>")
+    return app
+
+
+def main(argv=None) -> int:
+    import argparse
+    import getpass
+
+    import uvicorn
+
+    ap = argparse.ArgumentParser(prog="trafficwb-web")
+    sub = ap.add_subparsers(dest="cmd")
+    s = sub.add_parser("serve")
+    s.add_argument("--data", required=True)
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--lan", action="store_true", help="accept connections from other computers on the network")
+    a = sub.add_parser("add-account")
+    a.add_argument("--data", required=True)
+    a.add_argument("--username", required=True)
+    a.add_argument("--name", default="")
+    a.add_argument("--role", default="operator", choices=["admin", "operator"])
+    args = ap.parse_args(argv)
+    if args.cmd == "add-account":
+        pw = getpass.getpass("Password: ")
+        DataRoot(args.data)
+        u = Auth(connect(Path(args.data) / "control.db")).create_account(args.username, args.name, pw, args.role)
+        print(f"created {u.username} ({u.role})")
+        return 0
+    if args.cmd == "serve":
+        host = "0.0.0.0" if args.lan else "127.0.0.1"
+        uvicorn.run(create_app(args.data), host=host, port=args.port, log_level="info")
+        return 0
+    ap.print_help()
+    return 1
