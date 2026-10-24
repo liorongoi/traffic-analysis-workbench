@@ -4,7 +4,7 @@ Date: 24 Oct 2026. Branch: `claude/project-thread-rld21n`.
 
 ## Implemented
 
-- **Offline bundle** (`scripts/make_bundle.py`): application wheel with the screens, every dependency as a wheel for the target platform, verified model packs, install scripts, `bundle.json` and `SHA256SUMS`. Choice of ONNX Runtime build (CPU, CUDA, DirectML); optional Python installer; `--app-only` small updates.
+- **Offline bundle** (`scripts/make_bundle.py`): application wheel with the screens, every dependency as a wheel for the target platform, verified model packs, install scripts, `bundle.json` and `SHA256SUMS`. Choice of ONNX Runtime build (CPU, CUDA, DirectML, or `auto` with both GPU builds, chosen by the installer from the NVIDIA driver version); optional Python installer; `--app-only` small updates.
 - **Installers** (`packaging/install.ps1` for Windows, `packaging/install.sh` for Linux testing): checksum check, per-user install without admin rights, one folder per version, a local add-only wheelhouse, model packs added without replacing, a disconnected install-to-export check before switching, a backup before an update, `current.txt` and `previous.txt` for rollback. `packaging/INSTALL.txt` explains install, rollback, backups and GPU.
 - **Disconnected check** (`scripts/offline_smoke.py`).
 - **Backups and restore** (`trafficwb.admin`, `trafficwb-admin`): online backup with checksums and schema versions, verify, restore only into an empty folder, optional evidence copy; nightly backup in the server (`--backup-dir`, `--backup-at`); "Back up now" and the last backup on the missions page.
@@ -23,7 +23,7 @@ Date: 24 Oct 2026. Branch: `claude/project-thread-rld21n`.
 | Install from the bundle in a network namespace with no network at all: 26 wheels and 3 model packs installed, then mission, detection on 6 Finnish sample images (45 vehicles), CSV and Excel export, verified backup, web server page and session | Linux cloud container | Passed; the check reported "no network" |
 | Update: a 264 kB application-only bundle (version 0.0.2, built for the test) installed over the full 0.0.1 install with no network; the mission created with 0.0.1 opens with 0.0.2; both version folders kept | Linux cloud container | Passed |
 | Windows bundle downloads for Python 3.12: CPU (100 MB of wheels), CUDA (ONNX Runtime GPU 1.31 with CUDA 13 and cuDNN 9, 1.3 GB), DirectML (ONNX Runtime DirectML 1.24) | Cloud container (download only) | All resolved |
-| Windows install and check | GitHub Actions `offline-bundle` job | See the PR checks |
+| Windows install and check, CPU bundle and `auto` bundle (the runner has no NVIDIA driver, so `auto` must choose DirectML) | GitHub Actions `offline-bundle` jobs | See the PR checks |
 
 ## Measurements (cloud container, 4 CPU cores, no GPU)
 

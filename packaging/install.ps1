@@ -8,6 +8,7 @@ param(
   [string]$BackupDir = "",
   [string]$Python = "",
   [int]$Port = 8765,
+  [string]$Ort = "",
   [switch]$SkipCheck
 )
 $ErrorActionPreference = "Stop"
@@ -45,21 +46,16 @@ if (-not $Python) {
 }
 Write-Host "Python: $Python"
 
-# 3. A fresh environment for this version, next to earlier ones.
+# 3. Wheels collect in one local wheelhouse, so a small update bundle (application only) finds the runtime there.
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
 $Venv = Join-Path $Target "app-$($Info.version)"
 if (Test-Path $Venv) { throw "$Venv already exists. Remove it first to reinstall the same version." }
-& $Python -m venv $Venv
-$VPy = Join-Path $Venv "Scripts\python.exe"
-# Wheels collect in one local wheelhouse, so a small update bundle (application only) finds the runtime there.
 $Wheels = Join-Path $Target "wheelhouse"
 New-Item -ItemType Directory -Force -Path $Wheels | Out-Null
 Get-ChildItem (Join-Path $Bundle "wheelhouse") -Filter *.whl | ForEach-Object {
   $dest = Join-Path $Wheels $_.Name
   if (-not (Test-Path $dest)) { Copy-Item $_.FullName $dest }
 }
-& $VPy -m pip install --no-index --find-links $Wheels "trafficwb[probe,$($Info.ort)]==$($Info.version)"
-if ($LASTEXITCODE -ne 0) { throw "pip install failed." }
 
 # 4. Model packs: add the bundle's versions; existing versions are kept.
 $Models = Join-Path $Target "models"
@@ -71,12 +67,47 @@ if (Test-Path $BundleModels) { Get-ChildItem $BundleModels -Directory | ForEach-
   }
 } }
 
-# 5. Check the install end to end with no network, before switching to it.
-if (-not $SkipCheck) {
-  $work = Join-Path $env:TEMP ("twb-check-" + [guid]::NewGuid())
-  & $VPy (Join-Path $Bundle "offline_smoke.py") --work $work --models $Models
-  if ($LASTEXITCODE -ne 0) { throw "The install check failed; the previous version stays in use." }
+# 5. Which ONNX Runtime build: CUDA when the NVIDIA driver is new enough for the bundled CUDA libraries, else DirectML.
+function Get-NvidiaDriver {
+  try {
+    $out = & nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>$null
+    if ($LASTEXITCODE -eq 0 -and $out) { return [version](($out | Select-Object -First 1).Trim()) }
+  } catch { }
+  return $null
 }
+$Choice = $Ort
+if (-not $Choice) { $Choice = $Info.ort }
+if ($Choice -eq "auto") {
+  $drv = Get-NvidiaDriver
+  $need = [version]$Info.cuda_min_driver
+  if ($drv -and $drv -ge $need) { $Choice = "cuda"; Write-Host "NVIDIA driver $drv (needs $need for CUDA): using CUDA." }
+  elseif ($drv) { $Choice = "directml"; Write-Host "NVIDIA driver $drv is older than ${need}: using DirectML." }
+  else { $Choice = "directml"; Write-Host "No NVIDIA driver found: using DirectML (falls back to CPU without a GPU)." }
+}
+
+# Install into a fresh environment and check it end to end with no network, before switching to it.
+function Install-Env([string]$build) {
+  & $Python -m venv $Venv | Out-Host
+  $script:VPy = Join-Path $Venv "Scripts\python.exe"
+  & $script:VPy -m pip install --no-index --find-links $Wheels "trafficwb[probe,$build]==$($Info.version)" | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "pip install failed." }
+  if ($SkipCheck) { return "unchecked" }
+  $work = Join-Path $env:TEMP ("twb-check-" + [guid]::NewGuid())
+  $lines = & $script:VPy (Join-Path $Bundle "offline_smoke.py") --work $work --models $Models
+  $code = $LASTEXITCODE
+  $lines | ForEach-Object { Write-Host $_ }
+  if ($code -ne 0) { throw "The install check failed; the previous version stays in use." }
+  $result = ($lines | Select-Object -Last 1) | ConvertFrom-Json
+  return $result.accelerator.accelerator
+}
+$used = Install-Env $Choice
+if ($Choice -eq "cuda" -and $used -ne "cuda" -and -not $SkipCheck -and ($Info.wheels | Where-Object { $_ -like "onnxruntime_directml-*" })) {
+  Write-Host "CUDA did not start on this machine (models ran on $used); installing the DirectML build instead."
+  Remove-Item -Recurse -Force $Venv
+  $Choice = "directml"
+  $used = Install-Env $Choice
+}
+Write-Host "ONNX Runtime build: ${Choice}; models run on: ${used}"
 
 # 6. Back up the data before the new version touches it, then switch the start script.
 New-Item -ItemType Directory -Force -Path $Data | Out-Null

@@ -46,8 +46,9 @@ def main(argv=None) -> int:
     ap.add_argument("--platform", help="pip platform tag, e.g. win_amd64; default: this machine")
     ap.add_argument("--python", help="target Python version, e.g. 3.12; default: this interpreter")
     ap.add_argument("--models", default=str(ROOT / "models"))
-    ap.add_argument("--ort", default="cpu", choices=["cpu", "cuda", "directml"],
-                    help="ONNX Runtime build: cpu, cuda (NVIDIA, about 1 GB more) or directml (Windows GPUs)")
+    ap.add_argument("--ort", default="cpu", choices=["cpu", "cuda", "directml", "auto"],
+                    help="ONNX Runtime build: cpu, cuda (NVIDIA, about 1.2 GB more), directml (Windows GPUs), or auto "
+                         "(both CUDA and DirectML; the installer picks CUDA when the NVIDIA driver is new enough)")
     ap.add_argument("--python-installer", help="official python-3.x.y-amd64.exe to ship for workstations without Python")
     ap.add_argument("--zip", action="store_true", help="also write a .zip of the bundle")
     ap.add_argument("--app-only", action="store_true",
@@ -79,7 +80,7 @@ def main(argv=None) -> int:
     # Dependencies as binary wheels for the target.
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     extras = meta["optional-dependencies"]
-    reqs = meta["dependencies"] + extras["probe"] + extras[a.ort]
+    reqs = meta["dependencies"] + extras["probe"] + (extras["cuda"] + extras["directml"] if a.ort == "auto" else extras[a.ort])
     if (a.platform or sys.platform).startswith("win"):
         reqs.append("colorama")       # pulled in on Windows only, which pip cannot see when downloading from elsewhere
     if not a.app_only:
@@ -107,7 +108,10 @@ def main(argv=None) -> int:
     for f in ("install.ps1", "install.sh", "INSTALL.txt"):
         shutil.copy2(ROOT / "packaging" / f, tmp / f)
     shutil.copy2(ROOT / "scripts" / "offline_smoke.py", tmp / "offline_smoke.py")
-    manifest = {"version": __version__, "python": pyver, "platform": plat, "ort": a.ort, "app_only": a.app_only, "models": packs,
+    # The CUDA libraries shipped decide the oldest NVIDIA driver that can run them (Windows minimums from NVIDIA).
+    cuda_major = next((int(p.name.split("-")[1].split(".")[0]) for p in wh.glob("nvidia_cuda_runtime*-*.whl")), None)
+    cuda_min_driver = {11: "452.39", 12: "528.33", 13: "580.0"}.get(cuda_major) if cuda_major else None
+    manifest = {"cuda_major": cuda_major, "cuda_min_driver": cuda_min_driver, "version": __version__, "python": pyver, "platform": plat, "ort": a.ort, "app_only": a.app_only, "models": packs,
                 "requirements": reqs, "wheels": sorted(p.name for p in wh.iterdir())}
     (tmp / "bundle.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     lines = [f"{sha(p)}  {p.relative_to(tmp).as_posix()}" for p in sorted(tmp.rglob("*"))

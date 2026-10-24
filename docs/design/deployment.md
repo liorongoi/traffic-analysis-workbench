@@ -12,7 +12,11 @@ Requirements ENV-01, ENV-04 to ENV-07, ARC-02, ARC-04, HW-01; questions Q20, Q22
 - `install.ps1` (Windows), `install.sh` (Linux, used for testing), `INSTALL.txt`, `offline_smoke.py`;
 - `bundle.json` (versions, models, wheels) and `SHA256SUMS` over every file.
 
-`--ort` picks the ONNX Runtime build: `cpu`, `cuda` (NVIDIA, adds the CUDA and cuDNN libraries as Python packages, about 1.2 GB more) or `directml` (any DirectX 12 GPU on Windows). Checked on 24 Oct 2026: the `cuda` download for Windows and Python 3.12 is ONNX Runtime GPU 1.31 with CUDA 13 and cuDNN 9 libraries, which needs an NVIDIA driver new enough for CUDA 13 (the R580 series or later). If the A4000's driver is older and may not be updated (Q20), use the `directml` build (ONNX Runtime DirectML 1.24) instead. `--python-installer` ships the official Python installer for a workstation without Python. `--app-only` builds a small update with only the application wheel.
+`--ort` picks the ONNX Runtime build: `cpu`, `cuda` (NVIDIA, adds the CUDA and cuDNN libraries as Python packages, about 1.2 GB more), `directml` (any DirectX 12 GPU on Windows), or **`auto`**, which carries both GPU builds and lets the installer choose on the workstation. Checked on 24 Oct 2026: the `cuda` download for Windows and Python 3.12 is ONNX Runtime GPU 1.31 with CUDA 13 and cuDNN 9, which needs an NVIDIA driver of version 580 or later; `directml` is ONNX Runtime DirectML 1.24. The bundle records the oldest driver its CUDA libraries need (`cuda_min_driver` in `bundle.json`).
+
+**`auto` is the recommended bundle for the A4000 workstation**, since its driver version is not known (Q20). The installer reads the driver version with `nvidia-smi`: version 580 or later gets the CUDA build; an older driver, or no NVIDIA driver, gets DirectML. If the CUDA build is chosen but the install check shows the models did not run on CUDA, the installer replaces it with the DirectML build and says so. `-Ort cuda|directml|cpu` overrides the choice.
+
+`--python-installer` ships the official Python installer for a workstation without Python. `--app-only` builds a small update with only the application wheel.
 
 ## Install and update (workstation)
 
@@ -22,7 +26,7 @@ Requirements ENV-01, ENV-04 to ENV-07, ARC-02, ARC-04, HW-01; questions Q20, Q22
 2. finds Python (given, the `py` launcher, `python` on the path, or the installer in the bundle, installed for the current user without admin rights);
 3. copies the wheels into a local wheelhouse (`<target>\wheelhouse`, add-only), creates a new environment `<target>\app-<version>` and installs from the local wheelhouse with downloads off. Earlier versions' folders stay;
 4. adds model packs that are not yet there (existing versions are never replaced);
-5. runs the disconnected install-to-export check (`offline_smoke.py`): synthetic images, a mission, scan, detection with the installed detector, CSV and Excel export, a verified backup, and the web server's page and session answer. On failure the previous version stays in use;
+5. chooses the ONNX Runtime build (see above), then runs the disconnected install-to-export check (`offline_smoke.py`): synthetic images, a mission, scan, detection with the installed detector, CSV and Excel export, a verified backup, and the web server's page and session answer. On failure the previous version stays in use;
 6. on an update, backs up the data with the previous version, then writes `start.cmd` for the new version and records `current.txt` and `previous.txt`.
 
 No admin rights, Docker, WSL or Windows service are needed. Running as a service or at sign-in is not built yet (ENV-08: needs your installation permissions).

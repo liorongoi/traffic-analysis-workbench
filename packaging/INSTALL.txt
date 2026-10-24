@@ -29,5 +29,8 @@ Backups
 - Crops and clips are not in the nightly backup; use trafficwb-admin backup --with-evidence for a full copy.
 
 GPU
-- Models run on an NVIDIA GPU when the CUDA build of ONNX Runtime and a suitable driver are present, else on DirectML,
+- A bundle built with --ort auto carries both GPU builds of ONNX Runtime. The installer reads the NVIDIA driver version
+  (nvidia-smi): 580 or later gets CUDA, otherwise DirectML. If CUDA does not start in the install check, it switches to
+  DirectML by itself. Force a build with -Ort cuda, -Ort directml or -Ort cpu.
+- Models run on an NVIDIA GPU when the CUDA build and a suitable driver are present, else on DirectML,
   else on the CPU. The missions page shows which is in use and why. Set TWB_ACCELERATOR=cpu in start.cmd to force the CPU.
