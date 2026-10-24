@@ -305,6 +305,90 @@ CREATE TABLE export (
   created_at TEXT NOT NULL
 );
 """,
+    4: """
+-- Image condition measured from content (never from clock time).
+CREATE TABLE image_condition (
+  source_version_id INTEGER PRIMARY KEY REFERENCES source_version(id),
+  condition TEXT NOT NULL,          -- day | dusk | night
+  monochrome INTEGER NOT NULL,
+  mean_luma REAL NOT NULL, saturation REAL NOT NULL,
+  clipped_pct REAL NOT NULL, dark_pct REAL NOT NULL, detail REAL NOT NULL,
+  flags TEXT NOT NULL,              -- JSON list: glare, low_detail
+  algo TEXT NOT NULL
+);
+-- Light components: one connected bright region each. Machine output, immutable.
+CREATE TABLE light_component (
+  id INTEGER PRIMARY KEY,
+  run_item_id INTEGER NOT NULL REFERENCES run_item(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  x1 REAL NOT NULL, y1 REAL NOT NULL, x2 REAL NOT NULL, y2 REAL NOT NULL,
+  cx REAL NOT NULL, cy REAL NOT NULL,
+  area INTEGER NOT NULL, peak REAL NOT NULL, mean REAL NOT NULL,
+  elongation REAL NOT NULL, red_share REAL
+);
+CREATE INDEX ix_light_version ON light_component(source_version_id);
+-- Persistent-light model per view and condition. Each rebuild is a new version.
+CREATE TABLE background_model (
+  id INTEGER PRIMARY KEY,
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  condition TEXT NOT NULL,
+  image_count INTEGER NOT NULL,
+  state TEXT NOT NULL,              -- ready | insufficient
+  persistent_mask BLOB,             -- PNG, original resolution
+  frequency BLOB,                   -- PNG, 0-255 = share of images lit
+  new_lights TEXT NOT NULL DEFAULT '[]',   -- JSON boxes lit often recently but not over the long horizon
+  params TEXT NOT NULL,
+  input_ids TEXT NOT NULL,          -- JSON source version ids used
+  built_at TEXT NOT NULL
+);
+-- Light groups: hypotheses that components belong together. Machine output, immutable.
+CREATE TABLE light_group (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  background_model_id INTEGER REFERENCES background_model(id),
+  region_revision_id INTEGER,       -- latest region edit of the view when analysed; a newer edit triggers re-analysis
+  kind TEXT NOT NULL,               -- single | pair | cluster
+  member_ids TEXT NOT NULL,         -- JSON light_component ids
+  x1 REAL NOT NULL, y1 REAL NOT NULL, x2 REAL NOT NULL, y2 REAL NOT NULL,
+  score REAL NOT NULL,
+  reflection REAL NOT NULL,
+  explained_by_background INTEGER NOT NULL,
+  in_region INTEGER,
+  covered_by_detection INTEGER REFERENCES detection(id),
+  is_candidate INTEGER NOT NULL,
+  count_min INTEGER NOT NULL, count_max INTEGER NOT NULL,
+  alternatives TEXT NOT NULL,       -- JSON list of other readings
+  flags TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_group_version ON light_group(source_version_id);
+-- Human decisions on candidates. Append-only; the latest per group_uid is current.
+CREATE TABLE candidate_revision (
+  id INTEGER PRIMARY KEY,
+  group_uid TEXT NOT NULL,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  light_group_id INTEGER REFERENCES light_group(id),
+  action TEXT NOT NULL,             -- confirmed | rejected | persistent_light | regrouped | superseded | restored
+  member_ids TEXT,                  -- for operator-made groups
+  x1 REAL, y1 REAL, x2 REAL, y2 REAL,
+  cls TEXT,
+  author TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_candidate_version ON candidate_revision(source_version_id);
+-- Operator labels: authoritative over the statistics. Configuration, not training labels.
+CREATE TABLE light_label (
+  id INTEGER PRIMARY KEY,
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  condition TEXT NOT NULL,
+  kind TEXT NOT NULL,               -- persistent | not_persistent
+  polygon TEXT NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+""",
 }
 
 

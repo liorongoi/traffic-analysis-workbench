@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .detect import Detector
+from .night import measure_condition
+from .night_service import NightService
 from .regions import RULES, RegionSet
 from .store import Mission, utcnow
 from .views import ViewService, read_image
@@ -28,6 +30,7 @@ class RunReport:
     skipped: int = 0
     detections: int = 0
     errors: list[str] = field(default_factory=list)
+    night: dict = field(default_factory=dict)
 
 
 def register_model(con, describe: dict, card: dict) -> int:
@@ -54,10 +57,13 @@ class Processor:
         self.rule = region_rule
         self.min_overlap = min_overlap
         self.views = ViewService(mission)
+        self.night = NightService(mission)
 
     def pending_runs(self) -> list[int]:
+        # Includes runs interrupted after their last image but before night analysis and completion.
         return [r[0] for r in self.con.execute(
-            "SELECT DISTINCT run_id FROM run_item WHERE processing_state IN ('queued','running') ORDER BY run_id")]
+            "SELECT id FROM run WHERE state IN ('queued','running') OR id IN "
+            "(SELECT run_id FROM run_item WHERE processing_state IN ('queued','running')) ORDER BY id")]
 
     def process_all(self, progress: Callable[[int, int], None] | None = None) -> list[RunReport]:
         return [self.process_run(r, progress) for r in self.pending_runs()]
@@ -71,6 +77,7 @@ class Processor:
         models["vehicle_detection"] = desc["model"]
         pre = json.loads(run["preprocessing"] or "{}")
         pre["vehicle_detection"] = desc["preprocessing"]
+        pre["night"] = self.night.describe()
         pre["region_rule"] = {"rule": self.rule, "min_overlap": self.min_overlap if self.rule == "overlap" else None}
         self.con.execute("UPDATE run SET state='running', started_at=COALESCE(started_at,?), model_versions=?, preprocessing=? "
                          "WHERE id=?", (utcnow(), json.dumps(models), json.dumps(pre), run_id))
@@ -124,6 +131,7 @@ class Processor:
                     "in_region,region_rule,model_version_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (it["id"], it["source_version_id"], view_id, *(float(v) for v in d.box), d.cls, float(d.score), json.dumps(d.class_scores),
                      inside, self.rule if inside is not None else None, model_id, now))
+            self.night.record_item(it["id"], it["source_version_id"], img, measure_condition(img))
             self.con.execute("UPDATE run_item SET processing_state='done', stage=NULL, error_code=NULL, error_detail=NULL "
                              "WHERE id=?", (it["id"],))
             self.con.execute("COMMIT")
@@ -131,6 +139,8 @@ class Processor:
             rep.detections += len(dets)
             if progress:
                 progress(n, total)
+        # Night: backgrounds need many images, so lights are grouped once the images are in.
+        rep.night = self.night.refresh()
         left = self.con.execute("SELECT COUNT(*) FROM run_item WHERE run_id=? AND processing_state IN ('queued','running')",
                                 (run_id,)).fetchone()[0]
         if not left:

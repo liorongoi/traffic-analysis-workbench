@@ -41,6 +41,11 @@ Requirement IDs come from the design package (`docs/design/design-package.html`,
 | COR-01 corrections append-only with provenance | `annotation_revision`, `review_decision` | `tests/test_detect_review.py` | Tested for object corrections. Other correction types later. |
 | EXP-01 exports: formats, ids, Unicode, leading zeros, prediction vs correction vs approval, no overwrite, failures reported | `src/trafficwb/export.py` | `tests/test_detect_review.py` | Tested (unit, CSV and Excel) |
 
+| NGT-01 light components, groups, candidates and vehicles kept separate; light count never vehicle count | `src/trafficwb/night.py`, `night_service.py`, `review.py` | `tests/test_night.py` | Tested (unit and synthetic pipeline), run on the sample |
+| NGT-02 per-view, per-condition background; unexplained lights become candidates | `night.build_background`, `NightService.ensure_background` | `tests/test_night.py` | Tested (unit), run on the sample |
+| NGT-03 background never silently absorbs stopped vehicles | `night.build_background` (vehicle areas left out, new lights reported) | `tests/test_night.py` | Tested on synthetic data. Not seen on a real parked vehicle. |
+| NGT-04 condition from content; no enhanced evidence; confirmed and unresolved shown apart | `night.measure_condition`, `review.results`, `export` | `tests/test_night.py` | Tested (unit + sample frames) |
+
 All other requirements: not started.
 
 Evidence for each phase is in `docs/delivery/`.

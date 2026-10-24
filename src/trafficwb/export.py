@@ -28,12 +28,14 @@ from .store import Mission, utcnow
 XLSX_MAX_ROWS = 1_048_576
 
 IMAGE_COLUMNS = ["mission_id", "run_id", "source_version_id", "file", "sha256", "capture_utc", "capture_precision",
-                 "capture_local", "utc_offset", "time_zone", "view", "vehicles_in_image", "candidate_count",
+                 "capture_local", "utc_offset", "time_zone", "view", "condition", "vehicles_in_image",
+                 "confirmed_from_candidates", "unresolved_candidates_min", "unresolved_candidates_max",
                  "processing_state", "review_status", "flags"]
 OBJECT_COLUMNS = ["mission_id", "run_id", "source_version_id", "file", "sha256", "capture_utc", "capture_local", "view",
-                  "object_id", "origin", "final_status", "final_class", "final_x1", "final_y1", "final_x2", "final_y2",
+                  "object_id", "evidence_level", "origin", "final_status", "final_class", "final_x1", "final_y1", "final_x2", "final_y2",
                   "machine_class", "machine_score", "machine_x1", "machine_y1", "machine_x2", "machine_y2",
-                  "correction", "in_region", "counted", "model", "review_status"]
+                  "correction", "in_region", "counted", "model", "review_status",
+                  "light_group_kind", "light_ids", "candidate_count_min", "candidate_count_max", "alternatives"]
 
 
 class ExportError(RuntimeError):
@@ -66,7 +68,8 @@ def build_tables(mission: Mission, flt: Filter | None = None) -> tuple[list[list
             offset = f"{'+' if secs >= 0 else '-'}{abs(secs) // 3600:02d}:{abs(secs) % 3600 // 60:02d}"
         images.append([_fmt(x) for x in [mission.id, row.run_id, row.source_version_id, row.filename, v["sha256"],
                                          row.capture_utc, v["capture_precision"], row.capture_local, offset, mission.zone,
-                                         row.view, row.vehicle_count, row.candidate_count, row.processing_state,
+                                         row.view, row.condition, row.vehicle_count, row.confirmed_from_candidates,
+                                         row.candidate_count, row.candidate_count_max, row.processing_state,
                                          row.review_status, ";".join(row.flags)]])
         if row.processing_state != "done":
             continue
@@ -74,9 +77,21 @@ def build_tables(mission: Mission, flt: Filter | None = None) -> tuple[list[list
             mb = o.machine_box or (None, None, None, None)
             objects.append([_fmt(x) for x in [
                 mission.id, row.run_id, row.source_version_id, row.filename, v["sha256"], row.capture_utc, row.capture_local,
-                row.view, o.uid, o.origin, o.status, o.cls, *o.box, o.machine_cls, o.score, *mb, o.correction,
+                row.view, o.uid, "detected" if o.origin == "machine" else "human_added", o.origin, o.status, o.cls,
+                *o.box, o.machine_cls, o.score, *mb, o.correction,
                 {1: "yes", 0: "no", None: "not applied"}[o.in_region], "yes" if o.counted else "no",
-                models.get(det_model.get(o.detection_id)) if o.detection_id else "", row.review_status]])
+                models.get(det_model.get(o.detection_id)) if o.detection_id else "", row.review_status,
+                "", "", "", "", ""]])
+        for c in rs.candidates(row.source_version_id):
+            level = {"confirmed": "confirmed_vehicle_from_lights", "unresolved": "unresolved_candidate"}.get(
+                c.status, "candidate_" + c.status)
+            objects.append([_fmt(x) for x in [
+                mission.id, row.run_id, row.source_version_id, row.filename, v["sha256"], row.capture_utc, row.capture_local,
+                row.view, c.uid, level, "lights" if c.origin == "machine" else "lights_grouped_by_operator", c.status,
+                c.cls or "", *c.box, "", c.score, "", "", "", "", "", "", "yes" if c.status == "confirmed" else "no",
+                "lights (night analysis)" if c.origin == "machine" else "", row.review_status,
+                c.kind, ";".join(str(i) for i in c.member_ids), c.count_min if c.status == "unresolved" else "",
+                c.count_max if c.status == "unresolved" else "", "; ".join(c.alternatives)]])
     return images, objects
 
 

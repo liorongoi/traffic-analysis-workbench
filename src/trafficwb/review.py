@@ -71,11 +71,32 @@ class ResultRow:
     view_id: int | None
     view: str | None
     vehicle_count: int | None
-    candidate_count: int | None
+    candidate_count: int | None          # unresolved night candidates, lower bound
     processing_state: str
     review_status: str
     run_id: int | None = None
     flags: list[str] = field(default_factory=list)
+    candidate_count_max: int | None = None
+    condition: str | None = None
+    confirmed_from_candidates: int = 0
+
+
+@dataclass
+class Candidate:
+    uid: str
+    source_version_id: int
+    origin: str                     # machine | human (operator regrouped lights)
+    kind: str                       # single | pair | cluster
+    member_ids: list[int]
+    box: tuple[float, float, float, float]
+    score: float | None
+    status: str                     # unresolved | confirmed | rejected | persistent_light | superseded
+    count_min: int
+    count_max: int
+    alternatives: list[str]
+    flags: list[str]
+    light_group_id: int | None = None
+    cls: str | None = None          # for confirmed candidates
 
 
 class ReviewService:
@@ -148,6 +169,9 @@ class ReviewService:
             "INSERT INTO annotation_revision(object_uid,source_version_id,detection_id,action,status,x1,y1,x2,y2,cls,author,note,"
             "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (uid, version_id, detection_id, action, status, *map(float, box), cls, author, note, utcnow()))
+        self._reopen_if_approved(version_id, author)
+
+    def _reopen_if_approved(self, version_id: int, author: str) -> None:
         if self.review_status(version_id) != "unreviewed":
             self._decide(version_id, "reopened", author)
 
@@ -196,6 +220,107 @@ class ReviewService:
         if sig and (x1 < 0 or y1 < 0 or x2 > sig["width"] or y2 > sig["height"]):
             raise ValueError(f"The rectangle extends outside the {sig['width']}x{sig['height']} image.")
         return (x1, y1, x2, y2)
+
+    # ---------- night candidates ----------
+    def candidates(self, version_id: int, include_explained: bool = False) -> list[Candidate]:
+        """Current light groups that are vehicle candidates, with the operator's decisions applied."""
+        from .night_service import NightService, group_uid
+        groups = NightService(self.m).current_groups(version_id)
+        out: dict[str, Candidate] = {}
+        for g in groups:
+            if not g["is_candidate"] and not include_explained:
+                continue
+            ids = json.loads(g["member_ids"])
+            uid = group_uid(ids)
+            out[uid] = Candidate(uid, version_id, "machine", g["kind"], ids, (g["x1"], g["y1"], g["x2"], g["y2"]),
+                                 g["score"], "unresolved" if g["is_candidate"] else "not_candidate",
+                                 g["count_min"], g["count_max"], json.loads(g["alternatives"]), json.loads(g["flags"]), g["id"])
+        revs = self.con.execute(
+            "SELECT * FROM candidate_revision r WHERE source_version_id=? AND id=(SELECT MAX(id) FROM candidate_revision x "
+            "WHERE x.group_uid=r.group_uid) ORDER BY id", (version_id,)).fetchall()
+        for r in revs:
+            c = out.get(r["group_uid"])
+            box = (r["x1"], r["y1"], r["x2"], r["y2"]) if r["x1"] is not None else None
+            if c is None:
+                if r["member_ids"] is not None:  # the group is no longer formed; keep the decision visible
+                    ids = json.loads(r["member_ids"])
+                    c = Candidate(r["group_uid"], version_id, "human" if r["group_uid"].startswith("H") else "machine",
+                                  "single" if len(ids) == 1 else ("pair" if len(ids) == 2 else "cluster"), ids, box,
+                                  None, "unresolved", 1, 1, [], [] if r["group_uid"].startswith("H") else ["group_no_longer_formed"])
+                    out[r["group_uid"]] = c
+                else:
+                    continue
+            status = {"confirmed": "confirmed", "rejected": "rejected", "persistent_light": "persistent_light",
+                      "superseded": "superseded", "regrouped": "unresolved", "restored": "unresolved"}[r["action"]]
+            if status == "unresolved" and "group_no_longer_formed" in c.flags:
+                status = "superseded"
+            c.status = status
+            if box is not None:
+                c.box = box
+            c.cls = r["cls"]
+        return [c for c in out.values() if c.status != "not_candidate"]
+
+    def _cand_rev(self, version_id: int, c: Candidate, action: str, author: str, box=None, cls=None, note=None) -> None:
+        b = box or c.box
+        self.con.execute(
+            "INSERT INTO candidate_revision(group_uid,source_version_id,light_group_id,action,member_ids,x1,y1,x2,y2,cls,author,"
+            "note,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (c.uid, version_id, c.light_group_id, action, json.dumps(c.member_ids), *(float(v) for v in b), cls, author,
+             note, utcnow()))
+        self._reopen_if_approved(version_id, author)
+
+    def _cand(self, version_id: int, uid: str) -> Candidate:
+        for c in self.candidates(version_id):
+            if c.uid == uid:
+                return c
+        raise KeyError(f"candidate {uid} not found on this image")
+
+    def confirm_candidate(self, version_id: int, uid: str, author: str, box=None, cls: str = "car",
+                          note: str | None = None) -> None:
+        """The operator says these lights are one vehicle. Optionally with the vehicle's outline."""
+        self._check_cls(cls)
+        c = self._cand(version_id, uid)
+        self._cand_rev(version_id, c, "confirmed", author, self._check_box(version_id, box) if box else None, cls, note)
+
+    def reject_candidate(self, version_id: int, uid: str, author: str, note: str | None = None) -> None:
+        self._cand_rev(version_id, self._cand(version_id, uid), "rejected", author, note=note)
+
+    def restore_candidate(self, version_id: int, uid: str, author: str) -> None:
+        self._cand_rev(version_id, self._cand(version_id, uid), "restored", author)
+
+    def mark_persistent_light(self, version_id: int, uid: str, author: str, margin: float = 4.0) -> int:
+        """The lights are fixed background (street lamp, sign). Adds an authoritative label for the view."""
+        from .night_service import NightService
+        from .views import ViewService
+        c = self._cand(version_id, uid)
+        view_id = ViewService(self.m).current_view(version_id)
+        if view_id is None:
+            raise ValueError("Assign this image to a camera view before marking background lights.")
+        cond = self.con.execute("SELECT condition FROM image_condition WHERE source_version_id=?", (version_id,)).fetchone()[0]
+        x1, y1, x2, y2 = c.box
+        poly = [[x1 - margin, y1 - margin], [x2 + margin, y1 - margin], [x2 + margin, y2 + margin], [x1 - margin, y2 + margin]]
+        lid = self.con.execute("INSERT INTO light_label(view_id,condition,kind,polygon,author,created_at) VALUES (?,?,?,?,?,?)",
+                               (view_id, cond, "persistent", json.dumps(poly), author, utcnow())).lastrowid
+        self._cand_rev(version_id, c, "persistent_light", author, note=f"light_label {lid}")
+        NightService(self.m).refresh()  # the label changes this view's background; regroup its images
+        return lid
+
+    def regroup(self, version_id: int, light_ids: list[int], author: str, note: str | None = None) -> str:
+        """Form one candidate from the chosen lights; groups that shared any of them are superseded."""
+        from .night_service import NightService
+        lights = {li.id: li for li in NightService(self.m).lights(version_id)}
+        if not light_ids or any(i not in lights for i in light_ids):
+            raise ValueError("Choose lights that belong to this image.")
+        chosen = set(light_ids)
+        for c in self.candidates(version_id):
+            if c.status in ("unresolved", "confirmed", "rejected") and chosen & set(c.member_ids):
+                self._cand_rev(version_id, c, "superseded", author, note="regrouped by operator")
+        box = (min(lights[i].box[0] for i in chosen), min(lights[i].box[1] for i in chosen),
+               max(lights[i].box[2] for i in chosen), max(lights[i].box[3] for i in chosen))
+        uid = "H" + uuid.uuid4().hex[:12]
+        c = Candidate(uid, version_id, "human", "single", sorted(chosen), box, None, "unresolved", 1, 1, [], [])
+        self._cand_rev(version_id, c, "regrouped", author, note=note)
+        return uid
 
     # ---------- review status ----------
     def review_status(self, version_id: int) -> str:
@@ -274,12 +399,26 @@ class ReviewService:
                 if (flt.local_date_from and day < flt.local_date_from) or (flt.local_date_to and day > flt.local_date_to):
                     continue
             count = None
+            cmin = cmax = None
+            confirmed = 0
             flags = []
+            cond = self.con.execute("SELECT condition, flags FROM image_condition WHERE source_version_id=?", (vid,)).fetchone()
             if pstate == "done":
                 objs = self.objects(vid, include_removed=False)
-                count = sum(o.counted for o in objs)
+                cands = self.candidates(vid)
+                confirmed = sum(c.status == "confirmed" for c in cands)
+                count = sum(o.counted for o in objs) + confirmed
+                open_c = [c for c in cands if c.status == "unresolved"]
+                cmin, cmax = sum(c.count_min for c in open_c), sum(c.count_max for c in open_c)
                 if any(o.in_region is None for o in objs):
                     flags.append("regions_not_applied")
+                if cond and cond["condition"] != "day" and not cands and not self.con.execute(
+                        "SELECT 1 FROM light_group WHERE source_version_id=? LIMIT 1", (vid,)).fetchone() \
+                        and self.con.execute("SELECT 1 FROM light_component WHERE source_version_id=? LIMIT 1",
+                                             (vid,)).fetchone():
+                    flags.append("night_analysis_pending")
+            if cond:
+                flags += json.loads(cond["flags"])
             if flt.min_vehicles is not None and (count or 0) < flt.min_vehicles:
                 continue
             if r["view_id"] is None:
@@ -287,8 +426,8 @@ class ReviewService:
             elif states.get(r["view_id"]) == "needs_review":
                 flags.append("view_needs_review")
             out.append(ResultRow(vid, r["rel_path"], r["capture_utc"], local, r["view_id"], names.get(r["view_id"]),
-                                 count, None, pstate, rstatus,  # night candidates arrive in Phase 4
-                                 item["run_id"] if item else None, flags))
+                                 count, cmin, pstate, rstatus, item["run_id"] if item else None, flags, cmax,
+                                 cond["condition"] if cond else None, confirmed))
         key = {"capture_utc": lambda x: (x.capture_utc or "", x.filename), "filename": lambda x: x.filename,
                "vehicle_count": lambda x: (x.vehicle_count if x.vehicle_count is not None else -1, x.capture_utc or ""),
                "view": lambda x: (x.view or "", x.capture_utc or ""), "review_status": lambda x: (x.review_status, x.filename),

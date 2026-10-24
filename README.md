@@ -2,7 +2,7 @@
 
 Offline road-traffic still-image and video analysis for a single Windows workstation, reachable from browsers on the local network. It is a new, independent application.
 
-Status: **Phases 0 to 3 done for still images, without screens yet**. Only the pieces below exist. Night handling, plates, video and the web UI come later.
+Status: **Phases 0 to 4 done for still images, without screens yet**. Only the pieces below exist. Plates, video and the web UI come later.
 
 | Piece | What it does |
 |---|---|
@@ -14,6 +14,7 @@ Status: **Phases 0 to 3 done for still images, without screens yet**. Only the p
 | `trafficwb.ingest` | Folder scanning with stability checks, file versions, runs, background monitoring |
 | `trafficwb.views`, `trafficwb.regions` | Camera views (day and night together), camera-shift detection, include and exclude areas |
 | `trafficwb.models`, `trafficwb.detect` | Verified offline model packs; vehicle detection (YOLOX-s, Apache-2.0) with tiling |
+| `trafficwb.night`, `trafficwb.night_service` | Day/dusk/night from image content, headlights, street-lamp background, vehicle candidates at night |
 | `trafficwb.process` | Resumable processing runs |
 | `trafficwb.review`, `trafficwb.export` | Results table, corrections, approval, CSV and Excel export |
 | `trafficwb-mission` | Create a mission, scan, detect, list results, export, show status |
