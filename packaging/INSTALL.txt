@@ -3,7 +3,15 @@ Traffic Analysis Workbench: offline install and update
 
 This folder contains everything the workstation needs. Nothing is downloaded during install or use.
 
-Install or update (Windows)
+Easiest: the setup wizard (Windows)
+- Run TrafficWorkbench-Setup-<version>.exe and follow the screens: install folder, data folder, backup folder,
+  start at sign-in. No administrator rights are needed, Python is included, nothing is downloaded.
+- It runs the same install.ps1 as below, so the checks, the backup before an update and the automatic start
+  are the same. The installer's own output is in <install folder>\logs\install.log.
+- Uninstall from Windows Settings > Apps. That removes the program and the automatic start; the data and
+  backup folders are kept.
+
+Install or update by hand (Windows)
 1. Copy this whole folder to the workstation (USB or internal share).
 2. Open PowerShell in this folder and run:
      powershell -ExecutionPolicy Bypass -File install.ps1 -Target C:\TrafficWorkbench -Data D:\TrafficData -BackupDir E:\TrafficBackups

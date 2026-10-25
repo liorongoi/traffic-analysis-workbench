@@ -18,12 +18,18 @@ $Bundle = $PSScriptRoot
 $Info = Get-Content (Join-Path $Bundle "bundle.json") -Raw | ConvertFrom-Json
 Write-Host "Traffic Analysis Workbench $($Info.version) for Python $($Info.python)"
 
-# 1. Check every file against SHA256SUMS.
+# 1. Check every file against SHA256SUMS. .NET directly, not Get-FileHash, which is missing when this runs
+#    under Windows PowerShell started from PowerShell 7 (its module path points at the wrong modules).
+function Get-Sha256([string]$path) {
+  $sha = [Security.Cryptography.SHA256]::Create()
+  $fs = [IO.File]::OpenRead($path)
+  try { return ([BitConverter]::ToString($sha.ComputeHash($fs)) -replace "-", "").ToLower() } finally { $fs.Dispose(); $sha.Dispose() }
+}
 Get-Content (Join-Path $Bundle "SHA256SUMS") | ForEach-Object {
   $parts = $_ -split "  ", 2
   if ($parts.Count -eq 2) {
     $f = Join-Path $Bundle $parts[1]
-    $h = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
+    $h = Get-Sha256 $f
     if ($h -ne $parts[0]) { throw "Checksum mismatch: $($parts[1]). Copy the bundle again." }
   }
 }
@@ -89,7 +95,11 @@ if ($Choice -eq "auto") {
 
 # Install into a fresh environment and check it end to end with no network, before switching to it.
 function Install-Env([string]$build) {
+  # Messages a program writes to stderr (pip warnings, model loading notes) must not stop the install when the
+  # output is redirected, as Windows PowerShell does then; failures are caught by the exit codes below.
+  $ErrorActionPreference = "Continue"
   & $Python -m venv $Venv | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "Creating the Python environment failed." }
   $script:VPy = Join-Path $Venv "Scripts\python.exe"
   & $script:VPy -m pip install --no-index --find-links $Wheels "trafficwb[probe,$build]==$($Info.version)" | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "pip install failed." }
@@ -117,7 +127,9 @@ if ($BackupDir -and (Test-Path (Join-Path $Data "control.db"))) {
   $prev = Join-Path $Target "current.txt"
   if (Test-Path $prev) {
     $prevVenv = (Get-Content $prev -Raw).Trim()
+    $ErrorActionPreference = "Continue"
     & (Join-Path $prevVenv "Scripts\trafficwb-admin.exe") backup --data $Data --to $BackupDir
+    $ErrorActionPreference = "Stop"
     if ($LASTEXITCODE -ne 0) { throw "Backup before the update failed; nothing was switched." }
   }
 }
