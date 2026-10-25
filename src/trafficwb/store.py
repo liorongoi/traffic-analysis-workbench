@@ -684,6 +684,9 @@ ALTER TABLE light_group ADD COLUMN band TEXT;              -- far | middle | clo
 ALTER TABLE light_group ADD COLUMN recurrence REAL;        -- share of the view's images lit at this place
 ALTER TABLE light_group ADD COLUMN setting_id INTEGER;     -- view_night_setting row used; a newer one triggers re-analysis
 """,
+    10: """
+ALTER TABLE light_group ADD COLUMN decision_rev INTEGER;   -- newest operator candidate decision in the view that was used
+""",
 }
 
 

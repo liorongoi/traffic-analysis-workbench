@@ -10,7 +10,8 @@ from trafficwb.detect import Detection
 from trafficwb.export import IMAGE_COLUMNS, OBJECT_COLUMNS, build_tables
 from trafficwb.ingest import cycle
 from trafficwb.night import (BackgroundParams, BandParams, Light, WidthMap, band_at, band_rows, build_background,
-                             covered_by, group_lights, is_glare, light_components, measure_condition)
+                             covered_by, group_lights, is_glare, light_components, measure_condition, off_vehicle_map,
+                             on_vehicle_map, vehicle_map, map_distance)
 from trafficwb.night_service import NightService
 from trafficwb.process import Processor
 from trafficwb.regions import RegionEditor
@@ -415,3 +416,58 @@ def test_band_setting_triggers_reanalysis(mission):
     assert groups and all(g["band"] == "close" and g["setting_id"] is not None for g in groups)
     assert all("close_without_shape" in json.loads(g["flags"]) for g in groups)
     assert ns.refresh()["images_analysed"] == 0      # nothing changed: nothing re-analysed
+
+
+def test_vehicle_map_from_daytime_boxes():
+    vm = vehicle_map([(100, 100, 140, 124), (300, 200, 360, 236)], (360, 640), dilate_px=15)
+    assert on_vehicle_map(vm, (110, 105, 130, 115)) and not on_vehicle_map(vm, (500, 20, 510, 30))
+    d = map_distance(vm)
+    wm = WidthMap(0.1, 6, 50, "test")                 # 36 px wide at row 300
+    assert not off_vehicle_map(d, (370, 290, 380, 300), wm)        # just outside: the map has gaps
+    assert off_vehicle_map(d, (560, 290, 570, 300), wm)            # far from any place a vehicle was seen
+
+
+def test_operator_decisions_at_a_place_apply_to_other_images(mission):
+    m, src = mission
+    for k in range(6):
+        write(src, f"CAM1_{ts(k)}.jpg", day_frame(k))
+    lit = (1, 5, 9)                                    # a fixed light (a reflection on a sign) in 3 of 10 night images
+    for k in range(10):
+        write(src, f"CAM1_{ts(100 + k)}.jpg", night_frame(k, singles=[(500, 250)] if k in lit else []))
+    cycle(m)
+    ViewService(m).assign_or_propose()
+    Processor(m, RedBoxDetector()).process_all()
+    # Not penalised for recurring here, so it is offered as a candidate in each image.
+    bp = BackgroundParams(recurring_share=0.95, occasional_share=0.95)
+    ns = NightService(m, bg_params=bp)
+    view = ViewService(m).views()[0]["id"]
+    ids = [vid_of(m, f"CAM1_{ts(100 + k)}.jpg") for k in lit]
+    bg = ns.current_background(view, "night")
+    for v in ids:
+        m.con.execute("BEGIN"); ns.analyse(v, bg); m.con.execute("COMMIT")
+    rs = ReviewService(m)
+
+    def at_place(v):
+        return [c for c in rs.candidates(v) if c.box[0] <= 500 <= c.box[2] and c.box[1] <= 250 <= c.box[3]]
+
+    assert all(at_place(v) and at_place(v)[0].status == "unresolved" for v in ids)
+    for v in ids[:2]:
+        rs.reject_candidate(v, at_place(v)[0].uid, "lior", note="reflection on the sign")
+    stats = NightService(m, bg_params=bp).refresh(with_decisions=True)
+    assert stats["images_analysed"] == 10              # the view's latest decision changed
+    assert at_place(ids[2]) == []                       # no longer offered as a candidate
+    g = next(g for g in NightService(m).current_groups(ids[2]) if g["x1"] <= 500 <= g["x2"] and g["y1"] <= 250 <= g["y2"])
+    assert "rejected_here_before" in json.loads(g["flags"]) and "2 times" in g["alternatives"]
+    # The rejected images keep their own decision; it is not counted against themselves.
+    assert [c.status for c in rs.candidates(ids[0], include_explained=True) if c.box[0] <= 500 <= c.box[2]] == ["rejected"]
+    assert NightService(m, bg_params=bp).refresh(with_decisions=True)["images_analysed"] == 0
+
+
+def test_nearest_view_for_images_left_out_of_views(mission):
+    m, src = _night_mission(mission)
+    Processor(m, RedBoxDetector()).process_all()
+    ns = NightService(m)
+    v = vid_of(m, f"CAM1_{ts(100)}.jpg")
+    view = ViewService(m).views()[0]["id"]
+    assert ns.nearest_view(v) == view
+    assert ns.nearest_view(v, min_similarity=1.01) is None

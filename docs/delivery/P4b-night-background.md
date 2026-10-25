@@ -1,4 +1,4 @@
-# Delivery report: night still images, background lights and distance bands
+# Delivery report: night still images, background lights, distance bands and learning from decisions
 
 Date: 25 Oct 2026. Branch: `claude/project-thread-rld21n`.
 
@@ -32,6 +32,14 @@ Two points from Lior:
 - Database migration v9 adds `view_night_setting` and the columns `band`, `recurrence` and `setting_id` on light groups.
 - Rules: `docs/design/night.md`, steps 1, 4a and 6a.
 
+### Part 2
+
+- **Where vehicles drive.** Each view learns a map from its daytime detections. A light far from every place a vehicle was seen (sky, lamp heads, the caption, verges) is scored down.
+- **Recurring on the road no longer counts as background.** On a busy lane, oncoming cars light the same spot in many images. The first version treated that spot as background and dropped real cars. Now the recurring penalty applies only off the road. For glare, recurrence is the average over the blob.
+- **Images with no camera view borrow the most similar view's background** (rain on the lens).
+- **Learning from operator decisions.** A place where an operator said "Not a vehicle" at least twice in other images of the view is scored down. A place where vehicles were confirmed at least twice is kept. Decisions are applied at each processing run, or with the "Apply my night decisions now" button on the Camera views tab.
+- Database migration v10 adds `decision_rev` on light groups.
+
 ## Actually tested
 
 | What | Where | Result |
@@ -44,9 +52,24 @@ The new tests check:
 - long thin lights;
 - glare found as a light;
 - the five background readings, including glare next to a lamp and the "not persistent" label;
-- saving band widths re-analyses the view, and only once.
+- saving band widths re-analyses the view, and only once;
+- the vehicle map;
+- rejections at a place applied to the view's other images (an image's own decision is not counted for itself);
+- borrowing the nearest view.
 
 Fintraffic sample, 143 images, 82 of them night, processed before and after on 4 CPU cores:
+
+Part 1 ("after") and part 2 together:
+
+| What | Before | After part 1 | After part 2 |
+|---|---|---|---|
+| Candidates per night image | 14.3 | 9.1 | 8.9 |
+| Candidates on the two images with no camera view | 65 | 66 | 33 |
+| Real cars dropped in four images checked by eye | 0 | 3 (an oncoming car's glare, cars on the far bridge) | 0 |
+
+Part 2 keeps roughly the same number of candidates as part 1. It trades lights far from the road, which are now dropped, for real cars on the road, which part 1 had wrongly dropped.
+
+Part 1 details:
 
 | What | Before | After |
 |---|---|---|
@@ -62,7 +85,7 @@ I looked at 36 random candidates before and after, and at four whole night image
 
 - Many candidates are **real cars that the vehicle detector misses at night**. Examples are oncoming cars seen only as headlights or glare, cars on the far bridge, and trucks with light bars. Before, I judged roughly 40% of a random sample to be vehicles. After, about half.
 - Still wrong after the change:
-  - pools of light on the road below the bridge;
+  - pools of light on the road below the bridge (they lie on the road, so the vehicle map cannot help; operator rejections at that place will);
   - a few lit pole segments and railing pieces;
   - lights at the very top edge in rain;
   - part of the burned-in caption.

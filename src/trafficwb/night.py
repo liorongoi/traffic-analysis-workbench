@@ -152,8 +152,16 @@ class BackgroundParams:
     near_px: int = 4                # neighbourhood in which a light's history at this place is read
     recurring_share: float = 0.2    # lit here in at least this share of images: a background light not always lit
     occasional_share: float = 0.1   # lit here this often: weaker sign of background
-    recurring_factor: float = 0.4   # candidate score multipliers
+    recurring_factor: float = 0.35  # candidate score multipliers
     occasional_factor: float = 0.7
+    # where vehicles drive, learned from daytime detections in the view
+    vmap_min_boxes: int = 50        # fewer daytime vehicles: no map, nothing is judged by it
+    vmap_dilate_px: int = 15        # tolerance around the places vehicles were seen
+    off_road_factor: float = 0.3    # a light where no vehicle was ever seen by day
+    # what operators decided at the same place in other images of the view
+    rejected_min: int = 2           # "not a vehicle" this many times here (and more than twice the confirmations)
+    rejected_factor: float = 0.4
+    confirmed_min: int = 2          # vehicles confirmed here this many times: keep the light as a candidate
 
     def record(self) -> dict:
         return dict(self.__dict__)
@@ -179,9 +187,13 @@ class Background:
         return self._dist
 
     def recurrence(self, light: Light, near: int = 4) -> float:
-        """Highest share of images in which the light's neighbourhood was lit."""
+        """Share of images in which the light's place was lit: the highest value around a small light, the
+        average over a glare blob (which is large and may overlap a lamp without being the lamp)."""
         x1, y1, x2, y2 = (int(round(v)) for v in light.box)
         h, w = self.frequency.shape
+        if is_glare(light):
+            win = self.frequency[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+            return float(win.mean()) if win.size else 0.0
         win = self.frequency[max(0, y1 - near):min(h, y2 + near), max(0, x1 - near):min(w, x2 + near)]
         return float(win.max()) if win.size else 0.0
 
@@ -252,6 +264,43 @@ def build_background(masks_in_time_order: list[np.ndarray], vehicle_boxes: list[
     new_boxes = [(int(st[i][0]), int(st[i][1]), int(st[i][0] + st[i][2]), int(st[i][1] + st[i][3]))
                  for i in range(1, nn) if st[i][4] >= 6]
     return Background(persistent, freq, n, new_boxes)
+
+
+# ---------- where vehicles drive ----------
+
+def vehicle_map(boxes: list[tuple[float, float, float, float]], shape: tuple[int, int], dilate_px: int = 15) -> np.ndarray:
+    """Places where vehicles were seen (union of daytime vehicle boxes, slightly enlarged), as uint8 0/1.
+
+    At night a car's lights lie inside where its body would be by day, so a light far from every place a
+    vehicle was ever seen (the sky, lamp heads, captions, verges) is unlikely to be a vehicle."""
+    h, w = shape
+    m = np.zeros((h, w), np.uint8)
+    for x1, y1, x2, y2 in boxes:
+        cv2.rectangle(m, (int(max(0, x1)), int(max(0, y1))), (int(min(w - 1, x2)), int(min(h - 1, y2))), 1, -1)
+    if dilate_px > 1:
+        m = cv2.dilate(m, np.ones((dilate_px, dilate_px), np.uint8))
+    return m
+
+
+def on_vehicle_map(vmap: np.ndarray, box) -> bool:
+    h, w = vmap.shape
+    cx, cy = int((box[0] + box[2]) / 2), int((box[1] + box[3]) / 2)
+    return bool(vmap[min(h - 1, max(0, cy)), min(w - 1, max(0, cx))])
+
+
+def map_distance(vmap: np.ndarray) -> np.ndarray:
+    """Distance in px from each pixel to the nearest place a vehicle was seen."""
+    return cv2.distanceTransform((vmap == 0).astype(np.uint8), cv2.DIST_L2, 3)
+
+
+def off_vehicle_map(dist: np.ndarray, box, wm: "WidthMap | None", margin: float = 1.5) -> bool:
+    """True when the box's centre is further from every place a vehicle was seen than `margin` vehicle widths
+    (at its row; 40 px without a width map). The map is learned from daytime detections and has gaps, so
+    being just outside it is not held against a light."""
+    h, w = dist.shape
+    cx, cy = int((box[0] + box[2]) / 2), int((box[1] + box[3]) / 2)
+    d = float(dist[min(h - 1, max(0, cy)), min(w - 1, max(0, cx))])
+    return d > margin * (wm.width(box[3]) if wm else 40.0)
 
 
 # ---------- perspective: expected vehicle width by image row ----------

@@ -41,9 +41,23 @@ Lights inside a detector box (expanded by 15%) support that detection and are no
    | occasional | lit here in 10–20% of images | score × 0.7, flag `occasional_light_here` |
    | rare | less | no change |
 
+   **On the road, recurring is not held against a light.** On a busy lane, oncoming cars light the same spot in many images, so recurrence there is traffic, not a lamp (a light lit in ≥ 40% of images is persistent anyway). The recurring and occasional penalties apply only off the vehicle map (4b); on it the group is flagged `often_lit_where_vehicles_drive` and keeps its score. For glare, recurrence is the average over the blob, not the highest value around it, because a large glare blob can overlap a lamp without being the lamp.
+
    The share is stored on each group (`recurrence`) and shown on the investigation screen. A group is judged by its least background-like light. An operator label "not persistent" also clears the place's history, so the label wins over the statistics.
 
    On the Fintraffic sample, lights inside detected vehicles (real car lights) were lit at their place in ≥ 20% of images only 4% of the time, and touched a persistent light 0% of the time. Unexplained lights before this step: 39% and 19%.
+
+4b. **Where vehicles drive.** Each view learns a vehicle map: the union of its daytime vehicle boxes (score ≥ 0.4), enlarged by 15 px. It needs at least 50 daytime vehicles; with fewer there is no map and nothing is judged by it. At night a car's lights lie where its body would be by day, so a light group whose centre is more than 1.5 expected vehicle widths (40 px without a width map) from every place a vehicle was seen has its score multiplied by 0.3 and is flagged `no_vehicle_seen_here_by_day`. This covers the sky, lamp heads, captions and verges. Being just outside the map is not held against a light, because the map has gaps until many days are processed. Glare is not judged by the map.
+
+   On the Fintraffic sample (844 daytime vehicles), 95% of car lights inside detected vehicles lay on the map, against 9% of lights explained as background.
+
+4c. **What operators decided at the same place.** For each light group, the operator's current decisions on candidates in the view's other images are counted when their box (enlarged by 25% + 4 px) holds the group's centre:
+   - rejected at least 2 times and more than twice as often as confirmed: score × 0.4, flagged `rejected_here_before`, with "an operator said 'not a vehicle' at this place N times";
+   - confirmed at least 2 times and at least as often as rejected: score at least 0.4, flagged `vehicles_confirmed_here_before`.
+
+   An image's own decisions are never counted for itself. Processing runs apply new decisions to the view's other images (`refresh(with_decisions=True)`, using `light_group.decision_rev`); so does the "Apply my night decisions now" button on the Camera views tab. A single decision on the investigation screen does not re-check the other images, so it stays fast.
+
+4d. **Images without a camera view** (for example rain on the lens) borrow the background, width map, vehicle map, bands and decisions of the view whose signature they resemble most, when the resemblance is at least 0.6 and the size matches. They are flagged `background_from_nearest_view`, and regions are not applied to them. On the sample, two such images went from 65 candidates to 33.
 
 5. **Grouping.** The expected vehicle width at each image row is fitted from daytime car detections in the same view (`width = a·row + b`). On the sample: `0.090·row + 5.6` from 679 boxes, median error 16%. Two lights form a pair when they sit at the same height (within 25% of a vehicle width), their spacing is 35–115% of a vehicle width, and their areas differ by less than 3×. Lights closer than 20% of a vehicle width form a cluster. Without a width map no pairs are formed and every light is a single with a count range of 0–1.
 6. **Ambiguity is kept.**

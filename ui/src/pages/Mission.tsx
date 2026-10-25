@@ -263,6 +263,7 @@ function Views({ missionId }: { missionId: string }) {
   return (
     <div className="grid" style={{ gap: 12 }}>
       {data.views.length === 0 && <div className="card muted">No camera views yet. Views are proposed when images are processed.</div>}
+      {data.views.some((v) => v.night_bands) && <ApplyNightDecisions missionId={missionId} />}
       {data.views.map((v) => (
         <div key={v.id} className="card">
           <div className="row" style={{ justifyContent: "space-between" }}>
@@ -303,6 +304,28 @@ function Views({ missionId }: { missionId: string }) {
           <div className="thumbs">{data.unassigned.slice(0, 30).map((id) => <a key={id} href={`#/m/${missionId}/i/${id}`}><img src={`/api/missions/${missionId}/thumbs/${id}?w=200`} alt="" /></a>)}</div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ApplyNightDecisions({ missionId }: { missionId: string }) {
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r: any = await post(`/missions/${missionId}/night/apply-decisions`);
+      setMsg({ ok: true, text: r.reanalysed ? `${r.reanalysed} night image(s) re-checked.` : "Nothing new to apply." });
+    } catch (e) { setMsg({ ok: false, text: (e as ApiError).message }); }
+    setBusy(false);
+  };
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <span className="muted">Night candidates learn from your decisions: a place where you said “Not a vehicle” several times is scored down in the view's other images, and a place where you confirmed vehicles is kept. This is applied at every processing run, or now:</span>
+        <button onClick={run} disabled={busy}>{busy ? "Re-checking…" : "Apply my night decisions now"}</button>
+      </div>
+      {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`}>{msg.text}</div>}
     </div>
   );
 }

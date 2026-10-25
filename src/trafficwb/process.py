@@ -193,7 +193,7 @@ class Processor:
                 progress(n, total)
         # Night: backgrounds need many images, so lights are grouped once the images are in.
         self.control.stage = "night analysis"
-        rep.night = self.night.refresh()
+        rep.night = self.night.refresh(with_decisions=True)
         if self.m.config().mode == "plate_recognition":
             self.control.stage = "reading plates"
             try:

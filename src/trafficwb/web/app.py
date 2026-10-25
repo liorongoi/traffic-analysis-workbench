@@ -631,8 +631,14 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
         ns = NightService(m)
         out = {}
         _edit(lambda: out.update(ns.set_bands(view_id, body.far_below, body.close_from, u.username)))
-        out["reanalysed"] = ns.refresh()["images_analysed"]     # night candidates follow the new bands at once
+        out["reanalysed"] = ns.refresh(with_decisions=True)["images_analysed"]   # night candidates follow at once
         return out
+
+    @app.post("/api/missions/{mission_id}/night/apply-decisions")
+    def night_apply_decisions(m: Mission = Depends(mission), u: User = Depends(user)):
+        """Re-check night images so operators' decisions at a place apply to the view's other images."""
+        from ..night_service import NightService
+        return {"reanalysed": NightService(m).refresh(with_decisions=True)["images_analysed"]}
 
     @app.get("/api/missions/{mission_id}/views/{view_id}/regions")
     def regions_get(view_id: int, m: Mission = Depends(mission)):
