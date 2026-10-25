@@ -1,6 +1,7 @@
 name: windows-installer
-# Builds the offline Windows package (app, dependencies, model packs, Python installer) and keeps it as a
-# downloadable artifact: Actions > windows-installer > latest run > Artifacts.
+# Builds the offline Windows package (app, dependencies, model packs, Python installer) and the setup wizard
+# made from it (TrafficWorkbench-Setup-<version>.exe), tries the wizard silently, and keeps both as
+# downloadable artifacts: Actions > windows-installer > latest run > Artifacts.
 on:
   push:
     branches: [main, "claude/**"]
@@ -28,8 +29,47 @@ jobs:
           $b = Get-ChildItem dist -Directory | Select-Object -First 1
           Invoke-WebRequest "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe" -OutFile "$($b.FullName)\python-3.12.10-amd64.exe"
           "folder=$($b.Name)" >> $env:GITHUB_OUTPUT
+          "version=$((Get-Content "$($b.FullName)\bundle.json" -Raw | ConvertFrom-Json).version)" >> $env:GITHUB_OUTPUT
+      - name: Build the setup wizard
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DBundleDir=$PWD\dist\${{ steps.py.outputs.folder }}" "/DAppVersion=${{ steps.py.outputs.version }}" "/DOutDir=$PWD\setup" packaging\setup.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Get-ChildItem setup | Format-Table Name, Length
+      - name: Try the wizard (silent install, server answers, uninstall)
+        shell: pwsh
+        env:
+          PIP_NO_INDEX: "1"
+          HTTPS_PROXY: http://127.0.0.1:9
+          HTTP_PROXY: http://127.0.0.1:9
+        run: |
+          $exe = (Get-ChildItem setup -Filter *.exe | Select-Object -First 1).FullName
+          $dir = "$env:LOCALAPPDATA\TrafficWorkbench"
+          $p = Start-Process -Wait -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup.log"
+          Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 25
+          if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\setup.log" | Select-Object -Last 40; throw "setup exit code $($p.ExitCode)" }
+          if (-not (Test-Path "$dir\current.txt")) { throw "the wizard did not install the app" }
+          $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
+          $null = $wc.DownloadString("http://127.0.0.1:8765/api/session")
+          Write-Host "Server answering after the wizard."
+          $link = Join-Path ([Environment]::GetFolderPath("Startup")) "Traffic Analysis Workbench.lnk"
+          if (-not (Test-Path $link)) { throw "sign-in start not set up" }
+          $u = Start-Process -Wait -PassThru "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
+          Start-Sleep -Seconds 5
+          if (Test-Path $link) { throw "uninstall left the sign-in start" }
+          if (Test-Path "$dir\current.txt") { throw "uninstall left the program" }
+          if (-not (Test-Path "$env:USERPROFILE\TrafficData")) { throw "uninstall removed the data folder" }
+          Write-Host "Uninstall removed the program and kept the data."
       - uses: actions/upload-artifact@v4
         with:
           name: TrafficWorkbench-${{ steps.py.outputs.folder }}
           path: dist/${{ steps.py.outputs.folder }}
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TrafficWorkbench-Setup-${{ steps.py.outputs.version }}
+          path: setup/*.exe
+          compression-level: 0
           retention-days: 90

@@ -1,0 +1,180 @@
+; Setup wizard for the Traffic Analysis Workbench (Inno Setup 6).
+; Wraps the offline bundle: the wizard asks for the folders, unpacks the bundle to a temporary folder and runs
+; install.ps1 from it, so the checks, the backup before an update and the automatic start are the same as a
+; manual install. No administrator rights are needed. Nothing is downloaded.
+;
+; Built by .github/workflows/bundle.yml:
+;   iscc /DBundleDir=<unpacked bundle folder> /DAppVersion=<version> /DOutDir=<folder> packaging\setup.iss
+
+#ifndef BundleDir
+  #error Pass /DBundleDir=<unpacked bundle folder>
+#endif
+#ifndef AppVersion
+  #define AppVersion "0.0.0"
+#endif
+#ifndef OutDir
+  #define OutDir "dist"
+#endif
+
+[Setup]
+AppId={{6C1E3F0A-7A51-4E0B-9C8E-1F2B7D9A4E21}
+AppName=Traffic Analysis Workbench
+AppVersion={#AppVersion}
+AppVerName=Traffic Analysis Workbench {#AppVersion}
+DefaultDirName={localappdata}\TrafficWorkbench
+DefaultGroupName=Traffic Analysis Workbench
+DisableProgramGroupPage=yes
+PrivilegesRequired=lowest
+OutputDir={#OutDir}
+OutputBaseFilename=TrafficWorkbench-Setup-{#AppVersion}
+; The bundle is mostly compressed wheels already; fast compression keeps the build and the install quick.
+Compression=lzma2/fast
+SolidCompression=no
+DiskSpanning=no
+WizardStyle=modern
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+UninstallDisplayName=Traffic Analysis Workbench
+SetupLogging=yes
+
+[Tasks]
+Name: "autostart"; Description: "Start the Workbench when I sign in to Windows (recommended)"
+
+[Files]
+; Unpacked to the temporary folder, which Setup removes when it ends.
+Source: "{#BundleDir}\*"; DestDir: "{tmp}\bundle"; Flags: recursesubdirs createallsubdirs ignoreversion
+
+[Icons]
+Name: "{autoprograms}\Traffic Analysis Workbench"; Filename: "http://127.0.0.1:8765"; Comment: "Open the Workbench in the browser"
+Name: "{autoprograms}\Traffic Analysis Workbench - speed check"; Filename: "{app}\speed-check.cmd"; WorkingDir: "{app}"
+
+[Run]
+Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Description: "Start the Workbench now"; Flags: postinstall nowait runminimized skipifsilent; Tasks: not autostart; Check: InstallOK
+Filename: "http://127.0.0.1:8765"; Description: "Open the Workbench now"; Flags: postinstall shellexec nowait skipifsilent; Check: InstallOK
+
+[UninstallRun]
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\autostart.ps1"" -Mode remove -Target ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveAutostart"
+
+[UninstallDelete]
+; Only the program. The data and backup folders are never removed.
+Type: filesandordirs; Name: "{app}\app-*"
+Type: filesandordirs; Name: "{app}\python*"
+Type: filesandordirs; Name: "{app}\wheelhouse"
+Type: filesandordirs; Name: "{app}\models"
+Type: filesandordirs; Name: "{app}\logs"
+Type: files; Name: "{app}\*.cmd"
+Type: files; Name: "{app}\current.txt"
+Type: files; Name: "{app}\previous.txt"
+Type: files; Name: "{app}\autostart.ps1"
+Type: dirifempty; Name: "{app}"
+
+[Code]
+var
+  FoldersPage: TInputDirWizardPage;
+  Failed: Boolean;
+  LogPath: String;
+
+function InstallOK: Boolean;
+begin
+  Result := not Failed;
+end;
+
+procedure InitializeWizard;
+begin
+  FoldersPage := CreateInputDirPage(wpSelectDir, 'Data folders',
+    'Where should the Workbench keep its data and backups?',
+    'Missions, results and evidence go in the data folder. Pick a drive with plenty of space. ' +
+    'The backup folder gets a copy of the data before every update and every night; another drive is best. ' +
+    'Your source images and videos are only read, never moved.',
+    False, '');
+  FoldersPage.Add('Data folder:');
+  FoldersPage.Add('Backup folder (leave empty for no backups):');
+  FoldersPage.Values[0] := GetPreviousData('DataDir', ExpandConstant('{%USERPROFILE}\TrafficData'));
+  FoldersPage.Values[1] := GetPreviousData('BackupDir', ExpandConstant('{%USERPROFILE}\TrafficBackups'));
+end;
+
+procedure RegisterPreviousData(PreviousDataKey: Integer);
+begin
+  SetPreviousData(PreviousDataKey, 'DataDir', FoldersPage.Values[0]);
+  SetPreviousData(PreviousDataKey, 'BackupDir', FoldersPage.Values[1]);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = FoldersPage.ID then
+  begin
+    if Trim(FoldersPage.Values[0]) = '' then
+    begin
+      MsgBox('Please choose a data folder.', mbError, MB_OK);
+      Result := False;
+    end
+    else if DirExists(ExpandConstant('{app}\app-{#AppVersion}')) then
+    begin
+      MsgBox('Version {#AppVersion} is already installed in ' + ExpandConstant('{app}') + '.' + #13#10 +
+             'Open the Workbench from the Start menu, or install a newer version.', mbInformation, MB_OK);
+      Result := False;
+    end;
+  end;
+end;
+
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
+  MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+var
+  Backup: String;
+begin
+  Backup := FoldersPage.Values[1];
+  if Trim(Backup) = '' then Backup := '(no backups)';
+  Result := MemoDirInfo + NewLine + NewLine +
+    'Data folder:' + NewLine + Space + FoldersPage.Values[0] + NewLine + NewLine +
+    'Backup folder:' + NewLine + Space + Backup + NewLine + NewLine + MemoTasksInfo + NewLine + NewLine +
+    'Installing takes a few minutes. Nothing is downloaded.';
+end;
+
+function Quote(S: String): String;
+begin
+  StringChangeEx(S, '''', '''''', True);
+  Result := '''' + S + '''';
+end;
+
+procedure RunInstaller;
+var
+  Log, Cmd, Auto: String;
+  Code: Integer;
+begin
+  ForceDirectories(ExpandConstant('{app}\logs'));
+  Log := ExpandConstant('{app}\logs\install.log');
+  LogPath := Log;
+  if WizardIsTaskSelected('autostart') then Auto := 'signin' else Auto := 'none';
+  Cmd := '$ErrorActionPreference=''Stop''; try { & ' + Quote(ExpandConstant('{tmp}\bundle\install.ps1')) +
+    ' -Target ' + Quote(ExpandConstant('{app}')) + ' -Data ' + Quote(FoldersPage.Values[0]) +
+    ' -BackupDir ' + Quote(FoldersPage.Values[1]) + ' -AutoStart ' + Auto +
+    ' *> ' + Quote(Log) + '; exit 0 } catch { $_ | Out-File -Append -Encoding utf8 ' + Quote(Log) + '; exit 1 }';
+  WizardForm.StatusLabel.Caption := 'Checking the files, installing Python and the models, and testing the install. This takes a few minutes...';
+  WizardForm.ProgressGauge.Style := npbstMarquee;
+  try
+    if not Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "' + Cmd + '"', '',
+                SW_HIDE, ewWaitUntilTerminated, Code) then
+      Code := -1;
+  finally
+    WizardForm.ProgressGauge.Style := npbstNormal;
+  end;
+  if Code <> 0 then
+  begin
+    MsgBox('The installation did not finish (code ' + IntToStr(Code) + ').' + #13#10 + #13#10 +
+           'Details are in:' + #13#10 + Log + #13#10 + #13#10 +
+           'If a version was already installed, it is still in use.', mbError, MB_OK);
+    Failed := True;
+  end;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and Failed then
+    WizardForm.FinishedLabel.Caption := 'The installation did not finish. Details are in ' + LogPath + '.';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then RunInstaller;
+end;
