@@ -5,6 +5,7 @@ import SearchTab from "./Search";
 import EventsTab from "./Events";
 import PlatesTab from "./Plates";
 import LearningTab from "./Learning";
+import NightReviewTab from "./NightReview";
 
 export type SavedQuery = { filter: Filter; sort: string; desc: boolean };
 export const queryKey = (mid: string) => `twb-query-${mid}`;
@@ -32,7 +33,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   const isVideo = m.config.input_type === "video";
   const tabs = [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
     ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []),
-    ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["views", "Camera views"], ["learning", "Learning"]])];
+    ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"], ["learning", "Learning"]])];
   return (
     <div className="page">
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -44,6 +45,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
       </nav>
       {tab === "overview" && <Overview m={m} reload={load} />}
       {tab === "results" && !isVideo && <Results missionId={missionId} />}
+      {tab === "night" && !isVideo && <NightReviewTab missionId={missionId} />}
       {tab === "views" && !isVideo && <Views missionId={missionId} />}
       {tab === "learning" && !isVideo && <LearningTab missionId={missionId} job={m.job} reload={load} />}
       {tab === "plates" && m.config.mode === "plate_recognition" && <PlatesTab missionId={missionId} />}

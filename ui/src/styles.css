@@ -164,3 +164,17 @@ details.spec > summary { cursor: pointer; margin: 8px 0; }
 ul.reasons { padding-left: 18px; font-size: 12.5px; color: var(--warn); }
 .card.evalonly { border-color: var(--warn); border-style: dashed; }
 @media (max-width: 1100px) { .plate { grid-template-columns: 150px minmax(0, 1fr); } }
+
+/* night review grid */
+.nightgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 8px; }
+.ntile { position: relative; border: 2px solid var(--line); border-radius: var(--radius); padding: 4px; background: var(--panel-2); cursor: pointer; }
+.ntile.on { border-color: var(--accent); }
+.ntile img { display: block; height: 120px; max-width: 100%; margin: 0 auto; object-fit: contain; background: #000; border-radius: 3px; }
+.ntile .nmeta { display: flex; justify-content: space-between; gap: 4px; font-size: 12px; margin-top: 3px; }
+.ntile .nflags { font-size: 11px; color: var(--warn); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ntile .nstatus { position: absolute; top: 6px; left: 6px; font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--panel); border: 1px solid var(--line); }
+.ntile.s-confirmed { border-color: var(--ok); }
+.ntile.s-rejected, .ntile.s-persistent_light { opacity: 0.55; }
+.ntile.s-confirmed.on, .ntile.s-rejected.on, .ntile.s-persistent_light.on { border-color: var(--accent); opacity: 1; }
+.ntile .nact { margin-top: 4px; justify-content: center; }
+.ntile .nact button { padding: 2px 10px; }

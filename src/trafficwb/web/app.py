@@ -640,6 +640,23 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
         from ..night_service import NightService
         return {"reanalysed": NightService(m).refresh(with_decisions=True)["images_analysed"]}
 
+    @app.get("/api/missions/{mission_id}/night/queue")
+    def night_queue(m: Mission = Depends(mission), view: int | None = None, band: str | None = None,
+                    flag: str | None = None, status: str = "open", offset: int = Query(0, ge=0),
+                    limit: int = Query(60, ge=1, le=300)):
+        """Night candidates from every night or dusk image, most uncertain first, for fast review."""
+        from ..night_review import NightReview
+        try:
+            return NightReview(m).queue(view, band or None, flag or None, status, offset, limit)
+        except ValueError as exc:
+            raise ApiError(400, "bad_filter", str(exc)) from None
+
+    @app.get("/api/missions/{mission_id}/night/accuracy")
+    def night_accuracy(m: Mission = Depends(mission), view: int | None = None):
+        """Share of answered night candidates that were vehicles, overall and by band, kind, score and flag."""
+        from ..night_review import NightReview
+        return NightReview(m).accuracy(view)
+
     @app.get("/api/missions/{mission_id}/views/{view_id}/regions")
     def regions_get(view_id: int, m: Mission = Depends(mission)):
         r = m.con.execute("SELECT ref_width, ref_height FROM camera_view WHERE id=?", (view_id,)).fetchone()
@@ -747,17 +764,21 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
         return {"files": [str(p) for p in paths]}
 
     @app.get("/api/missions/{mission_id}/crops/{version_id}")
-    def crop(version_id: int, box: str, m: Mission = Depends(mission), h: int = Query(110, ge=32, le=400)):
+    def crop(version_id: int, box: str, m: Mission = Depends(mission), h: int = Query(110, ge=32, le=400),
+             context: float = Query(0.0, ge=0.0, le=60.0), mark: bool = False):
+        """context: extra margin around the box in pixels of the source image (at least this much on each side);
+        mark draws the original box, so a small light stays findable in a wider view."""
         try:
             x1, y1, x2, y2 = (float(v) for v in box.split(","))
         except ValueError:
             raise ApiError(400, "bad_box", "box must be x1,y1,x2,y2") from None
+        bx = (x1, y1, x2, y2)
         path = ViewService(m)._path(_vid(m, version_id))
         if not path.is_file():
             raise ApiError(410, "source_missing", f"{path.name} is no longer in the source folder.")
         img = read_image(path)
         H, W = img.shape[:2]
-        pw, ph = (x2 - x1) * 0.15 + 4, (y2 - y1) * 0.15 + 4
+        pw, ph = max((x2 - x1) * 0.15 + 4, context), max((y2 - y1) * 0.15 + 4, context)
         a, b = max(0, int(x1 - pw)), max(0, int(y1 - ph))
         c, d = min(W, int(x2 + pw)), min(H, int(y2 + ph))
         if c <= a or d <= b:
@@ -766,6 +787,11 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
         scale = h / part.shape[0]
         part = cv2.resize(part, (max(1, int(part.shape[1] * scale)), h),
                           interpolation=cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA)
+        if mark:
+            m_ = 3  # outline drawn just outside the box so the light itself stays visible
+            p1 = (int((bx[0] - a) * scale) - m_, int((bx[1] - b) * scale) - m_)
+            p2 = (int((bx[2] - a) * scale) + m_, int((bx[3] - b) * scale) + m_)
+            cv2.rectangle(part, p1, p2, (0, 200, 255), 1, cv2.LINE_AA)
         ok, buf = cv2.imencode(".jpg", part, [cv2.IMWRITE_JPEG_QUALITY, 88])
         return Response(buf.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
 

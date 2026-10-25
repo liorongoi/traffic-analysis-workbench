@@ -471,3 +471,60 @@ def test_nearest_view_for_images_left_out_of_views(mission):
     view = ViewService(m).views()[0]["id"]
     assert ns.nearest_view(v) == view
     assert ns.nearest_view(v, min_similarity=1.01) is None
+
+
+def test_night_review_queue_and_accuracy(mission):
+    from trafficwb.night_review import NightReview
+    m, src = _night_mission(mission)
+    Processor(m, RedBoxDetector()).process_all()
+    nr = NightReview(m)
+    q = nr.queue()
+    assert q["total"] >= 3 and all(it["status"] == "unresolved" for it in q["items"])
+    dist = [round(abs((it["score"] or 0) - 0.5), 2) for it in q["items"]]
+    assert dist == sorted(dist)                                # most uncertain first
+    assert all(it["condition"] in ("night", "dusk") for it in q["items"])
+    acc = nr.accuracy()
+    assert acc["overall"]["answered"] == 0 and acc["overall"]["vehicle_share"] is None
+    assert acc["overall"]["open"] == q["total"]
+    rs = ReviewService(m)
+    a, b, c = q["items"][:3]
+    rs.confirm_candidate(a["version_id"], a["uid"], "lior")
+    rs.confirm_candidate(b["version_id"], b["uid"], "lior")
+    rs.reject_candidate(c["version_id"], c["uid"], "lior")
+    acc = nr.accuracy()
+    assert (acc["overall"]["vehicle"], acc["overall"]["not_vehicle"]) == (2, 1)
+    assert acc["overall"]["vehicle_share"] == round(2 / 3, 3)
+    assert acc["overall"]["open"] == q["total"] - 3
+    assert sum(r["answered"] for r in acc["by_band"].values()) == 3
+    assert nr.queue()["total"] == q["total"] - 3
+    answered = nr.queue(status="answered")
+    assert answered["total"] == 3 and {it["status"] for it in answered["items"]} == {"confirmed", "rejected"}
+    band = a["band"] or "none"
+    assert all((it["band"] or "none") == band for it in nr.queue(band=band, status="all")["items"])
+    assert nr.queue(flag="no_such_flag")["total"] == 0
+    with pytest.raises(ValueError):
+        nr.queue(status="maybe")
+
+
+def test_night_review_api(mission, tmp_path):
+    from fastapi.testclient import TestClient
+    from trafficwb.web.app import create_app
+    m, src = _night_mission(mission)
+    Processor(m, RedBoxDetector()).process_all()
+    h = {"X-TWB": "1"}
+    c = TestClient(create_app(tmp_path / "data", start_monitoring=False, stability_seconds=0))
+    c.post("/api/setup", json={"username": "lior", "display_name": "Lior", "password": "longpassword"}, headers=h)
+    c.post("/api/login", json={"username": "lior", "password": "longpassword"}, headers=h)
+    r = c.get(f"/api/missions/{m.id}/night/queue?limit=5", headers=h)
+    assert r.status_code == 200, r.text
+    q = r.json()
+    assert q["total"] >= 3 and len(q["items"]) <= 5
+    it = q["items"][0]
+    box = ",".join(f"{v:.1f}" for v in it["box"])
+    crop = c.get(f"/api/missions/{m.id}/crops/{it['version_id']}?box={box}&h=120&context=40&mark=true", headers=h)
+    assert crop.status_code == 200 and crop.headers["content-type"] == "image/jpeg"
+    r = c.post(f"/api/missions/{m.id}/items/{it['version_id']}/candidates/{it['uid']}", json={"action": "confirm"}, headers=h)
+    assert r.status_code == 200, r.text
+    acc = c.get(f"/api/missions/{m.id}/night/accuracy", headers=h).json()
+    assert acc["overall"]["vehicle"] == 1
+    assert c.get(f"/api/missions/{m.id}/night/queue?status=nope", headers=h).status_code == 400

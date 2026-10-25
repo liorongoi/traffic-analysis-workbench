@@ -93,7 +93,7 @@ I looked at 36 random candidates before and after, and at four whole night image
 
 ## Not tested
 
-- Accuracy against labelled night images. It needs labelled images from your cameras (the night evaluation plan, NGT-06).
+- Accuracy against labelled night images. The Night review tab now measures it from your answers (share of candidates that were vehicles, by distance band and flag), but no answers exist yet. Missed vehicles are not measured.
 - The default band widths (24 px and 60 px) are a first guess for this camera. They should be checked per camera.
 - Colour cameras at night (the sample switches to infrared).
 

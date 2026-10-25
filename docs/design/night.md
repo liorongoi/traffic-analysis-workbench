@@ -86,6 +86,13 @@ Lights inside a detector box (expanded by 15%) support that detection and are no
 - **Reopening:** a decision on an approved image reopens it.
 - **Results table:** shows vehicles (detected + added + confirmed from lights), confirmed-from-lights, and unresolved candidates as min–max, each in its own column. The export carries the same columns. In the objects table, every candidate has its own row with an evidence level, light ids, count range and alternatives.
 
+## Night review screen and accuracy (NGT-06, part)
+
+- **Night review tab** (image missions): candidates from every night or dusk image as a grid of crops, most uncertain first (score closest to 0.5), so a few minutes of answers teach the most. Filters: camera view, distance band, flag, and answered or not.
+- **Keys:** V vehicle, N or Del not a vehicle, F fixed light, U undo, arrows move, Enter opens the whole image. Each crop shows a wider view than the light itself, with the candidate marked by a thin box.
+- **Answers are the normal candidate decisions.** Nothing new is stored, so they feed "decisions at the same place" (step 6a) and the learning dataset exactly like answers given on the investigation screen.
+- **Accuracy** is the share of answered candidates that were vehicles (fixed lights count as not vehicles), overall and by distance band, score range, kind and flag. Unanswered candidates are counted as open, never guessed. This measures how often a candidate is right. It does not measure missed vehicles: those need vehicles drawn by the operator on the image.
+
 ## Re-analysis
 
 Images are regrouped when their view's background or regions change. Older groups stay in the database and only the latest analysis is current.
