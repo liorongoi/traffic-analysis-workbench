@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 
 COND_ALGO = "cond-v1"
+GROUP_ALGO = "groups-v2"   # v2: soft glow without a bright core is scored down
 
 # Proposed thresholds, chosen from the Fintraffic sample; operator-adjustable later.
 MONO_SATURATION = 5.0      # mean HSV saturation below this: infrared / monochrome
@@ -162,6 +163,11 @@ class BackgroundParams:
     rejected_min: int = 2           # "not a vehicle" this many times here (and more than twice the confirmations)
     rejected_factor: float = 0.4
     confirmed_min: int = 2          # vehicles confirmed here this many times: keep the light as a candidate
+    # soft glow: light on the road or under a gantry, wet-lens blobs, lit lane lines. Never clipped, and only a
+    # little brighter than its surroundings. Car lights have a clipped or near-clipped core and stand out.
+    soft_peak_below: float = 250.0
+    soft_contrast_below: float = 35.0
+    soft_factor: float = 0.4
 
     def record(self) -> dict:
         return dict(self.__dict__)
@@ -406,6 +412,28 @@ def reflection_score(i: int, lights: list[Light], wm: WidthMap | None, p: Groupi
         if abs(lj.cx - li.cx) <= p.reflection_dx * w and 0 < li.cy - lj.cy <= p.reflection_dy * w:
             return 0.7 if li.elongation >= 1.5 else 0.3
     return 0.0
+
+
+def glow_contrast(gray: np.ndarray, box) -> tuple[float, float]:
+    """Peak inside the box, and mean inside minus the median of a ring around it (half the box size, at least 4 px)."""
+    H, W = gray.shape[:2]
+    x1, y1, x2, y2 = (int(round(v)) for v in box)
+    x1, y1 = max(0, min(W - 1, x1)), max(0, min(H - 1, y1))
+    x2, y2 = max(x1 + 1, min(W, x2)), max(y1 + 1, min(H, y2))
+    inner = gray[y1:y2, x1:x2].astype(np.float32)
+    pad = max(4, int(0.5 * max(x2 - x1, y2 - y1)))
+    a, b, c, d = max(0, x1 - pad), max(0, y1 - pad), min(W, x2 + pad), min(H, y2 + pad)
+    outer = gray[b:d, a:c].astype(np.float32)
+    ring = np.ones(outer.shape, bool)
+    ring[y1 - b:y2 - b, x1 - a:x2 - a] = False
+    ring_med = float(np.median(outer[ring])) if ring.any() else 0.0
+    return float(inner.max()), float(inner.mean()) - ring_med
+
+
+def is_soft_glow(gray: np.ndarray, box, p: BackgroundParams | None = None) -> bool:
+    p = p or BackgroundParams()
+    peak, contrast = glow_contrast(gray, box)
+    return peak < p.soft_peak_below and contrast < p.soft_contrast_below
 
 
 def is_glare(li: Light, lp: LightParams | None = None) -> bool:

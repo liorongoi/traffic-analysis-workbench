@@ -9,7 +9,7 @@ import pytest
 from trafficwb.detect import Detection
 from trafficwb.export import IMAGE_COLUMNS, OBJECT_COLUMNS, build_tables
 from trafficwb.ingest import cycle
-from trafficwb.night import (BackgroundParams, BandParams, Light, WidthMap, band_at, band_rows, build_background,
+from trafficwb.night import (GROUP_ALGO, BackgroundParams, glow_contrast, is_soft_glow, BandParams, Light, WidthMap, band_at, band_rows, build_background,
                              covered_by, group_lights, is_glare, light_components, measure_condition, off_vehicle_map,
                              on_vehicle_map, vehicle_map, map_distance)
 from trafficwb.night_service import NightService
@@ -528,3 +528,29 @@ def test_night_review_api(mission, tmp_path):
     acc = c.get(f"/api/missions/{m.id}/night/accuracy", headers=h).json()
     assert acc["overall"]["vehicle"] == 1
     assert c.get(f"/api/missions/{m.id}/night/queue?status=nope", headers=h).status_code == 400
+
+
+def test_soft_glow_without_bright_core_is_told_from_car_lights():
+    g = np.full((120, 120), 120, np.uint8)
+    cv2.circle(g, (30, 30), 6, 255, -1)                       # car light: clipped core, stands out
+    cv2.GaussianBlur(g, (5, 5), 0, dst=g)
+    g[50:, :] = 215                                           # lit road surface
+    g[70:90, 60:100] = 240                                    # light pool on it: never clipped, barely brighter
+    peak, contrast = glow_contrast(g, (24, 24, 37, 37))
+    assert peak >= 250 and contrast > 60 and not is_soft_glow(g, (24, 24, 37, 37))
+    peak, contrast = glow_contrast(g, (60, 70, 100, 90))
+    assert peak < 250 and contrast < 35 and is_soft_glow(g, (60, 70, 100, 90))
+    assert glow_contrast(g, (-5, -5, 3, 3))[0] > 0           # boxes at the edge are clipped, not an error
+
+
+def test_newer_grouping_rules_trigger_reanalysis(mission):
+    m, src = _night_mission(mission)
+    Processor(m, RedBoxDetector()).process_all()
+    ns = NightService(m)
+    assert {r[0] for r in m.con.execute("SELECT DISTINCT algo FROM light_group")} == {GROUP_ALGO}
+    assert ns.refresh(with_decisions=True)["images_analysed"] == 0
+    m.con.execute("UPDATE light_group SET algo='groups-v1'")    # as left by an older version
+    n = ns.refresh()["images_analysed"]
+    assert n > 0
+    v = m.con.execute("SELECT source_version_id FROM light_group LIMIT 1").fetchone()[0]
+    assert {g["algo"] for g in ns.current_groups(v)} == {GROUP_ALGO}

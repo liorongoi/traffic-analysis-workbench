@@ -18,7 +18,7 @@ import sqlite3
 import cv2
 import numpy as np
 
-from .night import (COND_ALGO, Background, BackgroundParams, BandParams, Condition, GroupingParams, Light, LightParams,
+from .night import (COND_ALGO, GROUP_ALGO, is_soft_glow, Background, BackgroundParams, BandParams, Condition, GroupingParams, Light, LightParams,
                     WidthMap, band_rows, build_background, covered_by, dumps, group_lights, light_components,
                     map_distance, off_vehicle_map, on_vehicle_map, png, unpng, vehicle_map)
 from .regions import RegionSet
@@ -43,7 +43,7 @@ class NightService:
         self.gp = grouping or GroupingParams()
 
     def describe(self) -> dict:
-        return {"condition": COND_ALGO, "lights": self.lp.record(), "background": self.bp.record(),
+        return {"condition": COND_ALGO, "groups": GROUP_ALGO, "lights": self.lp.record(), "background": self.bp.record(),
                 "grouping": self.gp.record(), "bands": BandParams().record() | {"per_view": "view_night_setting"}, "candidate_min_score": MIN_CANDIDATE_SCORE,
                 "enhancement": "none (original pixels only)"}
 
@@ -297,6 +297,7 @@ class NightService:
                 self._insert(version_id, bg_id, "single", [li.id], li.box, 0.0, 0.0, 1, None, None, 0, 0, 0, [], fl, now,
                              None, r[1])
                 rows += 1
+        gray = None   # read only when a group needs it
         for g in group_lights(live, wm, self.gp, bp):
             ids = [live[i].id for i in g.members]
             cx, cy = (g.box[0] + g.box[2]) / 2, (g.box[1] + g.box[3]) / 2
@@ -320,6 +321,13 @@ class NightService:
                 g.score = round(g.score * self.bp.off_road_factor, 3)
                 g.flags.append("no_vehicle_seen_here_by_day")
                 g.alternatives.append("no vehicle has been seen at this place in daylight")
+            if "glare" not in g.flags:
+                if gray is None:
+                    gray = self._gray(version_id)
+                if gray is not None and is_soft_glow(gray, g.box, self.bp):
+                    g.score = round(g.score * self.bp.soft_factor, 3)
+                    g.flags.append("soft_glow_no_bright_core")
+                    g.alternatives.insert(0, "light on the road surface, a lit lane line or a drop on the lens")
             rej, conf = self.decided_here(places, version_id, g.box)
             if conf >= self.bp.confirmed_min and conf >= rej:
                 g.score = round(max(g.score, 0.4), 3)
@@ -337,15 +345,26 @@ class NightService:
             rows += 1
         return rows
 
+    def _gray(self, version_id: int) -> np.ndarray | None:
+        """Grey image for measurements; None when the source file is gone (the check is then skipped)."""
+        from .views import ViewService, read_image
+        path = ViewService(self.m)._path(version_id)
+        if not path.is_file():
+            return None
+        try:
+            return cv2.cvtColor(read_image(path), cv2.COLOR_BGR2GRAY)
+        except Exception:
+            return None
+
     def _insert(self, version_id, bg_id, kind, ids, box, score, refl, explained, inside, cov, cand, cmin, cmax, alts,
                 flags, now, band=None, recurrence=None):
         self.con.execute(
             "INSERT INTO light_group(source_version_id,background_model_id,region_revision_id,kind,member_ids,x1,y1,x2,y2,score,reflection,"
             "explained_by_background,in_region,covered_by_detection,is_candidate,count_min,count_max,alternatives,flags,"
-            "created_at,band,recurrence,setting_id,decision_rev) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "created_at,band,recurrence,setting_id,decision_rev,algo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (version_id, bg_id, self._region_rev, kind, dumps(sorted(ids)), *(float(v) for v in box), float(score), float(refl), explained,
              inside, cov, cand, cmin, cmax, dumps(alts), dumps(flags), now, band,
-             None if recurrence is None else round(float(recurrence), 3), self._setting_id, self._decision_rev))
+             None if recurrence is None else round(float(recurrence), 3), self._setting_id, self._decision_rev, GROUP_ALGO))
 
     def _region_revision(self, view_id: int | None) -> int | None:
         if view_id is None:
@@ -358,12 +377,12 @@ class NightService:
         if last is None:
             return []
         latest = self.con.execute(
-            "SELECT background_model_id, region_revision_id, setting_id, decision_rev FROM light_group "
+            "SELECT background_model_id, region_revision_id, setting_id, decision_rev, algo FROM light_group "
             "WHERE source_version_id=? ORDER BY id DESC LIMIT 1", (version_id,)).fetchone()
         return self.con.execute(
             "SELECT * FROM light_group WHERE source_version_id=? AND background_model_id IS ? AND region_revision_id IS ? "
-            "AND setting_id IS ? AND decision_rev IS ? AND created_at=? ORDER BY id",
-            (version_id, latest[0], latest[1], latest[2], latest[3], last)).fetchall()
+            "AND setting_id IS ? AND decision_rev IS ? AND algo IS ? AND created_at=? ORDER BY id",
+            (version_id, latest[0], latest[1], latest[2], latest[3], latest[4], last)).fetchall()
 
     def refresh(self, with_decisions: bool = False) -> dict:
         """Bring backgrounds and groups up to date for all processed dusk and night images.
@@ -391,12 +410,12 @@ class NightService:
             for v in self._versions(view_id, cond):
                 if with_decisions:
                     done = self.con.execute("SELECT 1 FROM light_group WHERE source_version_id=? AND background_model_id=? "
-                                            "AND region_revision_id IS ? AND setting_id IS ? AND decision_rev IS ? LIMIT 1",
-                                            (v, bg["id"], region_rev, setting, decided)).fetchone()
+                                            "AND region_revision_id IS ? AND setting_id IS ? AND decision_rev IS ? AND algo IS ? LIMIT 1",
+                                            (v, bg["id"], region_rev, setting, decided, GROUP_ALGO)).fetchone()
                 else:
                     done = self.con.execute("SELECT 1 FROM light_group WHERE source_version_id=? AND background_model_id=? "
-                                            "AND region_revision_id IS ? AND setting_id IS ? LIMIT 1",
-                                            (v, bg["id"], region_rev, setting)).fetchone()
+                                            "AND region_revision_id IS ? AND setting_id IS ? AND algo IS ? LIMIT 1",
+                                            (v, bg["id"], region_rev, setting, GROUP_ALGO)).fetchone()
                 if done or not self.lights(v):
                     continue
                 self.con.execute("BEGIN")
@@ -407,8 +426,8 @@ class NightService:
         # there is one (flagged), otherwise without background or regions (flagged).
         for (v,) in self.con.execute(
                 "SELECT c.source_version_id FROM image_condition c WHERE c.condition IN ('night','dusk') AND NOT EXISTS "
-                "(SELECT 1 FROM light_group g WHERE g.source_version_id=c.source_version_id) AND EXISTS (SELECT 1 FROM "
-                "run_item i WHERE i.source_version_id=c.source_version_id AND i.processing_state='done')").fetchall():
+                "(SELECT 1 FROM light_group g WHERE g.source_version_id=c.source_version_id AND g.algo IS ?) AND EXISTS (SELECT 1 FROM "
+                "run_item i WHERE i.source_version_id=c.source_version_id AND i.processing_state='done')", (GROUP_ALGO,)).fetchall():
             if vs.current_view(v) is None and self.lights(v):
                 self.con.execute("BEGIN")
                 self.analyse(v, None)

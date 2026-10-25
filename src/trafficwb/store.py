@@ -687,6 +687,9 @@ ALTER TABLE light_group ADD COLUMN setting_id INTEGER;     -- view_night_setting
     10: """
 ALTER TABLE light_group ADD COLUMN decision_rev INTEGER;   -- newest operator candidate decision in the view that was used
 """,
+    11: """
+ALTER TABLE light_group ADD COLUMN algo TEXT;              -- grouping rules version; a newer one triggers re-analysis
+""",
 }
 
 

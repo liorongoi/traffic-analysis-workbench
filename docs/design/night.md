@@ -57,6 +57,10 @@ Lights inside a detector box (expanded by 15%) support that detection and are no
 
    An image's own decisions are never counted for itself. Processing runs apply new decisions to the view's other images (`refresh(with_decisions=True)`, using `light_group.decision_rev`); so does the "Apply my night decisions now" button on the Camera views tab. A single decision on the investigation screen does not re-check the other images, so it stays fast.
 
+4e. **Soft glow without a bright core.** A group that is not glare, whose brightest pixel stays below 250 and whose mean is less than 35 grey levels above the median of a ring around it (half its size, at least 4 px), has its score multiplied by 0.4 and is flagged `soft_glow_no_bright_core`. This catches light pools on the road and under gantries, lit lane lines and drops on the lens. Car lights have a clipped or nearly clipped core and stand out from their surroundings. The grey image is read for this check; when the source file is gone the check is skipped. Decisions at the same place (4c) are applied after it, so "vehicles confirmed here" can lift such a group again.
+
+   On the Fintraffic sample this matched 38 of 733 candidates. By eye, 36 of them were not vehicles (light on the road, lane lines, raindrops, light under the gantry). Two were possible vehicles; they stay candidates at 0.2.
+
 4d. **Images without a camera view** (for example rain on the lens) borrow the background, width map, vehicle map, bands and decisions of the view whose signature they resemble most, when the resemblance is at least 0.6 and the size matches. They are flagged `background_from_nearest_view`, and regions are not applied to them. On the sample, two such images went from 65 candidates to 33.
 
 5. **Grouping.** The expected vehicle width at each image row is fitted from daytime car detections in the same view (`width = a·row + b`). On the sample: `0.090·row + 5.6` from 679 boxes, median error 16%. Two lights form a pair when they sit at the same height (within 25% of a vehicle width), their spacing is 35–115% of a vehicle width, and their areas differ by less than 3×. Lights closer than 20% of a vehicle width form a cluster. Without a width map no pairs are formed and every light is a single with a count range of 0–1.
@@ -95,6 +99,6 @@ Lights inside a detector box (expanded by 15%) support that detection and are no
 
 ## Re-analysis
 
-Images are regrouped when their view's background or regions change. Older groups stay in the database and only the latest analysis is current.
+Images are regrouped when their view's background, regions, distance bands or grouping rules change. The rules version is stored on each group (`light_group.algo`, now `groups-v2`), so a mission processed by an older version is re-checked at its next processing run or "Apply my night decisions now". Older groups stay in the database and only the latest analysis is current.
 
 Detections from Phase 3 keep the region membership they had when processed. A region drawn later applies to night candidates at once, but to detections only after reprocessing (planned).

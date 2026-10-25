@@ -91,6 +91,15 @@ I looked at 36 random candidates before and after, and at four whole night image
   - part of the burned-in caption.
 - The two images with no camera view (rain on the lens) have no background, so every light there is a candidate (about 22 per image).
 
+## Part 3: soft glow on the road (light pools)
+
+Light pools on the road and under gantries, lit lane lines and raindrops on the lens share one trait: they are never clipped, and they are only a little brighter than what is around them. Car lights have a clipped or nearly clipped core. Groups with a peak below 250 and less than 35 grey levels above their surroundings now score × 0.4 (flag `soft_glow_no_bright_core`).
+
+- On the sample, candidates went from 733 to 697 (78 night images): 9.4 → 8.9 per image.
+- By eye, 36 of the 38 groups it matched were not vehicles. The other two stay candidates.
+- Pools that do clip (peak ≥ 250) are not caught by this rule. Operator rejections at the place still apply to them.
+- Older missions are re-checked automatically at the next processing run, because the rules version is now stored on each group.
+
 ## Not tested
 
 - Accuracy against labelled night images. The Night review tab now measures it from your answers (share of candidates that were vehicles, by distance band and flag), but no answers exist yet. Missed vehicles are not measured.
