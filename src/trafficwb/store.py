@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import contextlib
+
 import json
 import os
 import shutil
@@ -771,6 +773,18 @@ def migrate(db_path: Path, con: sqlite3.Connection) -> int:
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+@contextlib.contextmanager
+def transaction(con: sqlite3.Connection):
+    """BEGIN ... COMMIT, rolled back when the block raises, so the connection never stays inside a transaction."""
+    con.execute("BEGIN")
+    try:
+        yield con
+    except BaseException:
+        con.execute("ROLLBACK")
+        raise
+    con.execute("COMMIT")
 
 
 def connect(path: Path) -> sqlite3.Connection:

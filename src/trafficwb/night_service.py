@@ -23,7 +23,7 @@ from .night import (COND_ALGO, GROUP_ALGO, is_soft_glow, Background, BackgroundP
                     map_distance, off_vehicle_map, on_vehicle_map, png, unpng, vehicle_map)
 from .night_learn import NightLearner, measure, vector
 from .regions import RegionSet
-from .store import Mission, utcnow
+from .store import Mission, transaction, utcnow
 
 NIGHT_CONDITIONS = ("night", "dusk")
 REBUILD_GROWTH = 0.10
@@ -435,9 +435,7 @@ class NightService:
                                             (v, bg["id"], region_rev, setting, GROUP_ALGO)).fetchone()
                 if done or not self.lights(v):
                     continue
-                self.con.execute("BEGIN")
-                self.analyse(v, bg)
-                self.con.execute("COMMIT")
+                self._analyse_tx(v, bg)
                 stats["images_analysed"] += 1
         # Dusk or night images without a view: analysed with the background of the most similar view when
         # there is one (flagged), otherwise without background or regions (flagged).
@@ -446,8 +444,16 @@ class NightService:
                 "(SELECT 1 FROM light_group g WHERE g.source_version_id=c.source_version_id AND g.algo IS ?) AND EXISTS (SELECT 1 FROM "
                 "run_item i WHERE i.source_version_id=c.source_version_id AND i.processing_state='done')", (GROUP_ALGO,)).fetchall():
             if vs.current_view(v) is None and self.lights(v):
-                self.con.execute("BEGIN")
-                self.analyse(v, None)
-                self.con.execute("COMMIT")
+                self._analyse_tx(v, None)
                 stats["images_analysed"] += 1
         return stats
+
+    def _analyse_tx(self, version_id: int, bg) -> None:
+        """Analyse one image in its own transaction. On an error nothing of it is kept, including a model
+        fitted along the way, so the cached model is dropped too."""
+        try:
+            with transaction(self.con):
+                self.analyse(version_id, bg)
+        except BaseException:
+            self.learner._cache.clear()
+            raise

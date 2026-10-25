@@ -627,3 +627,16 @@ def test_night_found_share_counts_drawn_vehicles_as_missed(mission):
     assert f["found_share"] == round((f["detector"] + 1) / (f["detector"] + 2), 3)
     assert sum(b["vehicles"] for b in f["by_band"].values()) == f["vehicles"]
     assert NightReview(m).accuracy()["found"]["drawn"] == 1
+
+
+def test_failed_analysis_leaves_no_open_transaction(mission, monkeypatch):
+    m, src = _night_mission(mission)
+    Processor(m, RedBoxDetector()).process_all()
+    ns = NightService(m)
+    m.con.execute("UPDATE light_group SET algo='groups-v1'")
+    monkeypatch.setattr(ns, "analyse", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        ns.refresh()
+    assert not m.con.in_transaction
+    monkeypatch.undo()
+    assert NightService(m).refresh()["images_analysed"] > 0

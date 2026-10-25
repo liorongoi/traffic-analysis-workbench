@@ -117,11 +117,13 @@ function Stop-Server {
   # Stopping the task ends its window but can leave the server itself running; stop whatever serves our port.
   # Processing resumes where it left off at the next start.
   $p = Get-Port
-  $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue
-  foreach ($c in $conns) {
-    $proc = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue
+  # One process can listen on both IPv4 and IPv6: stop each process once.
+  $ids = @(Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty OwningProcess -Unique)
+  foreach ($id in $ids) {
+    $proc = Get-Process -Id $id -ErrorAction SilentlyContinue
     if ($proc -and ($proc.ProcessName -like "*trafficwb*" -or $proc.ProcessName -like "python*")) {
-      Stop-Process -Id $proc.Id -Force
+      Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
       Write-Host "Stopped the server (process $($proc.Id))."
     }
   }
