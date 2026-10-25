@@ -15,7 +15,7 @@ Status: **still images (phases 0 to 4), web screens, object search, video part 1
 | `trafficwb.views`, `trafficwb.regions` | Camera views (day and night together), camera-shift detection, include and exclude areas |
 | `trafficwb.models`, `trafficwb.detect` | Verified offline model packs; vehicle detection (YOLOX-s, Apache-2.0) with tiling |
 | `trafficwb.night`, `trafficwb.night_service` | Day/dusk/night from image content, headlights and glare, learned background lights (always, often or sometimes lit at each place), distance bands, vehicle candidates at night |
-| `trafficwb.night_review` | Night review queue across images (most uncertain first) and accuracy of night candidates from operator answers |
+| `trafficwb.night_review`, `trafficwb.night_learn` | Night review queue across images (most uncertain first), accuracy of night candidates from operator answers, and learned scoring per view from those answers |
 | `trafficwb.process` | Resumable processing runs |
 | `trafficwb.interpret`, `trafficwb.attributes`, `trafficwb.search` | Typed object search: request to confirmed spec, vehicle colour with "not observable", match/possible results |
 | `trafficwb.video`, `trafficwb.tracker`, `trafficwb.video_process`, `trafficwb.video_review` | Video by frame timestamps in resumable chunks, vehicle tracking, one event per appearance, event review, clips |

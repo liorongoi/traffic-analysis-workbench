@@ -690,6 +690,25 @@ ALTER TABLE light_group ADD COLUMN decision_rev INTEGER;   -- newest operator ca
     11: """
 ALTER TABLE light_group ADD COLUMN algo TEXT;              -- grouping rules version; a newer one triggers re-analysis
 """,
+    12: """
+ALTER TABLE light_group ADD COLUMN features TEXT;          -- measurements used by learned night scoring (JSON)
+ALTER TABLE light_group ADD COLUMN model_id INTEGER;       -- night_light_model row that scored it; NULL: rules only
+CREATE TABLE night_light_model (
+  id INTEGER PRIMARY KEY,
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  decision_rev INTEGER,             -- newest operator candidate decision in the view when fitted
+  created_at TEXT NOT NULL,
+  n_pos INTEGER NOT NULL,           -- answers: vehicle
+  n_neg INTEGER NOT NULL,           -- answers: not a vehicle or fixed light
+  auc_model REAL,                   -- cross-validated, folds split by image
+  auc_rules REAL,                   -- rule score on the same held-out answers
+  applied INTEGER NOT NULL,         -- 1 when the model replaces the rule score
+  reason TEXT NOT NULL,
+  params TEXT NOT NULL,
+  model TEXT                        -- coefficients (JSON) when applied
+);
+CREATE INDEX ix_night_model_view ON night_light_model(view_id, decision_rev);
+""",
 }
 
 

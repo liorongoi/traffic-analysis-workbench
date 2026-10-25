@@ -100,6 +100,14 @@ Light pools on the road and under gantries, lit lane lines and raindrops on the 
 - Pools that do clip (peak ≥ 250) are not caught by this rule. Operator rejections at the place still apply to them.
 - Older missions are re-checked automatically at the next processing run, because the rules version is now stored on each group.
 
+## Part 4: learned scoring from your answers
+
+The hand-made rules are a starting point. Each camera view now learns its own scoring from the candidates you answer on the Night review tab. A small model weighs the measurements of each light group (how bright, how much it stands out, size against the vehicle width, shape, how often the place is lit, distance to the road). It is used only after at least 15 answers of each kind, and only when it ranks your answers better than the rules on images it did not learn from. The tab shows whether it is in use and why.
+
+- Sample check, with 101 candidates I labelled by eye (55 vehicles): AUC 0.91 for the model against 0.78 for the rules. So the model was used.
+- What it learned there: taller-than-wide shapes, small and dim lights are less likely vehicles; pairs, bigger and brighter lights are more likely.
+- Without answers nothing changes.
+
 ## Not tested
 
 - Accuracy against labelled night images. The Night review tab now measures it from your answers (share of candidates that were vehicles, by distance band and flag), but no answers exist yet. Missed vehicles are not measured.

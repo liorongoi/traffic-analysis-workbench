@@ -554,3 +554,56 @@ def test_newer_grouping_rules_trigger_reanalysis(mission):
     assert n > 0
     v = m.con.execute("SELECT source_version_id FROM light_group LIMIT 1").fetchone()[0]
     assert {g["algo"] for g in ns.current_groups(v)} == {GROUP_ALGO}
+
+
+def test_learned_scoring_pieces():
+    from trafficwb.night_learn import LearnParams, auc, cross_validate, fit
+    assert auc([0.9, 0.8, 0.1], [1, 1, 0]) == 1.0
+    assert auc([0.5, 0.5], [1, 0]) == 0.5
+    assert auc([0.1], [1]) is None
+    rng = np.random.default_rng(1)
+    n = 200
+    y = rng.integers(0, 2, n)
+    X = np.c_[y * 2.0 + rng.normal(0, 1, n), rng.normal(0, 1, n)]   # first column tells the classes apart
+    X[::7, 1] = np.nan                                               # missing values are filled, not fatal
+    m = fit(X, y)
+    assert auc(m.predict(X), y) > 0.85
+    groups = list(range(n))
+    a_m, a_r = cross_validate(X, y, groups, rng.random(n), LearnParams())
+    assert a_m > 0.8 and 0.3 < a_r < 0.7
+
+
+def test_learned_scoring_used_only_when_it_beats_the_rules(mission, monkeypatch):
+    import trafficwb.night_learn as nl
+    m, src = _night_mission(mission)
+    Processor(m, RedBoxDetector()).process_all()
+    rs = ReviewService(m)
+    g = m.con.execute("SELECT features FROM light_group WHERE is_candidate=1 LIMIT 1").fetchone()[0]
+    f = json.loads(g)
+    assert {"peak", "contrast", "clipped_share", "size_ratio", "recurrence", "kind", "band"} <= set(f)
+    rows = [r for r in rs.results() if r.candidate_count]
+    a, b = rows[0].source_version_id, rows[1].source_version_id
+    rs.confirm_candidate(a, rs.candidates(a)[0].uid, "lior")
+    rs.reject_candidate(b, rs.candidates(b)[0].uid, "lior")
+    ns = NightService(m)
+    view = ViewService(m).current_view(a)
+    # Too few answers: the rules stay, and the reason is kept.
+    rec = ns.learner.train(view, ns.decision_rev(view))
+    assert rec["applied"] == 0 and "needs at least" in rec["reason"]
+    # Enough answers but no better than the rules: still the rules.
+    base = nl.LearnParams
+    monkeypatch.setattr(nl, "LearnParams", lambda: base(min_each=1))
+    monkeypatch.setattr(nl, "cross_validate", lambda *a, **k: (0.70, 0.69))
+    rec = nl.NightLearner(m.con).train(view, -1)
+    assert rec["applied"] == 0 and "does not rank" in rec["reason"]
+    # Better than the rules: used on the next re-check, and every group says so.
+    monkeypatch.setattr(nl, "cross_validate", lambda *a, **k: (0.90, 0.60))
+    m.con.execute("DELETE FROM night_light_model")             # a fit is kept per decision revision; start over
+    assert NightService(m).refresh(with_decisions=True)["images_analysed"] > 0
+    c = rows[2].source_version_id
+    cur = NightService(m).current_groups(c)
+    live = [x for x in cur if not x["explained_by_background"]]
+    assert live and all(x["model_id"] is not None for x in live)
+    assert all("learned_score" in json.loads(x["flags"]) for x in live)
+    latest = NightService(m).learner.latest(view)
+    assert latest["applied"] == 1 and latest["auc_model"] == 0.90

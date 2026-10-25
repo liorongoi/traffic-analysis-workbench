@@ -11,7 +11,9 @@ type QItem = {
   recurrence: number | null; flags: string[]; alternatives: string[]; count_min: number; count_max: number; cls: string | null;
 };
 type Rate = { vehicle: number; not_vehicle: number; open: number; answered: number; vehicle_share: number | null };
-type Accuracy = { overall: Rate; by_band: Record<string, Rate>; by_kind: Record<string, Rate>;
+type Learned = { view_id: number; created_at: string; n_pos: number; n_neg: number; auc_model: number | null;
+  auc_rules: number | null; applied: number; reason: string };
+type Accuracy = { learned: Learned[]; overall: Rate; by_band: Record<string, Rate>; by_kind: Record<string, Rate>;
   by_score: Record<string, Rate>; by_flag: Record<string, Rate>; note: string };
 
 const pct = (v: number | null | undefined) => (v == null ? "–" : `${Math.round(v * 100)}%`);
@@ -42,6 +44,7 @@ export default function NightReviewTab({ missionId }: { missionId: string }) {
   const [sel, setSel] = useState(0);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   const [showAcc, setShowAcc] = useState(false);
+  const [busy, setBusy] = useState(false);
   const gridRef = useRef<HTMLDivElement>(null);
 
   // Only filters that are set go in the query: an empty view is "all views", not a view id.
@@ -71,6 +74,16 @@ export default function NightReviewTab({ missionId }: { missionId: string }) {
       if (action !== "restore") setSel((s) => Math.min(s + 1, items.length - 1));
       loadAcc();
     } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
+  };
+
+  const recheck = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await post(`/missions/${missionId}/night/apply-decisions`);
+      setMsg({ kind: "ok", text: `Re-checked ${r.reanalysed} night images with your answers.` });
+      await Promise.all([load(), loadAcc()]);
+    } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
+    finally { setBusy(false); }
   };
 
   useEffect(() => {
@@ -126,7 +139,17 @@ export default function NightReviewTab({ missionId }: { missionId: string }) {
             <div className="tablewrap"><RateTable title="Flag" rows={acc.by_flag} /></div>
           </div>
         )}
-        {acc && <p className="muted" style={{ marginBottom: 0 }}>{acc.note}</p>}
+        {acc && <p className="muted">{acc.note}</p>}
+        <div className="row">
+          <strong>Learned scoring:</strong>
+          {acc && !acc.learned.length && <span className="muted">not fitted yet. Answer at least 15 vehicles and 15 non-vehicles in a view, then re-check.</span>}
+          {acc?.learned.map((l) => {
+            const name = views.find((v) => v.id === l.view_id)?.name ?? `View ${l.view_id}`;
+            return <span key={l.view_id} className={l.applied ? "badge ok" : "badge"} title={`fitted ${l.created_at}`}>
+              {name}: {l.applied ? "in use" : "rules"} ({l.reason})</span>;
+          })}
+          <button disabled={busy} onClick={recheck}>Re-check night images with my answers</button>
+        </div>
       </div>
 
       <div className="card">

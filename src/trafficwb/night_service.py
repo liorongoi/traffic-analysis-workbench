@@ -21,6 +21,7 @@ import numpy as np
 from .night import (COND_ALGO, GROUP_ALGO, is_soft_glow, Background, BackgroundParams, BandParams, Condition, GroupingParams, Light, LightParams,
                     WidthMap, band_rows, build_background, covered_by, dumps, group_lights, light_components,
                     map_distance, off_vehicle_map, on_vehicle_map, png, unpng, vehicle_map)
+from .night_learn import NightLearner, measure, vector
 from .regions import RegionSet
 from .store import Mission, utcnow
 
@@ -41,6 +42,7 @@ class NightService:
         self.lp = light_params or LightParams()
         self.bp = bg_params or BackgroundParams()
         self.gp = grouping or GroupingParams()
+        self.learner = NightLearner(self.con)
 
     def describe(self) -> dict:
         return {"condition": COND_ALGO, "groups": GROUP_ALGO, "lights": self.lp.record(), "background": self.bp.record(),
@@ -298,6 +300,7 @@ class NightService:
                              None, r[1])
                 rows += 1
         gray = None   # read only when a group needs it
+        model = None if borrowed else self.learner.model_for(view_id, self._decision_rev)
         for g in group_lights(live, wm, self.gp, bp):
             ids = [live[i].id for i in g.members]
             cx, cy = (g.box[0] + g.box[2]) / 2, (g.box[1] + g.box[3]) / 2
@@ -321,13 +324,24 @@ class NightService:
                 g.score = round(g.score * self.bp.off_road_factor, 3)
                 g.flags.append("no_vehicle_seen_here_by_day")
                 g.alternatives.append("no vehicle has been seen at this place in daylight")
+            if gray is None:
+                gray = self._gray(version_id)
             if "glare" not in g.flags:
-                if gray is None:
-                    gray = self._gray(version_id)
                 if gray is not None and is_soft_glow(gray, g.box, self.bp):
                     g.score = round(g.score * self.bp.soft_factor, 3)
                     g.flags.append("soft_glow_no_bright_core")
                     g.alternatives.insert(0, "light on the road surface, a lit lane line or a drop on the lens")
+            road = None
+            if vmap is not None:
+                h_, w_ = vmap[1].shape
+                road = float(vmap[1][min(h_ - 1, max(0, int(cy))), min(w_ - 1, max(0, int(cx)))])
+            feats = measure(gray, g.box, [live[i] for i in g.members], wm, rec if bg else None, road, g.kind, g.band)
+            model_id = None
+            if model is not None:
+                # The view's learned model replaces the rule score (it was checked against the rules on your answers).
+                model_id = model[0]
+                g.score = round(float(model[1].predict([[np.nan if v is None else float(v) for v in vector(feats)]])[0]), 3)
+                g.flags.append("learned_score")
             rej, conf = self.decided_here(places, version_id, g.box)
             if conf >= self.bp.confirmed_min and conf >= rej:
                 g.score = round(max(g.score, 0.4), 3)
@@ -341,7 +355,8 @@ class NightService:
                 (["regions_not_applied"] if inside is None else []) + (["no_background"] if bg is None else [])
             cand = int(cov is None and inside != 0 and g.score >= MIN_CANDIDATE_SCORE)
             self._insert(version_id, bg_id, g.kind, ids, g.box, g.score, g.reflection, 0, inside, cov, cand,
-                         g.count_min if cand else 0, g.count_max if cand else 0, g.alternatives, flags, now, g.band, rec if bg else None)
+                         g.count_min if cand else 0, g.count_max if cand else 0, g.alternatives, flags, now, g.band, rec if bg else None,
+                         feats, model_id)
             rows += 1
         return rows
 
@@ -357,14 +372,16 @@ class NightService:
             return None
 
     def _insert(self, version_id, bg_id, kind, ids, box, score, refl, explained, inside, cov, cand, cmin, cmax, alts,
-                flags, now, band=None, recurrence=None):
+                flags, now, band=None, recurrence=None, features=None, model_id=None):
         self.con.execute(
             "INSERT INTO light_group(source_version_id,background_model_id,region_revision_id,kind,member_ids,x1,y1,x2,y2,score,reflection,"
             "explained_by_background,in_region,covered_by_detection,is_candidate,count_min,count_max,alternatives,flags,"
-            "created_at,band,recurrence,setting_id,decision_rev,algo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "created_at,band,recurrence,setting_id,decision_rev,algo,features,model_id) VALUES "
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (version_id, bg_id, self._region_rev, kind, dumps(sorted(ids)), *(float(v) for v in box), float(score), float(refl), explained,
              inside, cov, cand, cmin, cmax, dumps(alts), dumps(flags), now, band,
-             None if recurrence is None else round(float(recurrence), 3), self._setting_id, self._decision_rev, GROUP_ALGO))
+             None if recurrence is None else round(float(recurrence), 3), self._setting_id, self._decision_rev, GROUP_ALGO,
+             dumps(features) if features is not None else None, model_id))
 
     def _region_revision(self, view_id: int | None) -> int | None:
         if view_id is None:

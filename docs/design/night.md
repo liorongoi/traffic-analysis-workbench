@@ -61,6 +61,10 @@ Lights inside a detector box (expanded by 15%) support that detection and are no
 
    On the Fintraffic sample this matched 38 of 733 candidates. By eye, 36 of them were not vehicles (light on the road, lane lines, raindrops, light under the gantry). Two were possible vehicles; they stay candidates at 0.2.
 
+4f. **Learned scoring per view (from your answers).** Every group stores its measurements (`light_group.features`): peak, how much it stands out from a ring around it, clipped share, total light area, number of lights, width against the expected vehicle width, height/width, recurrence, distance to where vehicles drive (in vehicle widths), image row, kind and band. When a view has at least 15 answered candidates of each kind (confirmed = vehicle; rejected or fixed light = not a vehicle), a logistic model is fitted on them (`night_learn.py`). It is cross-validated with folds split by image, and its AUC is compared with the rule score's AUC on the same held-out answers. It replaces the rule score only when it is better by at least 0.02. Otherwise the rules stay. Every fit is stored in `night_light_model` with its counts, both AUCs and the reason, and each group records the model that scored it (`light_group.model_id`, flag `learned_score`). A fit is made once per decision revision, at the next processing run or "Re-check night images with my answers". Decisions at the same place (4c) are applied after it. Images that borrow another view's background (4d) are not scored by a model.
+
+   On the sample, with 101 candidates I labelled by eye (55 vehicles), the model ranked held-out answers at AUC 0.91 against 0.78 for the rules, so it was used. Those are my labels, not yours.
+
 4d. **Images without a camera view** (for example rain on the lens) borrow the background, width map, vehicle map, bands and decisions of the view whose signature they resemble most, when the resemblance is at least 0.6 and the size matches. They are flagged `background_from_nearest_view`, and regions are not applied to them. On the sample, two such images went from 65 candidates to 33.
 
 5. **Grouping.** The expected vehicle width at each image row is fitted from daytime car detections in the same view (`width = a·row + b`). On the sample: `0.090·row + 5.6` from 679 boxes, median error 16%. Two lights form a pair when they sit at the same height (within 25% of a vehicle width), their spacing is 35–115% of a vehicle width, and their areas differ by less than 3×. Lights closer than 20% of a vehicle width form a cluster. Without a width map no pairs are formed and every light is a single with a count range of 0–1.
@@ -99,6 +103,6 @@ Lights inside a detector box (expanded by 15%) support that detection and are no
 
 ## Re-analysis
 
-Images are regrouped when their view's background, regions, distance bands or grouping rules change. The rules version is stored on each group (`light_group.algo`, now `groups-v2`), so a mission processed by an older version is re-checked at its next processing run or "Apply my night decisions now". Older groups stay in the database and only the latest analysis is current.
+Images are regrouped when their view's background, regions, distance bands or grouping rules change. The rules version is stored on each group (`light_group.algo`, now `groups-v3`), so a mission processed by an older version is re-checked at its next processing run or "Apply my night decisions now". Older groups stay in the database and only the latest analysis is current.
 
 Detections from Phase 3 keep the region membership they had when processed. A region drawn later applies to night candidates at once, but to detections only after reprocessing (planned).

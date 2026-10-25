@@ -110,6 +110,7 @@ td.num, th.num { text-align: right; }
 
 .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 12px; border: 1px solid var(--line); }
 .badge.approved { color: var(--ok); border-color: var(--ok); }
+.badge.ok { color: var(--ok); border-color: var(--ok); }
 .badge.bulk_approved_unreviewed { color: var(--warn); border-color: var(--warn); border-style: dashed; }
 .badge.failed { color: var(--bad); border-color: var(--bad); }
 .badge.flag { color: var(--muted); }

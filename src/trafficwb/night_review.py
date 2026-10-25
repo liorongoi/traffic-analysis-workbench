@@ -105,7 +105,15 @@ class NightReview:
             n = d["vehicle"] + d["not_vehicle"]
             return d | {"answered": n, "vehicle_share": round(d["vehicle"] / n, 3) if n else None}
 
-        return {"overall": rate(overall),
+        views = [view_id] if view_id is not None else [v["id"] for v in self.vs.views()]
+        models = []
+        for vid in views:
+            r = self.con.execute("SELECT * FROM night_light_model WHERE view_id=? ORDER BY id DESC LIMIT 1", (vid,)).fetchone()
+            if r is not None:
+                models.append({k: r[k] for k in ("view_id", "created_at", "n_pos", "n_neg", "auc_model", "auc_rules",
+                                                  "applied", "reason")})
+        return {"learned": models,
+                "overall": rate(overall),
                 "by_band": {k: rate(v) for k, v in sorted(by_band.items())},
                 "by_kind": {k: rate(v) for k, v in sorted(by_kind.items())},
                 "by_score": {k: rate(v) for k, v in by_score.items()},

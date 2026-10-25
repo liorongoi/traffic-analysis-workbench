@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 
 COND_ALGO = "cond-v1"
-GROUP_ALGO = "groups-v2"   # v2: soft glow without a bright core is scored down
+GROUP_ALGO = "groups-v3"   # v2: soft glow scored down; v3: measurements stored, learned scoring per view
 
 # Proposed thresholds, chosen from the Fintraffic sample; operator-adjustable later.
 MONO_SATURATION = 5.0      # mean HSV saturation below this: infrared / monochrome
