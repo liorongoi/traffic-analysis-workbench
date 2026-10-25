@@ -35,7 +35,8 @@ OBJECT_COLUMNS = ["mission_id", "run_id", "source_version_id", "file", "sha256",
                   "object_id", "evidence_level", "origin", "final_status", "final_class", "final_x1", "final_y1", "final_x2", "final_y2",
                   "machine_class", "machine_score", "machine_x1", "machine_y1", "machine_x2", "machine_y2",
                   "correction", "in_region", "counted", "model", "review_status",
-                  "light_group_kind", "light_ids", "candidate_count_min", "candidate_count_max", "alternatives"]
+                  "light_group_kind", "light_ids", "candidate_count_min", "candidate_count_max", "alternatives",
+                  "night_distance_band", "lit_here_share", "night_flags"]
 
 
 class ExportError(RuntimeError):
@@ -81,7 +82,7 @@ def build_tables(mission: Mission, flt: Filter | None = None) -> tuple[list[list
                 *o.box, o.machine_cls, o.score, *mb, o.correction,
                 {1: "yes", 0: "no", None: "not applied"}[o.in_region], "yes" if o.counted else "no",
                 models.get(det_model.get(o.detection_id)) if o.detection_id else "", row.review_status,
-                "", "", "", "", ""]])
+                "", "", "", "", "", "", "", ""]])
         for c in rs.candidates(row.source_version_id):
             level = {"confirmed": "confirmed_vehicle_from_lights", "unresolved": "unresolved_candidate"}.get(
                 c.status, "candidate_" + c.status)
@@ -91,7 +92,8 @@ def build_tables(mission: Mission, flt: Filter | None = None) -> tuple[list[list
                 c.cls or "", *c.box, "", c.score, "", "", "", "", "", "", "yes" if c.status == "confirmed" else "no",
                 "lights (night analysis)" if c.origin == "machine" else "", row.review_status,
                 c.kind, ";".join(str(i) for i in c.member_ids), c.count_min if c.status == "unresolved" else "",
-                c.count_max if c.status == "unresolved" else "", "; ".join(c.alternatives)]])
+                c.count_max if c.status == "unresolved" else "", "; ".join(c.alternatives), c.band or "",
+                c.recurrence if c.recurrence is not None else "", ";".join(c.flags)]])
     return images, objects
 
 

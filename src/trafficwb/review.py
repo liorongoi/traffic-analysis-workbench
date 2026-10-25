@@ -97,6 +97,8 @@ class Candidate:
     flags: list[str]
     light_group_id: int | None = None
     cls: str | None = None          # for confirmed candidates
+    band: str | None = None         # far | middle | close (night distance band at the group's row)
+    recurrence: float | None = None # share of the view's images lit at this place
 
 
 class ReviewService:
@@ -234,7 +236,8 @@ class ReviewService:
             uid = group_uid(ids)
             out[uid] = Candidate(uid, version_id, "machine", g["kind"], ids, (g["x1"], g["y1"], g["x2"], g["y2"]),
                                  g["score"], "unresolved" if g["is_candidate"] else "not_candidate",
-                                 g["count_min"], g["count_max"], json.loads(g["alternatives"]), json.loads(g["flags"]), g["id"])
+                                 g["count_min"], g["count_max"], json.loads(g["alternatives"]), json.loads(g["flags"]), g["id"],
+                                 band=g["band"], recurrence=g["recurrence"])
         revs = self.con.execute(
             "SELECT * FROM candidate_revision r WHERE source_version_id=? AND id=(SELECT MAX(id) FROM candidate_revision x "
             "WHERE x.group_uid=r.group_uid) ORDER BY id", (version_id,)).fetchall()

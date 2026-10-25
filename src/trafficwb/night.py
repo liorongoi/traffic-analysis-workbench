@@ -78,6 +78,8 @@ class LightParams:
     tophat_kernels: tuple[int, ...] = (25, 61)
     close_px: int = 5              # join fragments of one light
     min_area: int = 6
+    glare_level: int = 250         # a large clipped region is a light too (headlight glare of a close vehicle),
+    glare_min_area: int = 400      # which the top-hat misses because it is wider than its kernels
 
     def record(self) -> dict:
         return dict(self.__dict__)
@@ -103,6 +105,11 @@ def light_mask(img_bgr: np.ndarray, p: LightParams | None = None, ignore: np.nda
     for k in p.tophat_kernels:
         th = np.maximum(th, cv2.morphologyEx(g, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))))
     m = ((g >= p.min_brightness) & (th >= p.min_tophat)).astype(np.uint8)
+    clipped = (g >= p.glare_level).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(clipped)
+    big = [i for i in range(1, n) if st[i][4] >= p.glare_min_area]
+    if big:
+        m[np.isin(lab, big)] = 1
     if p.close_px > 1:
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((p.close_px, p.close_px), np.uint8))
     if ignore is not None:
@@ -141,6 +148,12 @@ class BackgroundParams:
     recent_images: int = 12         # window for "new persistent light?"
     dilate_px: int = 5              # tolerance for small jitter between captures
     explained_share: float = 0.5    # component explained when this share of it lies in the mask
+    attach_px: float = 3.0          # a light this close to a persistent light is part of it (its glow varies)
+    near_px: int = 4                # neighbourhood in which a light's history at this place is read
+    recurring_share: float = 0.2    # lit here in at least this share of images: a background light not always lit
+    occasional_share: float = 0.1   # lit here this often: weaker sign of background
+    recurring_factor: float = 0.4   # candidate score multipliers
+    occasional_factor: float = 0.7
 
     def record(self) -> dict:
         return dict(self.__dict__)
@@ -157,6 +170,39 @@ class Background:
         x1, y1, x2, y2 = (int(round(v)) for v in light.box)
         win = self.persistent[y1:y2, x1:x2]
         return win.size > 0 and float(win.mean()) >= share
+
+    def _distance(self) -> np.ndarray:
+        if getattr(self, "_dist", None) is None:
+            free = (self.persistent == 0).astype(np.uint8)
+            self._dist = cv2.distanceTransform(free, cv2.DIST_L2, 3) if self.persistent.any() else \
+                np.full(self.persistent.shape, 1e6, np.float32)
+        return self._dist
+
+    def recurrence(self, light: Light, near: int = 4) -> float:
+        """Highest share of images in which the light's neighbourhood was lit."""
+        x1, y1, x2, y2 = (int(round(v)) for v in light.box)
+        h, w = self.frequency.shape
+        win = self.frequency[max(0, y1 - near):min(h, y2 + near), max(0, x1 - near):min(w, x2 + near)]
+        return float(win.max()) if win.size else 0.0
+
+    def reading(self, light: Light, p: "BackgroundParams") -> tuple[str, float]:
+        """How the background explains a light: persistent, attached (to a persistent light), recurring,
+        occasional or rare. Returns the state and the light's recurrence at its place."""
+        if self.explains(light, p.explained_share):
+            return "persistent", 1.0
+        x1, y1, x2, y2 = (int(round(v)) for v in light.box)
+        h, w = self.persistent.shape
+        d = self._distance()[max(0, y1):min(h, y2 + 1), max(0, x1):min(w, x2 + 1)]
+        # Glare (a large clipped blob) next to a lamp is usually a vehicle's headlights near the lamp, not the
+        # lamp's own glow, which the persistent mask already covers; so glare is never explained by touching.
+        if d.size and float(d.min()) <= p.attach_px and not is_glare(light):
+            return "attached", 1.0
+        r = round(self.recurrence(light, p.near_px), 3)
+        if r >= p.recurring_share:
+            return "recurring", r
+        if r >= p.occasional_share:
+            return "occasional", r
+        return "rare", r
 
 
 def build_background(masks_in_time_order: list[np.ndarray], vehicle_boxes: list[list[tuple]] | None = None,
@@ -197,8 +243,10 @@ def build_background(masks_in_time_order: list[np.ndarray], vehicle_boxes: list[
         cv2.fillPoly(pm, [np.array(poly, np.int32)], 1)
         if kind == "persistent":
             persistent[pm > 0] = 1
-        else:
+            freq[pm > 0] = 1.0
+        else:                       # "not persistent": the history at this place no longer counts against a light
             persistent[pm > 0] = 0
+            freq[pm > 0] = 0.0
         new[pm > 0] = 0
     nn, _, st, _ = cv2.connectedComponentsWithStats(new)
     new_boxes = [(int(st[i][0]), int(st[i][1]), int(st[i][0] + st[i][2]), int(st[i][1] + st[i][3]))
@@ -233,6 +281,37 @@ class WidthMap:
         return cls(round(float(a), 5), round(float(b), 3), len(boxes), "daytime_detections")
 
 
+# ---------- distance bands ----------
+
+@dataclass
+class BandParams:
+    """What a vehicle looks like at night depends on its distance, read from the expected vehicle width at its row.
+
+    far:    its two headlights merge into one light with a glow
+    middle: one light or two lights close together
+    close:  its shape is visible, so the detector should find it; lights alone there are suspect
+    """
+    far_below: float = 24.0          # expected vehicle width in px under this: far
+    close_from: float = 60.0         # from this width: close
+
+    def record(self) -> dict:
+        return dict(self.__dict__)
+
+
+def band_at(wm: "WidthMap | None", row: float, bp: BandParams) -> str | None:
+    if wm is None:
+        return None
+    w = wm.width(row)
+    return "far" if w < bp.far_below else "close" if w >= bp.close_from else "middle"
+
+
+def band_rows(wm: "WidthMap | None", bp: BandParams) -> dict | None:
+    """Image rows where the bands change (for drawing them)."""
+    if wm is None:
+        return None
+    return {"far_until_row": round((bp.far_below - wm.b) / wm.a, 1), "close_from_row": round((bp.close_from - wm.b) / wm.a, 1)}
+
+
 # ---------- grouping ----------
 
 @dataclass
@@ -260,6 +339,7 @@ class Group:
     alternatives: list[str]
     flags: list[str]
     reflection: float = 0.0
+    band: str | None = None
 
 
 def _box_of(lights: list[Light], idx: list[int]) -> tuple[float, float, float, float]:
@@ -279,8 +359,15 @@ def reflection_score(i: int, lights: list[Light], wm: WidthMap | None, p: Groupi
     return 0.0
 
 
-def group_lights(lights: list[Light], wm: WidthMap | None, p: GroupingParams | None = None) -> list[Group]:
+def is_glare(li: Light, lp: LightParams | None = None) -> bool:
+    lp = lp or LightParams()
+    return li.area >= lp.glare_min_area and li.peak >= lp.glare_level
+
+
+def group_lights(lights: list[Light], wm: WidthMap | None, p: GroupingParams | None = None,
+                 bands: BandParams | None = None) -> list[Group]:
     p = p or GroupingParams()
+    bands = bands or BandParams()
     n = len(lights)
     if n == 0:
         return []
@@ -363,11 +450,54 @@ def group_lights(lights: list[Light], wm: WidthMap | None, p: GroupingParams | N
             # wider than a vehicle at that row: lit road surface, a light trail or glare; may still hide a vehicle
             g.flags.append("larger_than_vehicle")
             g.count_min = 0
+        _apply_band(g, lights, wm, bands)
         g.reflection = max(reflection_score(i, lights, wm, p) for i in g.members)
         if g.reflection:
             g.score = round(g.score * (1 - 0.5 * g.reflection), 3)
             g.flags.append("possible_reflection")
     return groups
+
+
+def _apply_band(g: Group, lights: list[Light], wm: WidthMap | None, bp: BandParams) -> None:
+    """Judge the group by what a vehicle looks like at its distance. Groups inside a detector box are not
+    candidates anyway, so 'close' here means close lights without a detected vehicle shape."""
+    g.band = band_at(wm, g.box[3], bp)
+    lined = [i for i in g.members if not (0.25 < lights[i].elongation < 4.0)]
+    if lined:
+        # a headlight is roughly round; a long thin light is a lit railing, pole, lane marking or a light trail
+        g.flags.append("line_shaped")
+        g.score = round(g.score * 0.5, 3)
+        g.alternatives.append("a lit railing, pole or road marking")
+        return
+    glare = any(is_glare(lights[i]) for i in g.members)
+    if glare:
+        g.flags.append("glare")
+        g.alternatives.insert(0, "glare from the headlights of a vehicle facing the camera")
+        g.score = round(max(g.score, 0.5), 3)
+        return
+    if "larger_than_vehicle" in g.flags:
+        return
+    if g.band == "far":
+        if g.kind == "single":
+            g.count_min, g.count_max = 1, 1
+            g.score = round(max(g.score, 0.4), 3)
+            g.alternatives = ["one vehicle whose two lights merge into one glow at this distance",
+                              "a light that is not a vehicle"]
+    elif g.band == "middle":
+        if g.kind == "single":
+            g.count_min, g.count_max = 1, 1
+            g.score = round(max(g.score, 0.35), 3)
+            g.alternatives = ["one vehicle with its two lights merged, or with one light visible",
+                              "a light that is not a vehicle"]
+        elif g.kind == "pair" and "ambiguous_pairing" not in g.flags:
+            g.count_min, g.count_max = 1, 1          # two lights close together: one vehicle at this distance
+            g.alternatives = ["two vehicles with one light each (unlikely at this distance)"]
+    elif g.band == "close":
+        g.flags.append("close_without_shape")
+        g.count_min = 0
+        g.score = round(g.score * 0.5, 3)
+        g.alternatives.insert(0, "a close vehicle should show its shape; lights alone here are often reflections "
+                                 "or lit road furniture")
 
 
 def covered_by(box, det_boxes: list[tuple[int, tuple]], expand: float = 0.15, share: float = 0.5) -> int | None:

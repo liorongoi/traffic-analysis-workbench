@@ -91,6 +91,16 @@ export type Candidate = {
   alternatives: string[];
   flags: string[];
   cls: string | null;
+  band: string | null;
+  recurrence: number | null;
+};
+
+export type NightBands = {
+  far_below: number;
+  close_from: number;
+  operator_set: boolean;
+  width_map: { a: number; b: number; samples: number; source: string } | null;
+  rows: { far_until_row: number; close_from_row: number } | null;
 };
 
 export type Light = { id: number; box: Box; cx: number; cy: number; area: number };
@@ -114,6 +124,7 @@ export type Item = {
   objects: Obj[];
   candidates: Candidate[];
   lights: Light[];
+  bands: NightBands | null;
   regions: Region[];
   position: { index: number | null; total: number; prev: number | null; next: number | null };
 };

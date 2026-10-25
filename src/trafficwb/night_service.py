@@ -18,8 +18,8 @@ import sqlite3
 import cv2
 import numpy as np
 
-from .night import (COND_ALGO, Background, BackgroundParams, Condition, GroupingParams, Light, LightParams, WidthMap,
-                    build_background, covered_by, dumps, group_lights, light_components, png, unpng)
+from .night import (COND_ALGO, Background, BackgroundParams, BandParams, Condition, GroupingParams, Light, LightParams,
+                    WidthMap, band_rows, build_background, covered_by, dumps, group_lights, light_components, png, unpng)
 from .regions import RegionSet
 from .store import Mission, utcnow
 
@@ -43,7 +43,7 @@ class NightService:
 
     def describe(self) -> dict:
         return {"condition": COND_ALGO, "lights": self.lp.record(), "background": self.bp.record(),
-                "grouping": self.gp.record(), "candidate_min_score": MIN_CANDIDATE_SCORE,
+                "grouping": self.gp.record(), "bands": BandParams().record() | {"per_view": "view_night_setting"}, "candidate_min_score": MIN_CANDIDATE_SCORE,
                 "enhancement": "none (original pixels only)"}
 
     # ---------- per image ----------
@@ -81,6 +81,29 @@ class NightService:
             "SELECT d.x1,d.y1,d.x2,d.y2 FROM detection d JOIN image_condition c ON c.source_version_id=d.source_version_id "
             "WHERE d.view_id=? AND d.cls='car' AND c.condition='day' AND d.score>=0.5", (view_id,)).fetchall()
         return WidthMap.fit([tuple(b) for b in boxes])
+
+    # ---------- distance bands ----------
+    def band_setting(self, view_id: int | None) -> tuple[int | None, BandParams]:
+        """The view's distance bands (latest operator setting, or the defaults) and the setting's id."""
+        if view_id is None:
+            return None, BandParams()
+        r = self.con.execute("SELECT * FROM view_night_setting WHERE view_id=? ORDER BY id DESC LIMIT 1",
+                             (view_id,)).fetchone()
+        return (r["id"], BandParams(r["far_below"], r["close_from"])) if r else (None, BandParams())
+
+    def set_bands(self, view_id: int, far_below: float, close_from: float, author: str) -> dict:
+        if not 4 <= far_below < close_from <= 2000:
+            raise ValueError("Give widths in pixels with far below close, for example far under 24 and close from 60.")
+        self.con.execute("INSERT INTO view_night_setting(view_id,far_below,close_from,author,created_at) VALUES (?,?,?,?,?)",
+                         (view_id, float(far_below), float(close_from), author, utcnow()))
+        return self.bands(view_id)
+
+    def bands(self, view_id: int | None) -> dict:
+        sid, bp = self.band_setting(view_id)
+        wm = self.width_map(view_id)
+        return {"far_below": bp.far_below, "close_from": bp.close_from, "operator_set": sid is not None,
+                "width_map": None if wm is None else {"a": wm.a, "b": wm.b, "samples": wm.samples, "source": wm.source},
+                "rows": band_rows(wm, bp)}
 
     # ---------- background ----------
     def _versions(self, view_id: int, condition: str) -> list[int]:
@@ -169,8 +192,11 @@ class NightService:
         lights = self.lights(version_id)
         bg = self._background(bg_row)
         wm = self.width_map(view_id)
-        explained = [bool(bg and bg.explains(li, self.bp.explained_share)) for li in lights]
+        self._setting_id, bp = self.band_setting(view_id)
+        readings = [bg.reading(li, self.bp) if bg else ("no_background", 0.0) for li in lights]
+        explained = [r[0] in ("persistent", "attached") for r in readings]
         live = [li for li, e in zip(lights, explained) if not e]
+        live_reading = [r for r, e in zip(readings, explained) if not e]
         regions = None
         if view_id is not None and vs.regions_applicable(view_id):
             regions = RegionSet.load(self.con, view_id)
@@ -182,31 +208,43 @@ class NightService:
         bg_id = bg_row["id"] if bg_row is not None else None
         self._region_rev = self._region_revision(view_id)
         rows = 0
-        for li, e in zip(lights, explained):
+        for li, e, r in zip(lights, explained, readings):
             if e:
-                self._insert(version_id, bg_id, "single", [li.id], li.box, 0.0, 0.0, 1, None, None, 0, 0, 0, [], [], now)
+                fl = ["attached_to_background_light"] if r[0] == "attached" else []
+                self._insert(version_id, bg_id, "single", [li.id], li.box, 0.0, 0.0, 1, None, None, 0, 0, 0, [], fl, now,
+                             None, r[1])
                 rows += 1
-        for g in group_lights(live, wm, self.gp):
+        for g in group_lights(live, wm, self.gp, bp):
             ids = [live[i].id for i in g.members]
             cx, cy = (g.box[0] + g.box[2]) / 2, (g.box[1] + g.box[3]) / 2
             inside = int(regions.contains_point(cx, cy)) if regions is not None else None
             cov = covered_by(g.box, dets)
+            # A group is as background-like as its least background-like light.
+            state, rec = min((live_reading[i] for i in g.members), key=lambda r: r[1])
+            if state == "recurring":
+                g.score = round(g.score * self.bp.recurring_factor, 3)
+                g.flags.append("recurring_light_here")
+                g.alternatives.append(f"a background light lit here in {round(rec * 100)}% of images")
+            elif state == "occasional":
+                g.score = round(g.score * self.bp.occasional_factor, 3)
+                g.flags.append("occasional_light_here")
             flags = list(g.flags) + (["no_view"] if view_id is None else []) + \
                 (["regions_not_applied"] if inside is None else []) + (["no_background"] if bg is None else [])
             cand = int(cov is None and inside != 0 and g.score >= MIN_CANDIDATE_SCORE)
             self._insert(version_id, bg_id, g.kind, ids, g.box, g.score, g.reflection, 0, inside, cov, cand,
-                         g.count_min if cand else 0, g.count_max if cand else 0, g.alternatives, flags, now)
+                         g.count_min if cand else 0, g.count_max if cand else 0, g.alternatives, flags, now, g.band, rec if bg else None)
             rows += 1
         return rows
 
     def _insert(self, version_id, bg_id, kind, ids, box, score, refl, explained, inside, cov, cand, cmin, cmax, alts,
-                flags, now):
+                flags, now, band=None, recurrence=None):
         self.con.execute(
             "INSERT INTO light_group(source_version_id,background_model_id,region_revision_id,kind,member_ids,x1,y1,x2,y2,score,reflection,"
             "explained_by_background,in_region,covered_by_detection,is_candidate,count_min,count_max,alternatives,flags,"
-            "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "created_at,band,recurrence,setting_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (version_id, bg_id, self._region_rev, kind, dumps(sorted(ids)), *(float(v) for v in box), float(score), float(refl), explained,
-             inside, cov, cand, cmin, cmax, dumps(alts), dumps(flags), now))
+             inside, cov, cand, cmin, cmax, dumps(alts), dumps(flags), now, band,
+             None if recurrence is None else round(float(recurrence), 3), self._setting_id))
 
     def _region_revision(self, view_id: int | None) -> int | None:
         if view_id is None:
@@ -219,11 +257,11 @@ class NightService:
         if last is None:
             return []
         latest = self.con.execute(
-            "SELECT background_model_id, region_revision_id FROM light_group WHERE source_version_id=? ORDER BY id DESC LIMIT 1",
-            (version_id,)).fetchone()
+            "SELECT background_model_id, region_revision_id, setting_id FROM light_group WHERE source_version_id=? "
+            "ORDER BY id DESC LIMIT 1", (version_id,)).fetchone()
         return self.con.execute(
             "SELECT * FROM light_group WHERE source_version_id=? AND background_model_id IS ? AND region_revision_id IS ? "
-            "AND created_at=? ORDER BY id", (version_id, latest[0], latest[1], last)).fetchall()
+            "AND setting_id IS ? AND created_at=? ORDER BY id", (version_id, latest[0], latest[1], latest[2], last)).fetchall()
 
     def refresh(self) -> dict:
         """Bring backgrounds and groups up to date for all processed dusk and night images."""
@@ -242,9 +280,11 @@ class NightService:
             if before is None or bg["id"] != before["id"]:
                 stats["backgrounds_built"] += 1
             region_rev = self._region_revision(view_id)
+            setting = self.band_setting(view_id)[0]
             for v in self._versions(view_id, cond):
                 done = self.con.execute("SELECT 1 FROM light_group WHERE source_version_id=? AND background_model_id=? "
-                                        "AND region_revision_id IS ? LIMIT 1", (v, bg["id"], region_rev)).fetchone()
+                                        "AND region_revision_id IS ? AND setting_id IS ? LIMIT 1",
+                                        (v, bg["id"], region_rev, setting)).fetchone()
                 if done or not self.lights(v):
                     continue
                 self.con.execute("BEGIN")

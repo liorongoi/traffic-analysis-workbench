@@ -9,8 +9,8 @@ import pytest
 from trafficwb.detect import Detection
 from trafficwb.export import IMAGE_COLUMNS, OBJECT_COLUMNS, build_tables
 from trafficwb.ingest import cycle
-from trafficwb.night import (BackgroundParams, Light, WidthMap, build_background, covered_by, group_lights,
-                             light_components, measure_condition)
+from trafficwb.night import (BackgroundParams, BandParams, Light, WidthMap, band_at, band_rows, build_background,
+                             covered_by, group_lights, is_glare, light_components, measure_condition)
 from trafficwb.night_service import NightService
 from trafficwb.process import Processor
 from trafficwb.regions import RegionEditor
@@ -138,7 +138,8 @@ def test_pairing_uses_expected_width_at_row():
     kinds = sorted(g.kind for g in groups)
     assert kinds == ["pair", "single"]
     pair = next(g for g in groups if g.kind == "pair")
-    assert (pair.count_min, pair.count_max) == (1, 2)          # ambiguity kept: one vehicle or two
+    # 36 px is the middle band: two lights close together are one vehicle there
+    assert pair.band == "middle" and (pair.count_min, pair.count_max) == (1, 1)
     far = [_L(300, 300), _L(380, 300)]                            # 80 px apart at a 36 px row: not one vehicle
     assert sorted(g.kind for g in group_lights(far, wm)) == ["single", "single"]
 
@@ -224,7 +225,7 @@ def test_night_pipeline_lamps_explained_headlights_become_candidates(mission):
     with_car = rs.results()[6]                       # first night image has one headlight pair
     assert with_car.condition == "night"
     assert with_car.vehicle_count == 0               # lights are never counted as vehicles
-    assert (with_car.candidate_count, with_car.candidate_count_max) == (1, 2)
+    assert (with_car.candidate_count, with_car.candidate_count_max) == (1, 1)   # a middle-distance pair: one vehicle
     cands = rs.candidates(with_car.source_version_id)
     assert len(cands) == 1 and cands[0].kind == "pair"
     empty = rs.results()[7]
@@ -330,3 +331,87 @@ def test_region_edit_triggers_reanalysis(mission):
     stats = NightService(m).refresh()
     assert stats["images_analysed"] == 10 and stats["backgrounds_built"] == 0
     assert sum(r.candidate_count or 0 for r in rs.results()) == 0
+
+
+# ---------- distance bands and background readings ----------
+
+def test_distance_bands_judge_what_a_vehicle_looks_like():
+    wm = WidthMap(0.1, 6, 50, "test")                 # 16 px wide at row 100, 36 at row 300, 76 at row 700
+    bp = BandParams(far_below=24, close_from=60)
+    assert [band_at(wm, y, bp) for y in (100, 300, 700)] == ["far", "middle", "close"]
+    assert band_at(None, 300, bp) is None
+    assert band_rows(wm, bp) == {"far_until_row": 180.0, "close_from_row": 540.0}
+    far, mid, close = (group_lights([_L(400, y)], wm, bands=bp)[0] for y in (100, 300, 700))
+    # far: one light with a glow is one vehicle; middle: one light is one vehicle
+    assert (far.band, far.count_min, far.count_max) == ("far", 1, 1) and far.score >= 0.4
+    assert (mid.band, mid.count_min, mid.count_max) == ("middle", 1, 1)
+    # close: a vehicle's shape should be visible, so lights alone are suspect and may count as nothing
+    assert close.band == "close" and "close_without_shape" in close.flags and close.count_min == 0 and close.score < 0.2
+    # A pair of close-together lights in the middle band is one vehicle.
+    pair = next(g for g in group_lights([_L(300, 300), _L(326, 300)], wm, bands=bp) if g.kind == "pair")
+    assert (pair.count_min, pair.count_max) == (1, 1)
+    # Without a width map nothing is judged by distance.
+    assert group_lights([_L(400, 300)], None, bands=bp)[0].band is None
+
+
+def test_long_thin_lights_are_scored_down():
+    wm = WidthMap(0.1, 6, 50, "test")
+    rail = Light((300, 298, 360, 302), 330, 300, 240, 255.0, 250.0, 4 / 60)   # lit railing: 60 x 4 px
+    g = group_lights([rail], wm)[0]
+    assert "line_shaped" in g.flags and g.score < 0.2
+
+
+def test_glare_of_close_headlights_is_found():
+    g = np.full((H, W), 40, np.uint8)
+    cv2.circle(g, (320, 250), 45, 255, -1)            # wider than the top-hat kernels: missed before
+    lights = light_components(cv2.cvtColor(g, cv2.COLOR_GRAY2BGR))
+    big = [li for li in lights if li.area > 3000]
+    assert len(big) == 1 and is_glare(big[0])
+    grp = group_lights(big, WidthMap(0.1, 6, 50, "test"))[0]
+    assert "glare" in grp.flags and grp.score >= 0.5
+
+
+def test_background_reading_persistent_attached_recurring_occasional_rare():
+    masks = []
+    for k in range(20):
+        m = np.zeros((100, 200), np.uint8)
+        m[10:16, 10:16] = 1                           # lamp: always lit
+        if k % 3 == 0:
+            m[50:54, 50:54] = 1                       # lit in 7 of 20 images (35%): recurring
+        if k % 7 == 0:
+            m[50:54, 150:154] = 1                     # 3 of 20 (15%): occasional
+        masks.append(m)
+    bp = BackgroundParams(min_images=8)
+    bg = build_background(masks, p=bp)
+
+    def light(x1, y1, x2, y2):
+        return Light((x1, y1, x2, y2), (x1 + x2) / 2, (y1 + y2) / 2, (x2 - x1) * (y2 - y1), 255.0, 250.0, 1.0)
+
+    assert bg.reading(light(10, 10, 16, 16), bp)[0] == "persistent"
+    assert bg.reading(light(18, 10, 22, 14), bp)[0] == "attached"          # a fragment of the lamp's glow
+    assert bg.reading(light(50, 50, 54, 54), bp) == ("recurring", 0.35)
+    assert bg.reading(light(150, 50, 154, 54), bp)[0] == "occasional"
+    assert bg.reading(light(100, 80, 104, 84), bp) == ("rare", 0.0)
+    # Large glare touching the lamp is not explained by touching it: it is usually headlights near the lamp.
+    glare = Light((17, 5, 60, 45), 38, 25, 1600, 255.0, 252.0, 0.93)
+    assert is_glare(glare) and bg.reading(glare, bp)[0] != "attached"
+    # The operator says the recurring spot is not a background light: its history stops counting against lights.
+    bg2 = build_background(masks, labels=[("not_persistent", [[48, 48], [56, 48], [56, 56], [48, 56]])], p=bp)
+    assert bg2.reading(light(50, 50, 54, 54), bp)[0] == "rare"
+
+
+def test_band_setting_triggers_reanalysis(mission):
+    m, src = _night_mission(mission)
+    Processor(m, RedBoxDetector()).process_all()
+    ns = NightService(m)
+    view = ViewService(m).views()[0]["id"]
+    b = ns.bands(view)
+    assert b["operator_set"] is False and b["width_map"] is not None and b["rows"] is not None
+    with pytest.raises(ValueError):
+        ns.set_bands(view, 80, 40, "lior")
+    ns.set_bands(view, 10, 20, "lior")                # everything below row 140 is now close
+    assert ns.refresh()["images_analysed"] == 10
+    groups = [g for v in ns._versions(view, "night") for g in ns.current_groups(v) if g["is_candidate"]]
+    assert groups and all(g["band"] == "close" and g["setting_id"] is not None for g in groups)
+    assert all("close_without_shape" in json.loads(g["flags"]) for g in groups)
+    assert ns.refresh()["images_analysed"] == 0      # nothing changed: nothing re-analysed

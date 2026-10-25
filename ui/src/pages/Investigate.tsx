@@ -19,6 +19,12 @@ const PLATE_REVIEW: Record<string, string> = {
   pending: "not reviewed", confirmed: "confirmed", corrected: "corrected", unreadable: "unreadable (operator)", no_plate: "no plate (operator)",
 };
 
+const BAND_HINT: Record<string, string> = {
+  far: "a vehicle shows as one light with a glow",
+  middle: "one light or two lights close together",
+  close: "a vehicle's shape should be visible",
+};
+
 export default function Investigate({ missionId, versionId }: { missionId: string; versionId: number }) {
   const [item, setItem] = useState<Item | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -166,6 +172,15 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
                 fill={r.kind === "exclude" ? "url(#hatch)" : "rgba(90,150,255,0.10)"}
                 stroke={r.kind === "exclude" ? "var(--exclude)" : "var(--include)"} strokeWidth={sw} pointerEvents="none" />
             ))}
+            {overlays && item.bands?.rows && [["far", 0, item.bands.rows.far_until_row], ["middle", item.bands.rows.far_until_row, item.bands.rows.close_from_row],
+              ["close", item.bands.rows.close_from_row, H]].map(([name, y0, y1]) => {
+              const a = Math.max(0, Math.min(H, y0 as number)), b = Math.max(0, Math.min(H, y1 as number));
+              if (b - a < 1) return null;
+              return <g key={name as string} pointerEvents="none">
+                {a > 0 && <line x1={0} x2={W} y1={a} y2={a} stroke="var(--band)" strokeWidth={sw} strokeDasharray={`${10 * sw} ${6 * sw}`} />}
+                <text x={W - 6 * sw} y={a + 14 * sw} textAnchor="end" fill="var(--band)" fontSize={12 * sw} paintOrder="stroke" stroke="#000" strokeWidth={2.5 * sw}>{name as string}</text>
+              </g>;
+            })}
             {overlays && item.objects.filter((o) => o.status === "present" || showRemoved).map((o: Obj) => rect(
               o.box, o.origin === "machine" ? STYLE.machine : STYLE.human,
               `${o.origin === "machine" ? "M" : "H"} ${o.cls}${o.score != null && o.correction === "none" ? " " + o.score.toFixed(2) : ""}${o.status === "removed" ? " removed" : ""}${o.in_region === 0 ? " (outside region)" : ""}`,
@@ -267,6 +282,10 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
             <div className="card selcard">
               <h3>Night candidate: {selCand.kind} of lights</h3>
               <div className="muted">Counts as {selCand.count_min}–{selCand.count_max}. {selCand.alternatives.join("; ")}</div>
+              {(selCand.band || selCand.recurrence != null) && <div className="muted" style={{ marginTop: 4 }}>
+                {selCand.band && <>Distance: <b>{selCand.band}</b>{BAND_HINT[selCand.band] ? ` (${BAND_HINT[selCand.band]})` : ""}. </>}
+                {selCand.recurrence != null && <>Lit at this place in {Math.round(selCand.recurrence * 100)}% of this view's night images.</>}
+              </div>}
               {selCand.flags.length > 0 && <div className="row" style={{ marginTop: 4 }}>{selCand.flags.map((f) => <span key={f} className="badge flag">{f.replace(/_/g, " ")}</span>)}</div>}
               <div className="row" style={{ marginTop: 8 }}>
                 <button className="primary" onClick={() => candAct(selCand.uid, { action: "confirm", cls: drawCls })}>Vehicle ({drawCls}) <kbd>C</kbd></button>
@@ -299,6 +318,7 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
             ))}
             {Object.keys(plates).length > 0 && <div><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke="var(--plate)" strokeWidth="2" /></svg> plate found by the model (dashed: drawn by an operator)</div>}
             <div><svg width="36" height="10"><rect width="36" height="10" fill="url(#hatch)" stroke="var(--exclude)" /></svg> excluded area</div>
+            {item.bands?.rows && <div><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke="var(--band)" strokeWidth="2" strokeDasharray="6 4" /></svg> night distance bands: far, middle, close</div>}
           </div>
         </aside>
       </div>

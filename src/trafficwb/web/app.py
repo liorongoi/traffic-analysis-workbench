@@ -182,6 +182,11 @@ class PreviewBody(BaseModel):
     limit: int = 20
 
 
+class BandsBody(BaseModel):
+    far_below: float
+    close_from: float
+
+
 class DeleteBody(BaseModel):
     confirm_name: str
 
@@ -504,6 +509,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
             "objects": [{**o.__dict__, "counted": o.counted} for o in rs.objects(version_id)],
             "candidates": [c.__dict__ for c in rs.candidates(version_id)],
             "lights": [li.__dict__ for li in NightService(m).lights(version_id)],
+            "bands": NightService(m).bands(view_id) if cond and cond["condition"] in ("night", "dusk") else None,
             "regions": [{"uid": x.uid, "kind": x.kind, "name": x.name, "polygon": x.polygon}
                         for x in regions.include + regions.exclude],
             "position": rs.position(version_id, flt(body), sort, desc),
@@ -593,7 +599,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
     @app.get("/api/missions/{mission_id}/views")
     def views(m: Mission = Depends(mission)):
         vs = ViewService(m)
-        return {"views": vs.views(), "unassigned": vs.unassigned()}
+        from ..night_service import NightService
+        ns = NightService(m)
+        return {"views": [v | {"night_bands": ns.bands(v["id"])} for v in vs.views()], "unassigned": vs.unassigned()}
 
     @app.post("/api/missions/{mission_id}/views/{view_id}/actions/{action}")
     def view_action(view_id: int, action: str, body: ViewBody, m: Mission = Depends(mission), u: User = Depends(user)):
@@ -607,6 +615,24 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
         else:
             raise ApiError(400, "bad_action", "Use rename (with name), confirm, or merge (with absorb).")
         return {"ok": True}
+
+    @app.get("/api/missions/{mission_id}/views/{view_id}/bands")
+    def bands_get(view_id: int, m: Mission = Depends(mission)):
+        from ..night_service import NightService
+        if m.con.execute("SELECT 1 FROM camera_view WHERE id=?", (view_id,)).fetchone() is None:
+            raise ApiError(404, "no_view", "That camera view does not exist.")
+        return NightService(m).bands(view_id)
+
+    @app.put("/api/missions/{mission_id}/views/{view_id}/bands")
+    def bands_put(view_id: int, body: BandsBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        from ..night_service import NightService
+        if m.con.execute("SELECT 1 FROM camera_view WHERE id=?", (view_id,)).fetchone() is None:
+            raise ApiError(404, "no_view", "That camera view does not exist.")
+        ns = NightService(m)
+        out = {}
+        _edit(lambda: out.update(ns.set_bands(view_id, body.far_below, body.close_from, u.username)))
+        out["reanalysed"] = ns.refresh()["images_analysed"]     # night candidates follow the new bands at once
+        return out
 
     @app.get("/api/missions/{mission_id}/views/{view_id}/regions")
     def regions_get(view_id: int, m: Mission = Depends(mission)):

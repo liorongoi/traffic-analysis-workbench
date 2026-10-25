@@ -670,6 +670,20 @@ CREATE TABLE evaluation (
   finished_at TEXT
 );
 """,
+    9: """
+-- Night: per-view distance bands (what a vehicle looks like at each distance). Append-only; the latest row is current.
+CREATE TABLE view_night_setting (
+  id INTEGER PRIMARY KEY,
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  far_below REAL NOT NULL,           -- expected vehicle width (px) under which a vehicle is far
+  close_from REAL NOT NULL,          -- expected width from which it is close
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+ALTER TABLE light_group ADD COLUMN band TEXT;              -- far | middle | close; NULL without a width map
+ALTER TABLE light_group ADD COLUMN recurrence REAL;        -- share of the view's images lit at this place
+ALTER TABLE light_group ADD COLUMN setting_id INTEGER;     -- view_night_setting row used; a newer one triggers re-analysis
+""",
 }
 
 

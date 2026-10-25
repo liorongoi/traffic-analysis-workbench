@@ -274,6 +274,7 @@ function Views({ missionId }: { missionId: string }) {
             <a href={`#/m/${missionId}/regions/${v.id}`}><button>Draw regions</button></a>
           </div>
           <p className="muted">{v.size} images · {Object.entries(v.conditions).map(([c, n]) => `${n} ${c}`).join(", ")} · {v.ref_width}×{v.ref_height}</p>
+          <NightBandsRow missionId={missionId} view={v} reload={load} />
           {v.state === "needs_review" && <div className="msg warn">The camera seems to have moved. Regions are not applied to new images until you check them.</div>}
           {!v.link_confirmed && (
             <div className="msg warn row" style={{ justifyContent: "space-between" }}>
@@ -302,6 +303,42 @@ function Views({ missionId }: { missionId: string }) {
           <div className="thumbs">{data.unassigned.slice(0, 30).map((id) => <a key={id} href={`#/m/${missionId}/i/${id}`}><img src={`/api/missions/${missionId}/thumbs/${id}?w=200`} alt="" /></a>)}</div>
         </div>
       )}
+    </div>
+  );
+}
+
+function NightBandsRow({ missionId, view, reload }: { missionId: string; view: any; reload: () => void }) {
+  const b = view.night_bands;
+  const [far, setFar] = useState<string>(String(b?.far_below ?? 24));
+  const [close, setClose] = useState<string>(String(b?.close_from ?? 60));
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  if (!b) return null;
+  const save = async () => {
+    setMsg(null);
+    try {
+      const r: any = await api(`/missions/${missionId}/views/${view.id}/bands`, { method: "PUT", body: { far_below: Number(far), close_from: Number(close) } });
+      setMsg({ ok: true, text: `Saved. ${r.reanalysed} night image(s) re-analysed.` });
+      reload();
+    } catch (e) { setMsg({ ok: false, text: (e as ApiError).message }); }
+  };
+  const changed = Number(far) !== b.far_below || Number(close) !== b.close_from;
+  return (
+    <div style={{ margin: "6px 0" }}>
+      <div className="row">
+        <span className="muted">Night distance bands: far while a vehicle would be under</span>
+        <input type="number" min={4} value={far} onChange={(e) => setFar(e.target.value)} style={{ width: 64 }} />
+        <span className="muted">px wide, close from</span>
+        <input type="number" min={5} value={close} onChange={(e) => setClose(e.target.value)} style={{ width: 64 }} />
+        <span className="muted">px{b.operator_set ? "" : " (defaults)"}</span>
+        {changed && <button onClick={save}>Save and re-analyse</button>}
+      </div>
+      <div className="muted">
+        {b.width_map
+          ? <>Expected vehicle width = {b.width_map.a.toFixed(3)} × row + {b.width_map.b.toFixed(1)} px, from {b.width_map.samples} daytime cars.
+            {b.rows && <> Far above row {Math.round(b.rows.far_until_row)}, close below row {Math.round(b.rows.close_from_row)}.</>}</>
+          : "No width map yet: it needs about 20 daytime cars in this view. Until then night lights are not judged by distance."}
+      </div>
+      {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`}>{msg.text}</div>}
     </div>
   );
 }
