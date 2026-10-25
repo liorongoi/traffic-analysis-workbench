@@ -11,8 +11,23 @@ Install or update (Windows)
    - The installer checks every file against SHA256SUMS, installs into C:\TrafficWorkbench\app-<version>,
      adds the model packs, runs a disconnected install-to-export check, backs up the data (on an update),
      and only then switches start.cmd to the new version.
-3. Start with C:\TrafficWorkbench\start.cmd and open http://127.0.0.1:8765 on the workstation.
-   The first account (administrator) can only be created from the workstation itself.
+3. The installer sets the server to start when you sign in to Windows, and starts it now. No administrator
+   rights are needed. Open http://127.0.0.1:8765 on the workstation.
+   The first account (administrator of the app) can only be created from the workstation itself.
+   Add -AutoStart none to start it yourself with C:\TrafficWorkbench\start.cmd instead.
+
+Automatic start (C:\TrafficWorkbench\autostart.ps1)
+- Status:   powershell -ExecutionPolicy Bypass -File C:\TrafficWorkbench\autostart.ps1 -Mode status
+- Sign-in:  -Mode signin   starts at Windows sign-in in a minimised window and restarts the server 10 s after
+            it stops. No administrator rights. The output goes to C:\TrafficWorkbench\logs\server.log
+            (kept to about 10 MB, with one older file).
+- Restart:  -Mode restart  e.g. after changing start.cmd. An update does this by itself.
+- Remove:   -Mode remove   removes the automatic start and stops the server.
+- Power-on: -Mode boot     for an IT administrator only: a scheduled task that starts the server when the
+            computer starts, before anyone signs in. Creating it needs administrator rights; the server then runs
+            as the Windows account given (asked for its password), which must be able to read the source folders.
+            -System runs it as the SYSTEM account, which cannot read network shares.
+- Stopping the server stops processing at once. It continues from where it stopped at the next start.
 
 Roll back an update
 1. Stop the server.

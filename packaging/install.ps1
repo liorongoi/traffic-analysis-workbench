@@ -9,6 +9,8 @@ param(
   [string]$Python = "",
   [int]$Port = 8765,
   [string]$Ort = "",
+  [ValidateSet("signin", "boot", "none")]
+  [string]$AutoStart = "signin",   # signin needs no administrator rights; boot is for an IT administrator
   [switch]$SkipCheck
 )
 $ErrorActionPreference = "Stop"
@@ -129,4 +131,19 @@ set TWB_MODELS=$Models
 "@ | Set-Content -Encoding ASCII (Join-Path $Target "start.cmd")
 if (Test-Path (Join-Path $Target "current.txt")) { Copy-Item (Join-Path $Target "current.txt") (Join-Path $Target "previous.txt") -Force }
 Set-Content -Path (Join-Path $Target "current.txt") -Value $Venv
-Write-Host "Installed. Start with $Target\start.cmd. The first account is created in the browser on this computer."
+Copy-Item (Join-Path $Bundle "autostart.ps1") (Join-Path $Target "autostart.ps1") -Force
+Write-Host "Installed $($Info.version)."
+
+# 7. Automatic start. An update restarts a server that already starts by itself, so it runs the new version.
+$auto = Join-Path $Target "autostart.ps1"
+$hasLink = Test-Path (Join-Path ([Environment]::GetFolderPath("Startup")) "Traffic Analysis Workbench.lnk")
+$hasTask = [bool](Get-ScheduledTask -TaskName "Traffic Analysis Workbench" -ErrorAction SilentlyContinue)
+if ($hasLink -or $hasTask) {
+  & $auto -Mode restart -Target $Target -Port $Port
+} elseif ($AutoStart -ne "none") {
+  & $auto -Mode $AutoStart -Target $Target -Port $Port
+  if ($LASTEXITCODE -eq 2) { & $auto -Mode signin -Target $Target -Port $Port }
+} else {
+  Write-Host "Start with $Target\start.cmd."
+}
+Write-Host "Open http://127.0.0.1:$Port in a browser. The first account is created there, on this computer."

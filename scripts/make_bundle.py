@@ -105,7 +105,7 @@ def main(argv=None) -> int:
 
     if a.python_installer:
         shutil.copy2(a.python_installer, tmp / Path(a.python_installer).name)
-    for f in ("install.ps1", "install.sh", "INSTALL.txt"):
+    for f in ("install.ps1", "autostart.ps1", "install.sh", "INSTALL.txt"):
         shutil.copy2(ROOT / "packaging" / f, tmp / f)
     shutil.copy2(ROOT / "scripts" / "offline_smoke.py", tmp / "offline_smoke.py")
     # The CUDA libraries shipped decide the oldest NVIDIA driver that can run them (Windows minimums from NVIDIA).
