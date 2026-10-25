@@ -110,7 +110,7 @@ The hand-made rules are a starting point. Each camera view now learns its own sc
 
 ## Not tested
 
-- Accuracy against labelled night images. The Night review tab now measures it from your answers (share of candidates that were vehicles, by distance band and flag), but no answers exist yet. Missed vehicles are not measured.
+- Accuracy against labelled night images. The Night review tab now measures it from your answers (share of candidates that were vehicles, by distance band and flag), but no answers exist yet. Missed vehicles are counted from vehicles you draw on night images you approve.
 - The default band widths (24 px and 60 px) are a first guess for this camera. They should be checked per camera.
 - Colour cameras at night (the sample switches to infrared).
 

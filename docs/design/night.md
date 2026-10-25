@@ -99,7 +99,8 @@ Lights inside a detector box (expanded by 15%) support that detection and are no
 - **Night review tab** (image missions): candidates from every night or dusk image as a grid of crops, most uncertain first (score closest to 0.5), so a few minutes of answers teach the most. Filters: camera view, distance band, flag, and answered or not.
 - **Keys:** V vehicle, N or Del not a vehicle, F fixed light, U undo, arrows move, Enter opens the whole image. Each crop shows a wider view than the light itself, with the candidate marked by a thin box.
 - **Answers are the normal candidate decisions.** Nothing new is stored, so they feed "decisions at the same place" (step 6a) and the learning dataset exactly like answers given on the investigation screen.
-- **Accuracy** is the share of answered candidates that were vehicles (fixed lights count as not vehicles), overall and by distance band, score range, kind and flag. Unanswered candidates are counted as open, never guessed. This measures how often a candidate is right. It does not measure missed vehicles: those need vehicles drawn by the operator on the image.
+- **Accuracy** is the share of answered candidates that were vehicles (fixed lights count as not vehicles), overall and by distance band, score range, kind and flag. Unanswered candidates are counted as open, never guessed. This measures how often a candidate is right.
+- **Vehicles found** is counted on night images approved one by one, because approving says every vehicle is marked. Found = vehicles kept from the detector + confirmed light candidates; missed = vehicles the operator drew. It is shown overall and by distance band (drawn and detected vehicles take the band of their bottom row).
 
 ## Re-analysis
 

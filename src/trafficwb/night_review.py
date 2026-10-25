@@ -85,6 +85,45 @@ class NightReview:
             "recurrence": c.recurrence, "flags": c.flags, "alternatives": c.alternatives,
             "count_min": c.count_min, "count_max": c.count_max, "cls": c.cls} for img, c in page]}
 
+    def found(self, view_id: int | None = None) -> dict:
+        """How many vehicles the night analysis found, on night images you approved one by one.
+
+        Approving an image says every vehicle in it is marked, so a vehicle you drew there is one the
+        detector and the light candidates both missed. Found = by the detector + confirmed light candidates."""
+        from .night import band_at
+        from .night_service import NightService
+        ns = NightService(self.m)
+        wms: dict = {}
+        tot = {"detector": 0, "lights": 0, "drawn": 0}
+        by_band: dict[str, dict] = {}
+        images = 0
+        for r in self._images(view_id):
+            v = r["id"]
+            if self.rs.review_status(v) != "approved":
+                continue
+            images += 1
+            view = self.vs.current_view(v)
+            if view not in wms:
+                wms[view] = (ns.width_map(view), ns.band_setting(view)[1])
+            wm, bp = wms[view]
+            for o in self.rs.objects(v, include_removed=False):
+                if not o.counted:
+                    continue
+                k = "detector" if o.origin == "machine" else "drawn"
+                tot[k] += 1
+                by_band.setdefault(band_at(wm, o.box[3], bp) or "none", {"detector": 0, "lights": 0, "drawn": 0})[k] += 1
+            for c in self.rs.candidates(v):
+                if c.status == "confirmed":
+                    tot["lights"] += 1
+                    by_band.setdefault(c.band or "none", {"detector": 0, "lights": 0, "drawn": 0})["lights"] += 1
+
+        def share(d):
+            n = d["detector"] + d["lights"] + d["drawn"]
+            return d | {"vehicles": n, "found_share": round((d["detector"] + d["lights"]) / n, 3) if n else None}
+
+        return {"images": images, **share(tot), "by_band": {k: share(v) for k, v in sorted(by_band.items())},
+                "note": "Counted only on night images you approved one by one. A vehicle you drew there counts as missed."}
+
     def accuracy(self, view_id: int | None = None) -> dict:
         """Share of answered candidates that were vehicles, overall and by band, kind and flag."""
         def blank():
@@ -112,7 +151,7 @@ class NightReview:
             if r is not None:
                 models.append({k: r[k] for k in ("view_id", "created_at", "n_pos", "n_neg", "auc_model", "auc_rules",
                                                   "applied", "reason")})
-        return {"learned": models,
+        return {"learned": models, "found": self.found(view_id),
                 "overall": rate(overall),
                 "by_band": {k: rate(v) for k, v in sorted(by_band.items())},
                 "by_kind": {k: rate(v) for k, v in sorted(by_kind.items())},

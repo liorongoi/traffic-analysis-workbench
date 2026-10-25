@@ -13,7 +13,8 @@ type QItem = {
 type Rate = { vehicle: number; not_vehicle: number; open: number; answered: number; vehicle_share: number | null };
 type Learned = { view_id: number; created_at: string; n_pos: number; n_neg: number; auc_model: number | null;
   auc_rules: number | null; applied: number; reason: string };
-type Accuracy = { learned: Learned[]; overall: Rate; by_band: Record<string, Rate>; by_kind: Record<string, Rate>;
+type Found = { detector: number; lights: number; drawn: number; vehicles: number; found_share: number | null };
+type Accuracy = { learned: Learned[]; found: Found & { images: number; by_band: Record<string, Found>; note: string }; overall: Rate; by_band: Record<string, Rate>; by_kind: Record<string, Rate>;
   by_score: Record<string, Rate>; by_flag: Record<string, Rate>; note: string };
 
 const pct = (v: number | null | undefined) => (v == null ? "–" : `${Math.round(v * 100)}%`);
@@ -129,10 +130,17 @@ export default function NightReviewTab({ missionId }: { missionId: string }) {
             <div className="card stat"><div className="n">{o.vehicle}</div><div className="l">Vehicles</div></div>
             <div className="card stat"><div className="n">{o.not_vehicle}</div><div className="l">Not vehicles (incl. fixed lights)</div></div>
             <div className="card stat"><div className="n">{o.open}</div><div className="l">Not answered yet</div></div>
+            <div className="card stat"><div className="n">{pct(acc!.found.found_share)}</div>
+              <div className="l">of vehicles found ({acc!.found.images} approved night images)</div></div>
           </div>
         )}
         {showAcc && acc && (
           <div className="grid" style={{ gap: 8, marginTop: 10 }}>
+            {acc.found.vehicles > 0 && <div className="tablewrap"><table className="t">
+              <thead><tr><th>Vehicles on approved night images</th><th>Found by the detector</th><th>Found as light candidates</th><th>Missed (you drew them)</th><th>Share found</th></tr></thead>
+              <tbody>{Object.entries({ all: acc.found, ...acc.found.by_band }).map(([k, f]) => <tr key={k}><td>{k}</td><td>{f.detector}</td>
+                <td>{f.lights}</td><td>{f.drawn}</td><td>{pct(f.found_share)}</td></tr>)}</tbody></table></div>}
+            <p className="muted" style={{ margin: 0 }}>{acc.found.note}</p>
             <div className="tablewrap"><RateTable title="Distance" rows={acc.by_band} /></div>
             <div className="tablewrap"><RateTable title="Score" rows={acc.by_score} /></div>
             <div className="tablewrap"><RateTable title="Kind" rows={acc.by_kind} /></div>

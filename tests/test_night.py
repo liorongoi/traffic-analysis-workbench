@@ -607,3 +607,23 @@ def test_learned_scoring_used_only_when_it_beats_the_rules(mission, monkeypatch)
     assert all("learned_score" in json.loads(x["flags"]) for x in live)
     latest = NightService(m).learner.latest(view)
     assert latest["applied"] == 1 and latest["auc_model"] == 0.90
+
+
+def test_night_found_share_counts_drawn_vehicles_as_missed(mission):
+    from trafficwb.night_review import NightReview
+    m, src = _night_mission(mission)
+    Processor(m, RedBoxDetector()).process_all()
+    rs = ReviewService(m)
+    nr = NightReview(m)
+    assert nr.found()["images"] == 0 and nr.found()["found_share"] is None
+    rows = [r for r in rs.results() if r.candidate_count]
+    a = rows[0].source_version_id
+    rs.confirm_candidate(a, rs.candidates(a)[0].uid, "lior")
+    rs.add(a, (100.0, 100.0, 140.0, 130.0), "car", "lior")     # a vehicle nothing found
+    assert nr.found()["images"] == 0                                   # not approved yet: not counted
+    rs.approve(a, "lior")
+    f = nr.found()
+    assert f["images"] == 1 and (f["lights"], f["drawn"]) == (1, 1)
+    assert f["found_share"] == round((f["detector"] + 1) / (f["detector"] + 2), 3)
+    assert sum(b["vehicles"] for b in f["by_band"].values()) == f["vehicles"]
+    assert NightReview(m).accuracy()["found"]["drawn"] == 1
