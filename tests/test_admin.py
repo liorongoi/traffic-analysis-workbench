@@ -119,3 +119,19 @@ def test_scheduler_records_scheduled_backup(env):
     p = s.run_if_due(datetime.now().replace(hour=23, minute=59))
     assert p is not None and verify(p) == []
     assert s.run_if_due(datetime.now().replace(hour=23, minute=59)) is None   # already done today
+
+
+def test_speed_check_reports_each_backend(tmp_path, capsys):
+    from trafficwb import models
+    try:
+        models.find("yolox-s")
+    except Exception:
+        pytest.skip("vehicle model pack not installed")
+    from trafficwb.speedcheck import main
+    out = tmp_path / "logs" / "speed.txt"
+    assert main(["--n", "3", "--backends", "cpu", "--out", str(out)]) == 0
+    import json as _json
+    r = _json.loads(out.with_suffix(".json").read_text())
+    (b,) = r["backends"]
+    assert b["backend"] == "cpu" and b["runs_on"] == "cpu" and b["s_per_image_median"] > 0
+    assert r["fastest"] == "cpu" and "images per hour" in out.read_text()

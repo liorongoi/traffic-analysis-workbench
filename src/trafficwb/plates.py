@@ -129,10 +129,11 @@ class SlotPlateReader:
         return OcrOut(slots, self.pad, region, conf)
 
 
-def default_plate_models():
+def default_plate_models(accelerator: str | None = None):
     """Load the installed plate finder and reader packs (evaluation only)."""
     from . import models
-    return (YoloPlateFinder(models.find("plate-yolov9-t-640")), SlotPlateReader(models.find("plate-ocr-cct-s-v2-global")))
+    return (YoloPlateFinder(models.find("plate-yolov9-t-640"), accelerator=accelerator),
+            SlotPlateReader(models.find("plate-ocr-cct-s-v2-global"), accelerator=accelerator))
 
 
 # ------------------------------------------------------------------ service

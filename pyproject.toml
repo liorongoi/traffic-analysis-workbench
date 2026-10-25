@@ -33,6 +33,7 @@ trafficwb-inventory = "trafficwb.inventory:main"
 trafficwb-mission = "trafficwb.cli:main"
 trafficwb-web = "trafficwb.web.app:main"
 trafficwb-admin = "trafficwb.admin:main"
+trafficwb-speedcheck = "trafficwb.speedcheck:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -17,6 +17,7 @@ Status: **still images (phases 0 to 4), web screens, object search, video part 1
 | `trafficwb.night`, `trafficwb.night_service` | Day/dusk/night from image content, headlights and glare, learned background lights (always, often or sometimes lit at each place), distance bands, vehicle candidates at night |
 | `trafficwb.night_review`, `trafficwb.night_learn` | Night review queue across images (most uncertain first), accuracy of night candidates from operator answers, and learned scoring per view from those answers |
 | `trafficwb.process` | Resumable processing runs |
+| `trafficwb.speedcheck` | Speed check on the workstation: model speed on each backend (CUDA, DirectML, CPU), images per day, video time |
 | `trafficwb.interpret`, `trafficwb.attributes`, `trafficwb.search` | Typed object search: request to confirmed spec, vehicle colour with "not observable", match/possible results |
 | `trafficwb.video`, `trafficwb.tracker`, `trafficwb.video_process`, `trafficwb.video_review` | Video by frame timestamps in resumable chunks, vehicle tracking, one event per appearance, event review, clips |
 | `trafficwb.plates`, `trafficwb.plate_layout` | Plate finding and reading on each vehicle, raw and normalised text, unreadable kept unreadable, review, country evaluation gate; in video, each vehicle event read on several frames and combined |

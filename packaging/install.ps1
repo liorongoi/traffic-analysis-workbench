@@ -132,6 +132,14 @@ set TWB_MODELS=$Models
 if (Test-Path (Join-Path $Target "current.txt")) { Copy-Item (Join-Path $Target "current.txt") (Join-Path $Target "previous.txt") -Force }
 Set-Content -Path (Join-Path $Target "current.txt") -Value $Venv
 Copy-Item (Join-Path $Bundle "autostart.ps1") (Join-Path $Target "autostart.ps1") -Force
+@"
+@echo off
+rem Measures how fast the models run on this computer (GPU and CPU). Takes a minute or two; changes nothing.
+rem For a truer figure, add: --images "D:\a folder with about 20 typical images"
+set TWB_MODELS=$Models
+"$Venv\Scripts\trafficwb-speedcheck.exe" --out "$Target\logs\speed-check.txt" %*
+pause
+"@ | Set-Content -Encoding ASCII (Join-Path $Target "speed-check.cmd")
 Write-Host "Installed $($Info.version)."
 
 # 7. Automatic start. An update restarts a server that already starts by itself, so it runs the new version.

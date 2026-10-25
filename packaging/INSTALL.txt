@@ -43,6 +43,13 @@ Backups
 - "Back up now" is on the missions page. trafficwb-admin backup / verify / restore work from the command line.
 - Crops and clips are not in the nightly backup; use trafficwb-admin backup --with-evidence for a full copy.
 
+Speed check
+- Double-click C:\TrafficWorkbench\speed-check.cmd. It times the models on every backend this computer offers
+  (NVIDIA CUDA, DirectML, CPU) and says which is fastest, how many images a day that is, and how long an hour
+  of video takes. The report is saved in C:\TrafficWorkbench\logs\speed-check.txt. Nothing is changed.
+- For a truer figure, give it about 20 typical images:
+     C:\TrafficWorkbench\speed-check.cmd --images "D:\Feeds\CAM1"
+
 GPU
 - A bundle built with --ort auto carries both GPU builds of ONNX Runtime. The installer reads the NVIDIA driver version
   (nvidia-smi): 580 or later gets CUDA, otherwise DirectML. If CUDA does not start in the install check, it switches to

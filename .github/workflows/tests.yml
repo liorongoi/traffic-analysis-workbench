@@ -87,3 +87,13 @@ jobs:
           & "$t\autostart.ps1" -Mode remove
           WaitFor $false
           if (Get-ScheduledTask -TaskName "Traffic Analysis Workbench" -ErrorAction SilentlyContinue) { throw "task not removed" }
+      - name: Speed check on the installed version
+        shell: pwsh
+        run: |
+          $t = "$env:RUNNER_TEMP\twb"
+          if (-not (Test-Path "$t\speed-check.cmd")) { throw "speed-check.cmd was not written" }
+          $venv = (Get-Content "$t\current.txt" -Raw).Trim()
+          $env:TWB_MODELS = "$t\models"
+          & "$venv\Scripts\trafficwb-speedcheck.exe" --n 3 --out "$t\logs\speed-check.txt"
+          if ($LASTEXITCODE -ne 0) { throw "speed check failed" }
+          Get-Content "$t\logs\speed-check.json"
