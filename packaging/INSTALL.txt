@@ -1,0 +1,58 @@
+Traffic Analysis Workbench: offline install and update
+=======================================================
+
+This folder contains everything the workstation needs. Nothing is downloaded during install or use.
+
+Install or update (Windows)
+1. Copy this whole folder to the workstation (USB or internal share).
+2. Open PowerShell in this folder and run:
+     powershell -ExecutionPolicy Bypass -File install.ps1 -Target C:\TrafficWorkbench -Data D:\TrafficData -BackupDir E:\TrafficBackups
+   - Python must be installed, or put the official python-3.x.y-amd64.exe installer in this folder first.
+   - The installer checks every file against SHA256SUMS, installs into C:\TrafficWorkbench\app-<version>,
+     adds the model packs, runs a disconnected install-to-export check, backs up the data (on an update),
+     and only then switches start.cmd to the new version.
+3. The installer sets the server to start when you sign in to Windows, and starts it now. No administrator
+   rights are needed. Open http://127.0.0.1:8765 on the workstation.
+   The first account (administrator of the app) can only be created from the workstation itself.
+   Add -AutoStart none to start it yourself with C:\TrafficWorkbench\start.cmd instead.
+
+Automatic start (C:\TrafficWorkbench\autostart.ps1)
+- Status:   powershell -ExecutionPolicy Bypass -File C:\TrafficWorkbench\autostart.ps1 -Mode status
+- Sign-in:  -Mode signin   starts at Windows sign-in in a minimised window and restarts the server 10 s after
+            it stops. No administrator rights. The output goes to C:\TrafficWorkbench\logs\server.log
+            (kept to about 10 MB, with one older file).
+- Restart:  -Mode restart  e.g. after changing start.cmd. An update does this by itself.
+- Remove:   -Mode remove   removes the automatic start and stops the server.
+- Power-on: -Mode boot     for an IT administrator only: a scheduled task that starts the server when the
+            computer starts, before anyone signs in. Creating it needs administrator rights; the server then runs
+            as the Windows account given (asked for its password), which must be able to read the source folders.
+            -System runs it as the SYSTEM account, which cannot read network shares.
+- Stopping the server stops processing at once. It continues from where it stopped at the next start.
+
+Roll back an update
+1. Stop the server.
+2. Open C:\TrafficWorkbench\previous.txt: it names the previous version's folder. Edit start.cmd to use that folder.
+3. If the update changed the database format, restore the backup taken just before the update into a new folder
+   and point start.cmd's --data at it:
+     <previous folder>\Scripts\trafficwb-admin.exe verify E:\TrafficBackups\twb-backup-<time>
+     <previous folder>\Scripts\trafficwb-admin.exe restore E:\TrafficBackups\twb-backup-<time> --data D:\TrafficData-restored
+   Each mission database also keeps an automatic copy from just before each format change, in its backups folder.
+
+Backups
+- With -BackupDir, the server backs up every database each night at 02:00 (change with --backup-at in start.cmd).
+- "Back up now" is on the missions page. trafficwb-admin backup / verify / restore work from the command line.
+- Crops and clips are not in the nightly backup; use trafficwb-admin backup --with-evidence for a full copy.
+
+Speed check
+- Double-click C:\TrafficWorkbench\speed-check.cmd. It times the models on every backend this computer offers
+  (NVIDIA CUDA, DirectML, CPU) and says which is fastest, how many images a day that is, and how long an hour
+  of video takes. The report is saved in C:\TrafficWorkbench\logs\speed-check.txt. Nothing is changed.
+- For a truer figure, give it about 20 typical images:
+     C:\TrafficWorkbench\speed-check.cmd --images "D:\Feeds\CAM1"
+
+GPU
+- A bundle built with --ort auto carries both GPU builds of ONNX Runtime. The installer reads the NVIDIA driver version
+  (nvidia-smi): 580 or later gets CUDA, otherwise DirectML. If CUDA does not start in the install check, it switches to
+  DirectML by itself. Force a build with -Ort cuda, -Ort directml or -Ort cpu.
+- Models run on an NVIDIA GPU when the CUDA build and a suitable driver are present, else on DirectML,
+  else on the CPU. The missions page shows which is in use and why. Set TWB_ACCELERATOR=cpu in start.cmd to force the CPU.

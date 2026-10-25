@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trafficwb"
+version = "0.0.1"
+description = "Offline road-traffic image and video analysis (foundations)"
+requires-python = ">=3.11"
+# tzdata ships the IANA database so zoneinfo works on Windows without network access.
+dependencies = [
+    "tzdata>=2024.1",
+    "numpy>=1.26",
+    "opencv-python-headless>=4.8",
+    "openpyxl>=3.1",
+    "fastapi>=0.115",
+    "starlette>=0.39",   # byte-range responses for video playback
+    "av>=12",            # FFmpeg libraries for video decoding and clips
+    "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+# Exactly one ONNX Runtime build: CPU, NVIDIA CUDA (with its CUDA and cuDNN libraries), or DirectML.
+cpu = ["onnxruntime>=1.17"]
+cuda = ["onnxruntime-gpu[cuda,cudnn]>=1.21"]
+directml = ["onnxruntime-directml>=1.17"]
+probe = ["psutil>=5.9"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+trafficwb-probe = "trafficwb.probe:main"
+trafficwb-inventory = "trafficwb.inventory:main"
+trafficwb-mission = "trafficwb.cli:main"
+trafficwb-web = "trafficwb.web.app:main"
+trafficwb-admin = "trafficwb.admin:main"
+trafficwb-speedcheck = "trafficwb.speedcheck:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"trafficwb.web" = ["static/*", "static/assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
