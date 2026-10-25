@@ -9,6 +9,7 @@ on:
 jobs:
   bundle:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,8 +48,11 @@ jobs:
         run: |
           $exe = (Get-ChildItem setup -Filter *.exe | Select-Object -First 1).FullName
           $dir = "$env:LOCALAPPDATA\TrafficWorkbench"
-          $p = Start-Process -Wait -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup.log"
+          # Not Start-Process -Wait: PowerShell 7 would also wait for the server the wizard leaves running.
+          $p = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup.log"
+          $done = $p.WaitForExit(15 * 60 * 1000)
           Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 25
+          if (-not $done) { Get-Content "$env:RUNNER_TEMP\setup.log" | Select-Object -Last 40; throw "setup did not finish in 15 minutes" }
           if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\setup.log" | Select-Object -Last 40; throw "setup exit code $($p.ExitCode)" }
           if (-not (Test-Path "$dir\current.txt")) { throw "the wizard did not install the app" }
           $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
@@ -56,8 +60,10 @@ jobs:
           Write-Host "Server answering after the wizard."
           $link = Join-Path ([Environment]::GetFolderPath("Startup")) "Traffic Analysis Workbench.lnk"
           if (-not (Test-Path $link)) { throw "sign-in start not set up" }
-          $u = Start-Process -Wait -PassThru "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
-          Start-Sleep -Seconds 5
+          # The uninstaller hands over to a copy of itself in TEMP and exits; wait for that copy too.
+          $u = Start-Process -PassThru "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
+          $null = $u.WaitForExit(5 * 60 * 1000)
+          for ($i = 0; $i -lt 60 -and (Test-Path "$dir\current.txt"); $i++) { Start-Sleep -Seconds 2 }
           if (Test-Path $link) { throw "uninstall left the sign-in start" }
           if (Test-Path "$dir\current.txt") { throw "uninstall left the program" }
           if (-not (Test-Path "$env:USERPROFILE\TrafficData")) { throw "uninstall removed the data folder" }
