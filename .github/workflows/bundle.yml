@@ -1,0 +1,35 @@
+name: windows-installer
+# Builds the offline Windows package (app, dependencies, model packs, Python installer) and keeps it as a
+# downloadable artifact: Actions > windows-installer > latest run > Artifacts.
+on:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch:
+jobs:
+  bundle:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: python scripts/build_ui.py
+      - run: python scripts/fetch_models.py
+      - run: python scripts/make_bundle.py --platform win_amd64 --python 3.12 --ort auto --out dist
+      - name: Add the Python installer (per-user install, no administrator rights)
+        id: py
+        shell: pwsh
+        run: |
+          $b = Get-ChildItem dist -Directory | Select-Object -First 1
+          Invoke-WebRequest "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe" -OutFile "$($b.FullName)\python-3.12.10-amd64.exe"
+          "folder=$($b.Name)" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TrafficWorkbench-${{ steps.py.outputs.folder }}
+          path: dist/${{ steps.py.outputs.folder }}
+          retention-days: 90
