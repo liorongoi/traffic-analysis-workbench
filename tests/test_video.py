@@ -393,3 +393,73 @@ def test_image_mission_has_no_video_endpoints(api, tmp_path):
             "output_dir": str(tmp_path / "out"), "export_formats": ["csv"]}
     mid = c.post("/api/missions", json=body, headers=H1).json()["id"]
     assert c.get(f"/api/missions/{mid}/events").status_code == 400
+
+
+# ------------------------------------------------------------------ plates in video
+
+def plate_car_scene(t: float) -> np.ndarray:
+    """One large red car moving right, with a yellow plate on it."""
+    img = np.full((H, W, 3), 100, np.uint8)
+    x = int(20 + 40 * t)
+    cv2.rectangle(img, (x, 60), (x + 100, 120), (0, 0, 255), -1)
+    cv2.rectangle(img, (x + 25, 100), (x + 75, 114), (0, 220, 255), -1)
+    return img
+
+
+def test_combine_frame_reads_votes_and_never_mixes():
+    import json as _json
+    from trafficwb.plates import combine_frame_reads
+    o = [{"t": float(i)} for i in range(4)]
+    full = lambda text, s=0.9: {"outcome": "read", "readability": "full", "normalized_text": text, "det_score": s, "reasons": "[]"}
+    t, r = combine_frame_reads([(o[0], full("1234567")), (o[1], full("1234567", 0.95)), (o[2], {"outcome": "no_plate_found", "reasons": "[]"})])
+    assert r["normalized_text"] == "1234567" and r["readability"] == "full" and t["t"] == 1.0
+    assert "2 frames agree" in _json.loads(r["reasons"]) and "plate read on 2 of 3 frames" in _json.loads(r["reasons"])
+    t, r = combine_frame_reads([(o[0], full("1234567")), (o[1], full("1234561"))])
+    assert r["readability"] == "partial" and any("disagree" in x for x in _json.loads(r["reasons"]))
+    part = lambda text, s: {"outcome": "read", "readability": "partial", "normalized_text": text, "det_score": s, "reasons": "[]"}
+    t, r = combine_frame_reads([(o[0], part("12??567", 0.9)), (o[1], part("123?567", 0.6))])
+    assert r["normalized_text"] == "123?567"                     # fewest unsure characters; nothing filled in
+    t, r = combine_frame_reads([(o[0], {"outcome": "vehicle_too_small", "reasons": "[]"}),
+                                (o[1], {"outcome": "plate_too_small", "readability": "unreadable", "reasons": "[]"})])
+    assert r["outcome"] == "plate_too_small"
+
+
+def test_plates_read_on_several_frames_of_each_event(tmp_path):
+    from test_plates import PAD, YellowFinder, slots
+    from trafficwb.plates import OcrOut, PlateService
+
+    class Reader:
+        def __init__(self, texts):
+            self.texts, self.calls = texts, 0
+
+        def describe(self):
+            return {"model": {"name": "list-reader", "version": "1", "sha256": "3" * 64}, "preprocessing": {}}
+
+        def read(self, plate):
+            self.calls += 1
+            return OcrOut(slots(self.texts[(self.calls - 1) % len(self.texts)]), PAD, "Israel", 0.9)
+
+    m = mission(tmp_path, {"CAM1_20261021T120000Z.mp4": (5.0, plate_car_scene, False)}, mode="plate_recognition")
+    reader = Reader(["1234567"])
+    rep = VideoProcessor(m, RedDetector(), {}, plate_models=lambda: (YellowFinder(), reader)).process_all()
+    assert rep[0].events == 1 and rep[0].plates["events"] == 1 and rep[0].plates["frames"] == 4
+    svc = PlateService(m)
+    (p,) = svc.plates()
+    assert p.object_uid.startswith("e") and p.event_key == "E-0001" and p.t is not None
+    assert (p.outcome, p.machine_text, p.readability) == ("read", "1234567", "full")
+    assert "4 frames agree" in p.reasons and p.capture_utc.startswith("2026-10-21T12:00:0")
+    # Operator review works as for still images, and the export names the event and time.
+    svc.revise(p.id, "confirm", "lior")
+    assert svc.plates()[0].review == "confirmed"
+    paths = svc.export("lior", ["csv"])
+    rows = list(csv.DictReader(open(paths[0], encoding="utf-8-sig")))
+    assert rows[0]["video_event"] == "E-0001" and rows[0]["plate_text"] == "1234567"
+    ev = list(csv.DictReader(open(VideoService(m).export("lior", ["csv"])[0], encoding="utf-8-sig")))
+    assert ev[0]["plate_text"] == "1234567" and ev[0]["plate_review"] == "confirmed"
+    # Nothing new to read: a second refresh reads nothing.
+    assert PlateService(m, YellowFinder(), reader).refresh()["events"] == 0
+    # Frames that disagree give a partial read, with both texts in the reasons.
+    m2 = mission(tmp_path / "b", {"CAM1_20261021T120000Z.mp4": (5.0, plate_car_scene, False)}, mode="plate_recognition")
+    VideoProcessor(m2, RedDetector(), {}, plate_models=lambda: (YellowFinder(), Reader(["1234567", "7654321"]))).process_all()
+    (p,) = PlateService(m2).plates()
+    assert p.readability == "partial" and any("disagree" in r for r in p.reasons)

@@ -292,9 +292,14 @@ class VideoService:
         out.mkdir(parents=True, exist_ok=True)
         sha = {r[0]: r[1] for r in self.con.execute("SELECT id, sha256 FROM source_version")}
         models = {r["id"]: json.loads(r["model_versions"] or "{}") for r in self.con.execute("SELECT id, model_versions FROM run")}
+        plates = {}
+        if cfg.mode == "plate_recognition":
+            from .plates import PlateService
+            plates = {p.object_uid: p for p in PlateService(self.m).plates()}
         rows = []
         for e in self.events():
             clips = ";".join(c["path"] for c in self.clips(e.id))
+            pl = plates.get(f"e{e.id}")
             for k, (a, b) in enumerate(e.parts, 1):
                 st = getattr(e, "_start", None)
                 rows.append([_fmt(x) for x in (
@@ -304,12 +309,13 @@ class VideoService:
                     e.duplicate_of or "", ",".join(e.absorbed), ",".join(e.flags), ",".join(e.related), e.end_reason,
                     e.entry[0], e.entry[1], e.exit[0], e.exit[1], fmt_t(e.machine_first_t), fmt_t(e.machine_last_t),
                     e.revisions, clips,
-                    (models.get(e.run_id, {}).get("vehicle_detection") or {}).get("name", ""))])
+                    (models.get(e.run_id, {}).get("vehicle_detection") or {}).get("name", ""),
+                    pl.text if pl else "", pl.readability if pl else "", pl.review if pl else "")])
         cols = ["mission_id", "run_id", "source_version_id", "file", "sha256", "event_id", "part", "start", "end",
                 "start_s", "end_s", "start_utc", "end_utc", "utc_precision", "class", "machine_class", "class_share",
                 "review_status", "duplicate_of", "merged_events", "flags", "possible_duplicate_of", "end_reason",
                 "entry_x", "entry_y", "exit_x", "exit_y", "machine_start", "machine_end", "operator_revisions", "clips",
-                "model"]
+                "model", "plate_text", "plate_readability", "plate_review"]
         stem = "".join(c if c.isalnum() or c in "-_." else "_"
                        for c in f"{cfg.name}_events_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
         paths = []

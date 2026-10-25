@@ -8,8 +8,8 @@ type Preview = { file: string; ok: boolean; utc?: string; precision?: string; pa
 const STEPS = ["Mission", "Place and time", "Source", "Output", "Check and create"];
 const MODE_HELP: Record<string, string> = {
   general_traffic: "Vehicles per image, within the view's regions. Never presented as unique vehicles or traffic flow.",
-  object_search: "Find vehicles matching a description (planned).",
-  plate_recognition: "Read licence plates, country by country (planned).",
+  object_search: "Find vehicles matching a description.",
+  plate_recognition: "Read licence plates, country by country. In video, each vehicle's plate is read on several frames.",
 };
 
 export default function Wizard() {

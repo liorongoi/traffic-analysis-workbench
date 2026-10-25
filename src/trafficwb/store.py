@@ -26,7 +26,7 @@ COUNTRY_ZONES = {"IR": "Asia/Tehran", "LB": "Asia/Beirut", "IL": "Asia/Jerusalem
 INPUT_TYPES = {"images", "video"}
 MODES = {
     "images": {"general_traffic", "object_search", "plate_recognition"},
-    "video": {"object_search"},
+    "video": {"object_search", "plate_recognition"},
 }
 EXPORT_FORMATS = {"xlsx", "csv"}
 
@@ -708,6 +708,32 @@ CREATE TABLE night_light_model (
   model TEXT                        -- coefficients (JSON) when applied
 );
 CREATE INDEX ix_night_model_view ON night_light_model(view_id, decision_rev);
+""",
+    13: """
+-- Plates of vehicles in video events: read on several frames of the event and combined; machine output, immutable.
+CREATE TABLE event_plate_read (
+  id INTEGER PRIMARY KEY,
+  event_id INTEGER NOT NULL REFERENCES video_event(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  object_uid TEXT NOT NULL,          -- e<event id>
+  frame_t REAL,                      -- seconds from the stream start of the frame the result comes from
+  vx1 REAL, vy1 REAL, vx2 REAL, vy2 REAL,   -- the vehicle on that frame
+  outcome TEXT NOT NULL,             -- read | no_plate_found | vehicle_too_small | plate_too_small
+  x1 REAL, y1 REAL, x2 REAL, y2 REAL,
+  det_score REAL,
+  crop_path TEXT,
+  raw_text TEXT, raw_chars TEXT, normalized_text TEXT, display_text TEXT,
+  country_hyp TEXT, layout_hyp TEXT, region_label TEXT, region_conf REAL,
+  readability TEXT,
+  reasons TEXT NOT NULL DEFAULT '[]',
+  frames TEXT NOT NULL DEFAULT '[]', -- JSON: every frame read (time, outcome, text, readability, score)
+  detector_model_id INTEGER REFERENCES model_version(id),
+  reader_model_id INTEGER REFERENCES model_version(id),
+  rules TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(event_id, detector_model_id, reader_model_id)
+);
+CREATE INDEX ix_event_plate_version ON event_plate_read(source_version_id);
 """,
 }
 

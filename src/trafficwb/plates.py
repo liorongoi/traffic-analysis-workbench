@@ -146,6 +146,7 @@ class PlateSettings:
     margin: float = 0.05             # around the vehicle box
     min_vehicle_side_px: int = 24
     upscale_to: int = 320            # small vehicle crops are enlarged before the finder sees them
+    video_frames: int = 4            # video: frames of each vehicle event the plate is read on
     rules: ReadRules = field(default_factory=ReadRules)
 
     def record(self) -> dict:
@@ -182,6 +183,44 @@ class PlateView:
     review: str = "pending"              # pending | confirmed | corrected | unreadable | no_plate
     revisions: int = 0
     operator_box: list[float] | None = None
+    t: float | None = None               # video: seconds from the stream start of the frame shown
+    event_key: str | None = None         # video: the vehicle event
+
+
+def combine_frame_reads(reads: list[tuple]) -> tuple:
+    """One result for a video event from the reads on several of its frames.
+
+    - Fully read texts are voted. The most common wins; a tie or a disagreement between full reads makes the
+      result partial (frames disagree), never a silent pick.
+    - With no full read, the partial read with the fewest unsure characters (then the surest plate box) stands.
+    - With nothing read, the most advanced outcome stands: plate too small, then no plate found, then vehicle too small.
+    Nothing is completed from other frames: characters are never mixed between frames.
+    """
+    from collections import Counter
+    rank = {"read": 3, "plate_too_small": 2, "no_plate_found": 1, "vehicle_too_small": 0}
+    full = [(o, r) for o, r in reads if r["outcome"] == "read" and r.get("readability") == "full"]
+    note = f"plate read on {sum(1 for _, r in reads if r['outcome'] == 'read')} of {len(reads)} frames"
+    if full:
+        votes = Counter(r["normalized_text"] for _, r in full)
+        (text, n), *rest = votes.most_common()
+        o, r = max(((o, r) for o, r in full if r["normalized_text"] == text), key=lambda x: x[1].get("det_score") or 0)
+        r = dict(r)
+        reasons = json.loads(r.get("reasons") or "[]") + [note]
+        if rest:
+            r["readability"] = "partial"
+            reasons.append("frames disagree: " + ", ".join(f"{t} ({c})" for t, c in votes.most_common()))
+        elif n > 1:
+            reasons.append(f"{n} frames agree")
+        r["reasons"] = json.dumps(reasons, ensure_ascii=False)
+        return o, r
+    partial = [(o, r) for o, r in reads if r["outcome"] == "read" and r.get("readability") == "partial"]
+    if partial:
+        o, r = min(partial, key=lambda x: ((x[1].get("normalized_text") or "").count("?"), -(x[1].get("det_score") or 0)))
+    else:
+        o, r = max(reads, key=lambda x: (rank.get(x[1]["outcome"], -1), x[1].get("det_score") or 0))
+    r = dict(r)
+    r["reasons"] = json.dumps(json.loads(r.get("reasons") or "[]") + [note], ensure_ascii=False)
+    return o, r
 
 
 class PlateService:
@@ -192,6 +231,8 @@ class PlateService:
         self.finder, self.reader = finder, reader
         self.s = settings or PlateSettings()
         self.views = ViewService(mission)
+        self.video = mission.input_type == "video"
+        self.table = "event_plate_read" if self.video else "plate_read"
 
     @property
     def country(self) -> str:
@@ -205,6 +246,8 @@ class PlateService:
     def refresh(self, control: RunControl | None = None, progress: Callable[[int, int], None] | None = None) -> dict:
         """Read plates of every current vehicle detection not yet read with this finder and reader."""
         control = control or RunControl()
+        if self.video:
+            return self._refresh_video(control, progress)
         fd, rd = self.finder.describe(), self.reader.describe()
         fid = register_model(self.con, fd, getattr(getattr(self.finder, "pack", None), "card", {"task": "plate_detection"}))
         rid = register_model(self.con, rd, getattr(getattr(self.reader, "pack", None), "card", {"task": "plate_ocr"}))
@@ -253,7 +296,7 @@ class PlateService:
                 progress(n, len(by_img))
         return stats
 
-    def _read_one(self, img, W, H, d, country: str, crops: Path) -> dict:
+    def _read_one(self, img, W, H, d, country: str, crops: Path, name: str | None = None) -> dict:
         x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
         bw, bh = x2 - x1, y2 - y1
         if min(bw, bh) < self.s.min_vehicle_side_px:
@@ -278,7 +321,7 @@ class PlateService:
         pc = img[max(0, int(py1)):min(H, int(np.ceil(py2))), max(0, int(px1)):min(W, int(np.ceil(px2)))]
         if pc.size == 0:
             return {"outcome": "no_plate_found", "reasons": json.dumps(["empty plate box"])}
-        path = crops / f"det{d['id']}_{d['source_version_id']}.png"
+        path = crops / (name or f"det{d['id']}_{d['source_version_id']}.png")
         cv2.imwrite(str(path), pc)
         row["crop_path"] = str(path)
         if py2 - py1 < self.s.rules.min_plate_height_px:
@@ -307,6 +350,80 @@ class PlateService:
                 "region_conf": None if o.region_conf is None else round(o.region_conf, 4),
                 "readability": rd.readability, "reasons": json.dumps(rd.reasons)}
 
+    # ---------- video ----------
+    def _event_frames(self, event, k: int) -> list:
+        """Up to k observations of the event to read the plate on: the largest boxes, spread out in time
+        (at least 0.4 s apart), skipping low-confidence boxes and boxes cut by the frame edge."""
+        obs = self.con.execute("SELECT * FROM track_observation WHERE track_id=? ORDER BY t", (event["track_id"],)).fetchall()
+        W, H = event["width"] or 1e9, event["height"] or 1e9
+        good = [o for o in obs if o["score"] >= 0.3 and o["cls"] in PLATE_VEHICLES
+                and o["x1"] > 2 and o["y1"] > 2 and o["x2"] < W - 2 and o["y2"] < H - 2] or list(obs)
+        good.sort(key=lambda o: -(o["x2"] - o["x1"]) * (o["y2"] - o["y1"]))
+        picked: list = []
+        for o in good:
+            if all(abs(o["t"] - p["t"]) >= 0.4 for p in picked):
+                picked.append(o)
+            if len(picked) == k:
+                break
+        return sorted(picked, key=lambda o: o["t"])
+
+    def _refresh_video(self, control: RunControl, progress) -> dict:
+        """Read the plate of every vehicle event on its best frames, and combine the reads."""
+        from .video import frame_at
+        fd, rd = self.finder.describe(), self.reader.describe()
+        fid = register_model(self.con, fd, getattr(getattr(self.finder, "pack", None), "card", {"task": "plate_detection"}))
+        rid = register_model(self.con, rd, getattr(getattr(self.reader, "pack", None), "card", {"task": "plate_ocr"}))
+        q = ",".join("?" * len(PLATE_VEHICLES))
+        events = self.con.execute(
+            f"SELECT e.*, pr.width, pr.height, f.rel_path FROM video_event e JOIN run_item i ON i.id=e.run_item_id "
+            f"JOIN source_version v ON v.id=e.source_version_id JOIN source_file f ON f.id=v.source_file_id "
+            f"LEFT JOIN video_probe pr ON pr.source_version_id=e.source_version_id "
+            f"WHERE i.processing_state='done' AND v.superseded_by IS NULL AND e.cls IN ({q}) "
+            f"AND i.id=(SELECT MAX(j.id) FROM run_item j WHERE j.source_version_id=e.source_version_id) "
+            f"AND NOT EXISTS (SELECT 1 FROM event_plate_read p WHERE p.event_id=e.id AND p.detector_model_id=? "
+            f"AND p.reader_model_id=?) ORDER BY e.source_version_id, e.first_t", (*PLATE_VEHICLES, fid, rid)).fetchall()
+        stats = {"events": 0, "frames": 0, "read": 0, "no_plate_found": 0, "too_small": 0, "failed": 0}
+        crops = self.m.dir / "evidence" / "plates"
+        crops.mkdir(parents=True, exist_ok=True)
+        rules = json.dumps(self.s.record() | {"video": {"frames_per_event": self.s.video_frames, "min_gap_s": 0.4}})
+        country = self.country
+        for n, e in enumerate(events, 1):
+            control.checkpoint()                # cancel or pause only between events
+            path = self.views._path(e["source_version_id"])
+            reads = []
+            for o in self._event_frames(e, self.s.video_frames):
+                try:
+                    fr = frame_at(path, o["t"])
+                except Exception:
+                    fr = None
+                if fr is None:
+                    continue
+                H, W = fr.image.shape[:2]
+                d = {"x1": o["x1"], "y1": o["y1"], "x2": o["x2"], "y2": o["y2"], "id": o["id"],
+                     "source_version_id": e["source_version_id"]}
+                row = self._read_one(fr.image, W, H, d, country, crops, name=f"ev{e['id']}_t{o['t']:.2f}.png")
+                reads.append((o, row))
+                stats["frames"] += 1
+            if not reads:
+                stats["failed"] += 1
+                self.m.notify("warning", "plate_read_failed", f"No frame of {e['rel_path']} {e['event_key']} could be read.",
+                              source_version_id=e["source_version_id"])
+                continue
+            o, row = combine_frame_reads(reads)
+            stats[{"read": "read", "no_plate_found": "no_plate_found"}.get(row["outcome"], "too_small")] += 1
+            frames_json = json.dumps([{"t": round(fo["t"], 3), "outcome": fr_["outcome"], "text": fr_.get("normalized_text"),
+                                       "readability": fr_.get("readability"), "score": fr_.get("det_score")}
+                                      for fo, fr_ in reads], ensure_ascii=False)
+            cols = ["event_id", "source_version_id", "object_uid", "frame_t", "vx1", "vy1", "vx2", "vy2", *row.keys(),
+                    "frames", "detector_model_id", "reader_model_id", "rules", "created_at"]
+            vals = [e["id"], e["source_version_id"], f"e{e['id']}", o["t"], o["x1"], o["y1"], o["x2"], o["y2"],
+                    *row.values(), frames_json, fid, rid, rules, utcnow()]
+            self.con.execute(f"INSERT INTO event_plate_read({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", vals)
+            stats["events"] += 1
+            if progress:
+                progress(n, len(events))
+        return stats
+
     # ---------- reading ----------
     def country_status(self, country: str | None = None) -> dict:
         country = country or self.country
@@ -328,6 +445,9 @@ class PlateService:
         where, args = "", []
         if version_id is not None:
             where, args = "AND p.source_version_id=?", [version_id]
+        if self.video:
+            out = self._video_plates(where, args)
+            return self._filter(out, outcome, readability, review, search)
         rows = self.con.execute(
             "SELECT p.*, d.cls AS vcls, d.x1 AS vx1, d.y1 AS vy1, d.x2 AS vx2, d.y2 AS vy2, f.rel_path, v.capture_utc "
             "FROM plate_read p JOIN detection d ON d.id=p.detection_id JOIN source_version v ON v.id=p.source_version_id "
@@ -345,6 +465,9 @@ class PlateService:
                 json.loads(r["raw_chars"] or "[]"), r["normalized_text"], r["display_text"], r["readability"],
                 r["layout_hyp"], r["region_label"], r["region_conf"], json.loads(r["reasons"]),
                 r["country_hyp"] or self.country, not enabled, r["normalized_text"], r["readability"]))
+        return self._filter(out, outcome, readability, review, search)
+
+    def _filter(self, out: list[PlateView], outcome, readability, review, search) -> list[PlateView]:
         self._apply(out)
         if outcome:
             out = [p for p in out if p.outcome == outcome]
@@ -355,6 +478,28 @@ class PlateService:
         if search:
             key = normalize(search)
             out = [p for p in out if p.text and key in p.text]
+        return out
+
+    def _video_plates(self, where: str, args: list) -> list[PlateView]:
+        from .video import start_utc, utc_at
+        rows = self.con.execute(
+            "SELECT p.*, e.event_key, e.cls AS vcls, f.rel_path, pr.start_utc FROM event_plate_read p "
+            "JOIN video_event e ON e.id=p.event_id JOIN source_version v ON v.id=p.source_version_id "
+            "JOIN source_file f ON f.id=v.source_file_id LEFT JOIN video_probe pr ON pr.source_version_id=p.source_version_id "
+            "WHERE v.superseded_by IS NULL AND p.id IN (SELECT MAX(id) FROM event_plate_read GROUP BY event_id) "
+            f"AND e.run_item_id=(SELECT MAX(j.id) FROM run_item j WHERE j.source_version_id=e.source_version_id) {where} "
+            "ORDER BY f.rel_path, p.frame_t, p.id", args).fetchall()
+        enabled = self.country_status()["enabled"]
+        out = []
+        for r in rows:
+            out.append(PlateView(
+                r["id"], r["source_version_id"], r["rel_path"], utc_at(start_utc(r["start_utc"]), r["frame_t"] or 0.0),
+                r["object_uid"], r["vcls"], [r["vx1"], r["vy1"], r["vx2"], r["vy2"]], r["outcome"],
+                [r["x1"], r["y1"], r["x2"], r["y2"]] if r["x1"] is not None else None, r["det_score"], r["raw_text"],
+                json.loads(r["raw_chars"] or "[]"), r["normalized_text"], r["display_text"], r["readability"],
+                r["layout_hyp"], r["region_label"], r["region_conf"], json.loads(r["reasons"]),
+                r["country_hyp"] or self.country, not enabled, r["normalized_text"], r["readability"],
+                t=r["frame_t"], event_key=r["event_key"]))
         return out
 
     def _apply(self, plates: list[PlateView]) -> None:
@@ -383,11 +528,11 @@ class PlateService:
                 p.review, p.text, p.readability, p.operator_box = "pending", p.machine_text, p.machine_readability, None
 
     def plate(self, plate_id: int) -> PlateView:
-        r = self.con.execute("SELECT source_version_id, detection_id FROM plate_read WHERE id=?", (plate_id,)).fetchone()
+        r = self.con.execute(f"SELECT source_version_id, object_uid FROM {self.table} WHERE id=?", (plate_id,)).fetchone()
         if r is None:
             raise PlateError("No such plate.")
         for p in self.plates(r["source_version_id"]):
-            if p.object_uid == f"d{r['detection_id']}":
+            if p.object_uid == r["object_uid"]:
                 return p
         raise PlateError("That plate belongs to an older processing run.")
 
@@ -480,7 +625,7 @@ class PlateService:
         return result | {"passed": passed}
 
     def _reader_id(self) -> int | None:
-        r = self.con.execute("SELECT reader_model_id FROM plate_read ORDER BY id DESC LIMIT 1").fetchone()
+        r = self.con.execute(f"SELECT reader_model_id FROM {self.table} ORDER BY id DESC LIMIT 1").fetchone()
         return r[0] if r else None
 
     def set_enabled(self, enabled: bool, author: str, note: str | None = None, country: str | None = None) -> dict:
@@ -509,7 +654,7 @@ class PlateService:
         sha = {r[0]: r[1] for r in self.con.execute("SELECT id, sha256 FROM source_version")}
         models = {r[0]: f"{r[1]} {r[2]}" for r in self.con.execute("SELECT id, name, version FROM model_version")}
         ids = {r["id"]: (r["detector_model_id"], r["reader_model_id"]) for r in
-               self.con.execute("SELECT id, detector_model_id, reader_model_id FROM plate_read")}
+               self.con.execute(f"SELECT id, detector_model_id, reader_model_id FROM {self.table}")}
         rows = []
         for p in self.plates():
             fid, rid = ids.get(p.id, (None, None))
@@ -519,13 +664,14 @@ class PlateService:
                 *(p.operator_box or ["", "", "", ""]), p.raw_text,
                 " ".join(f"{c}:{v:.2f}" for c, v in p.chars), p.machine_text, p.machine_display, p.machine_readability,
                 p.layout, p.country, p.region_label, p.region_conf, "; ".join(p.reasons), p.review, p.text, p.readability,
-                p.revisions, "yes" if p.evaluation_only else "no", models.get(fid, ""), models.get(rid, ""))])
+                p.revisions, "yes" if p.evaluation_only else "no", models.get(fid, ""), models.get(rid, ""),
+                p.event_key or "", "" if p.t is None else round(p.t, 3))])
         cols = ["mission_id", "source_version_id", "file", "sha256", "capture_utc", "vehicle_id", "vehicle_class",
                 "outcome", "plate_x1", "plate_y1", "plate_x2", "plate_y2", "plate_score",
                 "operator_x1", "operator_y1", "operator_x2", "operator_y2", "raw_text", "char_confidences",
                 "machine_text", "machine_display", "machine_readability", "layout", "country", "reader_country_guess",
                 "reader_country_conf", "reasons", "review", "plate_text", "readability", "operator_revisions",
-                "evaluation_only", "plate_finder", "plate_reader"]
+                "evaluation_only", "plate_finder", "plate_reader", "video_event", "video_time_s"]
         stem = "".join(ch if ch.isalnum() or ch in "-_." else "_"
                        for ch in f"{cfg.name}_plates_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
         paths = []

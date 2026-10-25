@@ -68,7 +68,18 @@ Sources, read on 24 Oct 2026: English Wikipedia, "Vehicle registration plates of
 
 One row per vehicle looked at: file, checksum, capture time, vehicle, outcome, plate box, the operator's plate box, raw text, character confidences, machine text and readability, layout, country, the reader's country guess, reasons, review, final text and readability, number of operator changes, evaluation only (yes/no), and the finder and reader versions. Plate text is always written as text, so Excel keeps leading zeros.
 
+## Plates in video
+
+Video missions can use plate recognition. After a recording is processed, the plate of each vehicle event is read on up to 4 of its frames: the largest boxes of the event with detector confidence at least 0.3, not cut by the frame edge, at least 0.4 s apart. Each frame goes through the same stages as a still image. The reads are then combined into one result per event (`plates.combine_frame_reads`):
+
+- Fully read texts are voted. The most common wins and the reasons say how many frames agree. If full reads disagree, the result is partial and the reasons list each text with its count. Nothing is picked silently.
+- With no full read, the partial read with the fewest unsure characters stands (then the surest plate box).
+- With nothing read, the most advanced outcome stands: plate too small, then no plate found, then vehicle too small.
+- Characters are never mixed between frames, so a "?" is never filled from another frame.
+
+Results are stored in `event_plate_read` (migration 13), one row per event, with the frame time, the vehicle box on that frame and every frame read (`frames`). Review, the evaluation gate and export work as for still images; the plates export adds the event and the time, and the events export adds the plate text, readability and review.
+
 ## Not in this version
 
 - Reading Persian and Arabic plates (needs a reader trained on such plates).
-- Plates in video.
+- Drawing a missed plate's box on a video frame (type the text instead).

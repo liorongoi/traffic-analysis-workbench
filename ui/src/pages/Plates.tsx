@@ -12,6 +12,7 @@ type Plate = {
   machine_readability: string | null; layout: string | null; region_label: string | null; region_conf: number | null;
   reasons: string[]; country: string; evaluation_only: boolean; text: string | null; readability: string | null;
   review: string; revisions: number; operator_box: number[] | null;
+  t?: number | null; event_key?: string | null;
 };
 
 const OUTCOME: Record<string, string> = {
@@ -112,10 +113,13 @@ function PlateRow({ p, missionId, act }: { p: Plate; missionId: string; act: (fn
   const rv = (action: string, extra: Record<string, unknown> = {}) =>
     act(() => post(`/missions/${missionId}/plates/${p.id}/revise`, { action, ...extra }));
   const vbox = p.vehicle_box.map((v) => v.toFixed(1)).join(",");
+  const eventId = p.event_key ? Number(p.object_uid.slice(1)) : null;   // video: the vehicle event
+  const openHref = eventId ? `#/m/${missionId}/events/${eventId}` : `#/m/${missionId}/i/${p.source_version_id}`;
   return (
     <div className="card plate">
-      <a href={`#/m/${missionId}/i/${p.source_version_id}`} title="Open the image">
-        <img className="veh" src={`/api/missions/${missionId}/crops/${p.source_version_id}?box=${vbox}&h=90`} alt={`${p.vehicle_cls} in ${p.file}`} loading="lazy" />
+      <a href={openHref} title={eventId ? "Open the event" : "Open the image"}>
+        <img className="veh" src={eventId ? `/api/missions/${missionId}/events/${eventId}/thumb?h=90`
+          : `/api/missions/${missionId}/crops/${p.source_version_id}?box=${vbox}&h=90`} alt={`${p.vehicle_cls} in ${p.file}`} loading="lazy" />
       </a>
       <div className="grid" style={{ gap: 4, alignContent: "start" }}>
         {p.operator_box ? <><img className="pl" src={`/api/missions/${missionId}/crops/${p.source_version_id}?box=${p.operator_box.join(",")}&h=56`} alt="plate (box drawn by an operator)" loading="lazy" /><span className="muted" style={{ fontSize: 11.5 }}>box drawn by an operator</span></>
@@ -140,7 +144,7 @@ function PlateRow({ p, missionId, act }: { p: Plate; missionId: string; act: (fn
           {p.region_label && <> · reader's country guess {p.region_label} ({Math.round((p.region_conf ?? 0) * 100)}%)</>}
         </div>
         {p.reasons.length > 0 && <ul className="reasons" style={{ margin: 0 }}>{p.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>}
-        <div className="mono muted" style={{ fontSize: 11.5 }}>{p.file} · {p.vehicle_cls}</div>
+        <div className="mono muted" style={{ fontSize: 11.5 }}>{p.file}{p.event_key && <> · {p.event_key} at {p.t?.toFixed(1)} s</>} · {p.vehicle_cls}</div>
       </div>
       <div className="grid" style={{ gap: 4, alignContent: "start" }}>
         <div className="row" style={{ gap: 4 }}>
@@ -153,7 +157,9 @@ function PlateRow({ p, missionId, act }: { p: Plate; missionId: string; act: (fn
           <input dir="auto" placeholder="Type the plate as read" value={text} onChange={(e) => setText(e.target.value)} style={{ width: 170 }} />
           <button className="primary" disabled={!text.trim()} onClick={() => { rv("correct", { text }); setText(""); }}>Save</button>
         </div>
-        <span className="muted" style={{ fontSize: 12 }}>Type only what you can read. If a character is unclear, mark the plate unreadable. To draw a missed plate's box, <a href={`#/m/${missionId}/i/${p.source_version_id}`}>open the image</a> and select the vehicle.</span>
+        <span className="muted" style={{ fontSize: 12 }}>Type only what you can read. If a character is unclear, mark the plate unreadable.
+          {eventId ? <> To check other moments, <a href={openHref}>open the event</a> and play it.</>
+            : <> To draw a missed plate's box, <a href={openHref}>open the image</a> and select the vehicle.</>}</span>
       </div>
     </div>
   );

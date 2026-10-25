@@ -798,7 +798,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
     # ---------- plates ----------
     def _plates_svc(m: Mission):
         from ..plates import PlateService
-        if m.input_type != "images" or m.config().mode != "plate_recognition":
+        if m.config().mode != "plate_recognition":
             raise ApiError(400, "not_plates", "Plates are read only in plate recognition missions.")
         return PlateService(m)
 
@@ -826,7 +826,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
     @app.get("/api/missions/{mission_id}/plates/{plate_id}/crop")
     def plate_crop(plate_id: int, m: Mission = Depends(mission), h: int = Query(64, ge=16, le=300)):
         svc = _plates_svc(m)
-        row = m.con.execute("SELECT crop_path FROM plate_read WHERE id=?", (plate_id,)).fetchone()
+        row = m.con.execute(f"SELECT crop_path FROM {svc.table} WHERE id=?", (plate_id,)).fetchone()
         if row is None or not row[0] or not Path(row[0]).is_file():
             raise ApiError(404, "no_crop", "No plate crop for this vehicle.")
         img = cv2.imread(row[0])

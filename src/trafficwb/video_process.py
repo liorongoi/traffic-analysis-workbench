@@ -13,8 +13,10 @@ Rules:
 - Event times are presentation times in seconds from the stream start.
   Absolute UTC is added only when the recording's start is known from a
   confirmed source (the filename), with that source's precision.
+- Plate recognition missions read the plate of each vehicle event on a few of
+  its frames after processing (see plates.combine_frame_reads).
 - Not in this version: camera views and regions for video, night light
-  tracking (blob, pair, body), plates.
+  tracking (blob, pair, body).
 """
 from __future__ import annotations
 
@@ -46,12 +48,14 @@ class VideoReport:
     frames: int = 0
     events: int = 0
     errors: list[str] = field(default_factory=list)
+    plates: dict | None = None
 
 
 class VideoProcessor:
     def __init__(self, mission: Mission, detector, card: dict | None = None, settings: VideoSettings | None = None,
-                 control: RunControl | None = None):
+                 control: RunControl | None = None, plate_models: Callable[[], tuple] | None = None):
         self.m = mission
+        self.plate_models = plate_models   # loaded only when a plate recognition mission needs it
         self.con = mission.con
         self.detector = detector
         self.card = card if card is not None else getattr(getattr(detector, "pack", None), "card", {})
@@ -65,7 +69,30 @@ class VideoProcessor:
             "(SELECT run_id FROM run_item WHERE processing_state IN ('queued','running')) ORDER BY id")]
 
     def process_all(self, progress: Callable[[int, int], None] | None = None) -> list[VideoReport]:
-        return [self.process_run(r, progress) for r in self.pending_runs()]
+        reps = [self.process_run(r, progress) for r in self.pending_runs()]
+        if self.m.config().mode == "plate_recognition" and not self.control.cancelled:
+            self.control.stage = "reading plates"
+            try:
+                plates = self._plates()     # also plates left from an earlier, cancelled run
+            except RunCancelled:
+                self.m.notify("warning", "plates_cancelled", "Plate reading was cancelled; plates not yet read are "
+                              "read on the next run.")
+                return reps
+            if reps:
+                reps[-1].plates = plates
+            self.control.stage = "finished"
+        return reps
+
+    def _plates(self) -> dict:
+        from .models import ModelPackError
+        from .plates import PlateService, default_plate_models
+        try:
+            finder, reader = (self.plate_models or default_plate_models)()
+        except ModelPackError as exc:
+            self.m.notify("error", "plate_models_missing", f"Plates were not read: {exc}",
+                          action="Copy the plate model packs from the staging machine (scripts/fetch_models.py).")
+            return {"error": str(exc)}
+        return PlateService(self.m, finder, reader).refresh(self.control)
 
     # ---------- probe ----------
     def probe_version(self, version_id: int) -> dict:

@@ -133,7 +133,7 @@ class JobManager:
 
             if m.input_type == "video":
                 from ..video_process import VideoProcessor
-                proc = VideoProcessor(m, det, card, control=job.control)
+                proc = VideoProcessor(m, det, card, control=job.control, plate_models=self.plate_models)
             else:
                 proc = Processor(m, det, card, control=job.control, plate_models=self.plate_models)
             job.report = [r.__dict__ for r in proc.process_all(progress)]
