@@ -1,4 +1,4 @@
-# Offline install or update of the Traffic Analysis Workbench on a Windows workstation.
+# Offline install or update of Lanemark on a Windows workstation.
 # Run from the unpacked bundle folder in PowerShell:
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Target C:\TrafficWorkbench -Data D:\TrafficData -BackupDir E:\TrafficBackups
 # Nothing is downloaded. Each version gets its own folder, so the previous one stays for rollback.
@@ -16,7 +16,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Bundle = $PSScriptRoot
 $Info = Get-Content (Join-Path $Bundle "bundle.json") -Raw | ConvertFrom-Json
-Write-Host "Traffic Analysis Workbench $($Info.version) for Python $($Info.python)"
+Write-Host "Lanemark $($Info.version) for Python $($Info.python)"
 
 # 1. Check every file against SHA256SUMS. .NET directly, not Get-FileHash, which is missing when this runs
 #    under Windows PowerShell started from PowerShell 7 (its module path points at the wrong modules).
@@ -137,7 +137,7 @@ $backupArgs = ""
 if ($BackupDir) { $backupArgs = "--backup-dir `"$BackupDir`"" }
 @"
 @echo off
-rem Starts the Traffic Analysis Workbench $($Info.version). Open http://127.0.0.1:$Port in a browser.
+rem Starts Lanemark $($Info.version). Open http://127.0.0.1:$Port in a browser.
 set TWB_MODELS=$Models
 "$Venv\Scripts\trafficwb-web.exe" serve --data "$Data" --port $Port $backupArgs
 "@ | Set-Content -Encoding ASCII (Join-Path $Target "start.cmd")
@@ -154,7 +154,8 @@ pause
 "@ | Set-Content -Encoding ASCII (Join-Path $Target "speed-check.cmd")
 Write-Host "Installed $($Info.version)."
 
-# 7. Automatic start. An update restarts a server that already starts by itself, so it runs the new version.
+# 7. Automatic start. The task and shortcut keep their old names so existing installs are found.
+# An update restarts a server that already starts by itself, so it runs the new version.
 $auto = Join-Path $Target "autostart.ps1"
 $hasLink = Test-Path (Join-Path ([Environment]::GetFolderPath("Startup")) "Traffic Analysis Workbench.lnk")
 $hasTask = [bool](Get-ScheduledTask -TaskName "Traffic Analysis Workbench" -ErrorAction SilentlyContinue)

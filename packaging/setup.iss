@@ -1,4 +1,4 @@
-; Setup wizard for the Traffic Analysis Workbench (Inno Setup 6).
+; Setup wizard for Lanemark (Inno Setup 6).
 ; Wraps the offline bundle: the wizard asks for the folders, unpacks the bundle to a temporary folder and runs
 ; install.ps1 from it, so the checks, the backup before an update and the automatic start are the same as a
 ; manual install. No administrator rights are needed. Nothing is downloaded.
@@ -18,15 +18,15 @@
 
 [Setup]
 AppId={{6C1E3F0A-7A51-4E0B-9C8E-1F2B7D9A4E21}
-AppName=Traffic Analysis Workbench
+AppName=Lanemark
 AppVersion={#AppVersion}
-AppVerName=Traffic Analysis Workbench {#AppVersion}
+AppVerName=Lanemark {#AppVersion}
 DefaultDirName={localappdata}\TrafficWorkbench
-DefaultGroupName=Traffic Analysis Workbench
+DefaultGroupName=Lanemark
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir={#OutDir}
-OutputBaseFilename=TrafficWorkbench-Setup-{#AppVersion}
+OutputBaseFilename=Lanemark-Setup-{#AppVersion}
 ; The bundle is mostly compressed wheels already; fast compression keeps the build and the install quick.
 Compression=lzma2/fast
 SolidCompression=no
@@ -34,23 +34,30 @@ DiskSpanning=no
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayName=Traffic Analysis Workbench
+UninstallDisplayName=Lanemark
+SetupIconFile=lanemark.ico
+UninstallDisplayIcon={uninstallexe}
 SetupLogging=yes
 
 [Tasks]
-Name: "autostart"; Description: "Start the Workbench when I sign in to Windows (recommended)"
+Name: "autostart"; Description: "Start Lanemark when I sign in to Windows (recommended)"
 
 [Files]
 ; Unpacked to the temporary folder, which Setup removes when it ends.
 Source: "{#BundleDir}\*"; DestDir: "{tmp}\bundle"; Flags: recursesubdirs createallsubdirs ignoreversion
 
+[InstallDelete]
+; Start menu entries from before the app was called Lanemark.
+Type: files; Name: "{autoprograms}\Traffic Analysis Workbench.url"
+Type: files; Name: "{autoprograms}\Traffic Analysis Workbench - speed check.lnk"
+
 [Icons]
-Name: "{autoprograms}\Traffic Analysis Workbench"; Filename: "http://127.0.0.1:8765"; Comment: "Open the Workbench in the browser"
-Name: "{autoprograms}\Traffic Analysis Workbench - speed check"; Filename: "{app}\speed-check.cmd"; WorkingDir: "{app}"
+Name: "{autoprograms}\Lanemark"; Filename: "http://127.0.0.1:8765"; Comment: "Open Lanemark in the browser"
+Name: "{autoprograms}\Lanemark - speed check"; Filename: "{app}\speed-check.cmd"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Description: "Start the Workbench now"; Flags: postinstall nowait runminimized skipifsilent; Tasks: not autostart; Check: InstallOK
-Filename: "http://127.0.0.1:8765"; Description: "Open the Workbench now"; Flags: postinstall shellexec nowait skipifsilent; Check: InstallOK
+Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Description: "Start Lanemark now"; Flags: postinstall nowait runminimized skipifsilent; Tasks: not autostart; Check: InstallOK
+Filename: "http://127.0.0.1:8765"; Description: "Open Lanemark now"; Flags: postinstall shellexec nowait skipifsilent; Check: InstallOK
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\autostart.ps1"" -Mode remove -Target ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveAutostart"
@@ -82,7 +89,7 @@ end;
 procedure InitializeWizard;
 begin
   FoldersPage := CreateInputDirPage(wpSelectDir, 'Data folders',
-    'Where should the Workbench keep its data and backups?',
+    'Where should Lanemark keep its data and backups?',
     'Missions, results and evidence go in the data folder. Pick a drive with plenty of space. ' +
     'The backup folder gets a copy of the data before every update and every night; another drive is best. ' +
     'Your source images and videos are only read, never moved.',
@@ -112,7 +119,7 @@ begin
     else if DirExists(ExpandConstant('{app}\app-{#AppVersion}')) then
     begin
       SuppressibleMsgBox('Version {#AppVersion} is already installed in ' + ExpandConstant('{app}') + '.' + #13#10 +
-             'Open the Workbench from the Start menu, or install a newer version.', mbInformation, MB_OK, IDOK);
+             'Open Lanemark from the Start menu, or install a newer version.', mbInformation, MB_OK, IDOK);
       Result := False;
     end;
   end;

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, post, setSignedOutHandler, User } from "./api";
 import { go, useRoute } from "./router";
 import Login from "./pages/Login";
+import Logo from "./Logo";
 import Missions from "./pages/Missions";
 import Wizard from "./pages/Wizard";
 import MissionPage from "./pages/Mission";
@@ -44,7 +45,7 @@ export default function App() {
   return (
     <>
       <header className="top">
-        <a className="brand" href="#/">Traffic Analysis Workbench</a>
+        <a className="brand" href="#/"><Logo /> Lanemark</a>
         <span className="spacer" />
         <span className="muted">Signed in as <b>{user.display_name}</b></span>
         <button onClick={async () => { await post("/logout"); setUser(null); go("/"); }}>Sign out</button>

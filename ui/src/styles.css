@@ -66,7 +66,8 @@ h3 { font-size: 14px; margin: 0 0 8px; }
   display: flex; align-items: center; gap: 16px; padding: 8px 16px;
   background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5;
 }
-.top .brand { font-weight: 600; }
+.top .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--text); text-decoration: none; }
+.brand-lockup { display: flex; align-items: center; gap: 12px; font-size: 24px; font-weight: 700; margin-bottom: 16px; }
 .top .spacer { flex: 1; }
 .page { padding: 16px; max-width: 1400px; margin: 0 auto; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
