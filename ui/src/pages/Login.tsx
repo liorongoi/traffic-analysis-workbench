@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { ApiError, post } from "../api";
+import Logo from "../Logo";
 
 export default function Login({ needsSetup, notice, onDone }: { needsSetup: boolean; notice: string | null; onDone: () => void }) {
   const [username, setU] = useState("");
@@ -25,6 +26,7 @@ export default function Login({ needsSetup, notice, onDone }: { needsSetup: bool
 
   return (
     <div className="page" style={{ maxWidth: 420, marginTop: "10vh" }}>
+      <div className="brand-lockup"><Logo size={40} /> Lanemark</div>
       <div className="card">
         <h1>{needsSetup ? "Create the administrator account" : "Sign in"}</h1>
         {needsSetup && <p className="muted">No accounts exist yet. This first account can add the operators' accounts. It can only be created on the workstation itself.</p>}

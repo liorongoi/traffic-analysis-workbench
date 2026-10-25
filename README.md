@@ -1,6 +1,8 @@
-# Traffic Analysis Workbench
+# Lanemark
 
-Offline road-traffic still-image and video analysis for a single Windows workstation, reachable from browsers on the local network. It is a new, independent application.
+<img src="docs/brand/lanemark.svg" width="72" alt="Lanemark logo">
+
+Lanemark (formerly Traffic Analysis Workbench) is offline road-traffic still-image and video analysis for a single Windows workstation, reachable from browsers on the local network. It is a new, independent application.
 
 Status: **still images (phases 0 to 4), web screens, object search, video part 1, plates part 1, learning part 1 and hardening part 1 (offline install, backups, GPU choice) are done**. Only the pieces below exist. Plate reads are evaluation only until a country passes its own test set.
 

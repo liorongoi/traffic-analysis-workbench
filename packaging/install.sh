@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline install of the Traffic Analysis Workbench on Linux (used to test the bundle; the target is Windows).
+# Offline install of Lanemark on Linux (used to test the bundle; the target is Windows).
 #   ./install.sh <target dir> [data dir]
 set -euo pipefail
 B="$(cd "$(dirname "$0")" && pwd)"

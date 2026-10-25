@@ -1,10 +1,10 @@
-Traffic Analysis Workbench: offline install and update
+Lanemark: offline install and update
 =======================================================
 
 This folder contains everything the workstation needs. Nothing is downloaded during install or use.
 
 Easiest: the setup wizard (Windows)
-- Run TrafficWorkbench-Setup-<version>.exe and follow the screens: install folder, data folder, backup folder,
+- Run Lanemark-Setup-<version>.exe and follow the screens: install folder, data folder, backup folder,
   start at sign-in. No administrator rights are needed, Python is included, nothing is downloaded.
 - It runs the same install.ps1 as below, so the checks, the backup before an update and the automatic start
   are the same. The installer's own output is in <install folder>\logs\install.log.

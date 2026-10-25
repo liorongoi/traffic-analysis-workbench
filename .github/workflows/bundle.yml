@@ -1,6 +1,6 @@
 name: windows-installer
 # Builds the offline Windows package (app, dependencies, model packs, Python installer) and the setup wizard
-# made from it (TrafficWorkbench-Setup-<version>.exe), tries the wizard silently, and keeps both as
+# made from it (Lanemark-Setup-<version>.exe), tries the wizard silently, and keeps both as
 # downloadable artifacts: Actions > windows-installer > latest run > Artifacts.
 on:
   push:
@@ -70,12 +70,12 @@ jobs:
           Write-Host "Uninstall removed the program and kept the data."
       - uses: actions/upload-artifact@v4
         with:
-          name: TrafficWorkbench-${{ steps.py.outputs.folder }}
+          name: Lanemark-${{ steps.py.outputs.folder }}
           path: dist/${{ steps.py.outputs.folder }}
           retention-days: 90
       - uses: actions/upload-artifact@v4
         with:
-          name: TrafficWorkbench-Setup-${{ steps.py.outputs.version }}
+          name: Lanemark-Setup-${{ steps.py.outputs.version }}
           path: setup/*.exe
           compression-level: 0
           retention-days: 90
