@@ -95,7 +95,11 @@ if ($Choice -eq "auto") {
 
 # Install into a fresh environment and check it end to end with no network, before switching to it.
 function Install-Env([string]$build) {
+  # Messages a program writes to stderr (pip warnings, model loading notes) must not stop the install when the
+  # output is redirected, as Windows PowerShell does then; failures are caught by the exit codes below.
+  $ErrorActionPreference = "Continue"
   & $Python -m venv $Venv | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "Creating the Python environment failed." }
   $script:VPy = Join-Path $Venv "Scripts\python.exe"
   & $script:VPy -m pip install --no-index --find-links $Wheels "trafficwb[probe,$build]==$($Info.version)" | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "pip install failed." }
@@ -123,7 +127,9 @@ if ($BackupDir -and (Test-Path (Join-Path $Data "control.db"))) {
   $prev = Join-Path $Target "current.txt"
   if (Test-Path $prev) {
     $prevVenv = (Get-Content $prev -Raw).Trim()
+    $ErrorActionPreference = "Continue"
     & (Join-Path $prevVenv "Scripts\trafficwb-admin.exe") backup --data $Data --to $BackupDir
+    $ErrorActionPreference = "Stop"
     if ($LASTEXITCODE -ne 0) { throw "Backup before the update failed; nothing was switched." }
   }
 }
