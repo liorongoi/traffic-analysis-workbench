@@ -71,6 +71,8 @@ def test_missions_are_isolated_databases(env):
         (dict(input_type="video", mode="general_traffic"), "not available for video"),
         (dict(export_formats=["pdf"]), "xlsx, csv"),
         (dict(country="FI", mode="plate_recognition"), "supported countries"),
+        (dict(latitude=32.0), "both latitude and longitude"),
+        (dict(latitude=91.0, longitude=0.0), "latitude −90..90"),
     ],
 )
 def test_validation_errors(env, change, message):

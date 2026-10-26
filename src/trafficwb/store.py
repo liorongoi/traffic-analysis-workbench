@@ -853,6 +853,10 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         ZoneInfo(cfg.iana_zone)
     except (ZoneInfoNotFoundError, ValueError):
         v.errors.append(f"'{cfg.iana_zone}' is not a known IANA time zone.")
+    if (cfg.latitude is None) != (cfg.longitude is None):
+        v.errors.append("Choose both latitude and longitude, or leave the location unset.")
+    elif cfg.latitude is not None and cfg.longitude is not None and not (-90 <= cfg.latitude <= 90 and -180 <= cfg.longitude <= 180):
+        v.errors.append("Location must use latitude −90..90 and longitude −180..180.")
     if cfg.processing not in {"one_time", "continuous"}:
         v.errors.append("Processing must be one_time or continuous.")
     if not cfg.export_formats or not set(cfg.export_formats) <= EXPORT_FORMATS:

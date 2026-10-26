@@ -98,6 +98,17 @@ def test_no_sign_in_required_but_mutations_need_application_header(env):
     assert c.post("/api/missions/validate", json={}, headers={}).status_code == 403
 
 
+def test_offline_timezone_preview_uses_capture_date_rules(env):
+    tmp, _, _ = env
+    c = client(tmp)
+    winter = c.post("/api/time-preview", json={"iana_zone": "Europe/Riga", "utc": "2026-01-01T12:00:00Z"}, headers=H1).json()
+    summer = c.post("/api/time-preview", json={"iana_zone": "Europe/Riga", "utc": "2026-07-01T12:00:00Z"}, headers=H1).json()
+    assert winter["offset"] == "UTC+02:00" and winter["is_dst"] is False
+    assert summer["offset"] == "UTC+03:00" and summer["is_dst"] is True
+    assert c.post("/api/time-preview", json={"iana_zone": "No/Such_Zone", "utc": "2026-07-01T12:00:00Z"},
+                  headers=H1).status_code == 400
+
+
 def test_wizard_preview_create_process_review_export(env):
     tmp, src, out = env
     c = local_operator(client(tmp))

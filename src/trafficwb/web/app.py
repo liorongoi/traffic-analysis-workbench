@@ -10,6 +10,7 @@ import json
 import os
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import time
 import zoneinfo
 from dataclasses import asdict, dataclass
@@ -65,6 +66,11 @@ class MissionBody(BaseModel):
     export_formats: list[str] = Field(default_factory=lambda: ["xlsx", "csv"])
     latitude: float | None = None
     longitude: float | None = None
+
+
+class TimePreviewBody(BaseModel):
+    iana_zone: str
+    utc: datetime
 
 
 class ObjectBody(BaseModel):
@@ -294,6 +300,21 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     @app.get("/api/session")
     def session():
         return {"user": asdict(user())}
+
+    @app.post("/api/time-preview")
+    def time_preview(body: TimePreviewBody):
+        if body.utc.tzinfo is None or body.utc.utcoffset() is None:
+            raise ApiError(400, "naive_time", "Enter a UTC date and time with a Z suffix.")
+        try:
+            local = to_local(body.utc.astimezone(timezone.utc), body.iana_zone)
+        except (ValueError, zoneinfo.ZoneInfoNotFoundError):
+            raise ApiError(400, "bad_zone", f"'{body.iana_zone}' is not a known IANA time zone.") from None
+        offset_minutes = int(local.utc_offset.total_seconds() // 60)
+        sign = "+" if offset_minutes >= 0 else "-"
+        hours, minutes = divmod(abs(offset_minutes), 60)
+        return {"utc": local.utc.isoformat().replace("+00:00", "Z"), "local": local.local.isoformat(),
+                "zone": local.zone, "offset": f"UTC{sign}{hours:02d}:{minutes:02d}", "is_dst": local.is_dst,
+                "abbreviation": local.abbreviation}
 
     # ---------- reference data ----------
     @app.get("/api/reference")

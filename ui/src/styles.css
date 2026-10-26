@@ -102,6 +102,17 @@ label.field > span { font-size: 12px; color: var(--muted); }
 .msg.warn { color: var(--warn); border-color: var(--warn); }
 .msg.ok { color: var(--ok); border-color: var(--ok); }
 
+.timezone-map-wrap { margin: 8px 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--panel-2); }
+.timezone-map { display: block; width: 100%; height: auto; max-height: 360px; }
+.timezone-ocean { fill: #dbeaf1; }
+.timezone-shape { fill: #b8cbd4; stroke: #fff; stroke-width: .55; vector-effect: non-scaling-stroke; cursor: pointer; }
+.timezone-shape:nth-of-type(2n) { fill: #c9d9df; }
+.timezone-shape:hover, .timezone-shape:focus { fill: #7fa8bb; outline: none; }
+.timezone-shape.selected { fill: var(--accent); }
+.timezone-map-caption { padding: 4px 8px; font-size: 11px; }
+.timezone-map-loading { min-height: 180px; display: grid; place-items: center; }
+@media (prefers-color-scheme: dark) { .timezone-ocean { fill: #202d34; } .timezone-shape { fill: #445861; stroke: #202d34; } .timezone-shape:nth-of-type(2n) { fill: #536972; } }
+
 table.t { width: 100%; border-collapse: collapse; background: var(--panel); }
 table.t th, table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
 table.t th { font-size: 12px; color: var(--muted); font-weight: 600; cursor: pointer; user-select: none; }

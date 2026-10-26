@@ -6,9 +6,9 @@ Requirement IDs come from the design package (`docs/design/design-package.html`,
 | Req | Implementation | Tests | Status |
 |---|---|---|---|
 | TIME-01 filename UTC, precision kept, suffix opaque | `src/trafficwb/timeparse.py` | `tests/test_timeparse.py` | Tested (unit) |
-| TIME-02 no filesystem fallback, malformed handling | `timeparse.parse_capture_time` raises `MalformedName` | `tests/test_timeparse.py` | Tested (unit). Parse preview UI not built. |
-| TIME-04 IANA zone id, offset, DST status | `src/trafficwb/localtime.py` | `tests/test_localtime.py` | Conversion tested. Map UI not built. |
-| TIME-05 per-timestamp rules | `localtime.to_local` | `tests/test_localtime.py` | Tested for IL, LV, LB, IR, FI. Manual override not built. |
+| TIME-02 no filesystem fallback, malformed handling | `timeparse.parse_capture_time`, source preview in `ui/src/pages/Wizard.tsx` | `tests/test_timeparse.py`, `tests/test_web_api.py` | Malformed names are previewed with an actionable reason; filesystem dates are never substituted. |
+| TIME-04 IANA zone id, offset, DST status | `src/trafficwb/localtime.py`, offline timezone map and `/api/time-preview` | `tests/test_localtime.py`, `tests/test_web_api.py`, `tests/test_timezone_map.py` | Interactive map and date-specific local time/offset/DST preview implemented. Map boundaries are approximate; see `docs/data/timezone-map-NOTICE.md`. CI verification pending. |
+| TIME-05 per-timestamp rules and explicit timezone override | `localtime.to_local`, mission wizard and initial `config_revision` | `tests/test_localtime.py`, `tests/test_store_ingest.py`, `tests/test_web_api.py` | Per-timestamp zone rules tested for IL, LV, LB, IR, FI. Mission zone can explicitly override the country suggestion; source UTC and the override's author/config provenance are retained. Per-file correction of an erroneous or malformed UTC filename is not built. |
 | IMG-02 schedules, overnight, multiple windows, DST | `src/trafficwb/schedule.py` | `tests/test_schedule.py` | Tested (unit) |
 | DER-02 minute-precision boundary rule | `schedule.Schedule.contains_local` | `tests/test_schedule.py` | Tested (unit) |
 | HW-01 hardware detection | `src/trafficwb/probe.py` | `tests/test_probe.py` | Runs on Linux and CI runners. Not run on the target Windows workstation. GPU backend verification not built. |
@@ -49,8 +49,6 @@ Requirement IDs come from the design package (`docs/design/design-package.html`,
 | NGT-06 night evaluation (part): night review queue across images, accuracy of candidates from operator answers by band, score, kind and flag | `src/trafficwb/night_review.py`; `GET /night/queue`, `GET /night/accuracy`; Night review tab (`ui/src/pages/NightReview.tsx`) | `tests/test_night.py` | Tested (unit and API). Vehicles found and missed counted on approved night images. |
 | NGT-03 background never silently absorbs stopped vehicles | `night.build_background` (vehicle areas left out, new lights reported) | `tests/test_night.py` | Tested on synthetic data. Not seen on a real parked vehicle. |
 | NGT-04 condition from content; no enhanced evidence; confirmed and unresolved shown apart | `night.measure_condition`, `review.results`, `export` | `tests/test_night.py` | Tested (unit + sample frames) |
-
-All other requirements: not started.
 
 Evidence for each phase is in `docs/delivery/`.
 | ARC-02 / ARC-03 local web server, browser UI, work continues without a browser | `src/trafficwb/web/app.py`, `web/jobs.py`, `ui/` | `tests/test_web_api.py` | Tested (API). Jobs and monitoring run in server threads; monitoring resumes at server start. |
