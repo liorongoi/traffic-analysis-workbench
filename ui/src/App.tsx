@@ -18,11 +18,16 @@ export default function App() {
 
   return (
     <>
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <header className="top">
-        <a className="brand" href="#/"><Logo /> Lanemark</a>
+        <a className="brand" href="#/" aria-label="LanePulse home">
+          <Logo />
+          <span className="brand-wordmark"><strong>LanePulse</strong><small>OFFLINE TRAFFIC INTELLIGENCE</small></span>
+        </a>
         <span className="spacer" />
+        <nav className="top-nav" aria-label="Main navigation"><a href="#/">Missions</a></nav>
       </header>
-      {body}
+      <main id="main-content">{body}</main>
     </>
   );
 }

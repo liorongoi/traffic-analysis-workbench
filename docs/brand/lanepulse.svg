@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="LanePulse logo">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#162943"/><stop offset="1" stop-color="#07111f"/></linearGradient></defs>
+  <rect width="64" height="64" rx="17" fill="url(#bg)"/>
+  <rect x="1" y="1" width="62" height="62" rx="16" fill="none" stroke="#47647e" stroke-opacity=".45"/>
+  <path d="M17 55C21 42 25 27 28 10M47 55C43 42 39 27 36 10" fill="none" stroke="#d8e7f5" stroke-opacity=".72" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M32 53v-7M32 39v-6M32 27v-5" fill="none" stroke="#ffcc70" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M20 34h7l4-8 5 16 4-8h6" fill="none" stroke="#59e0c2" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="47" cy="34" r="2.3" fill="#59e0c2"/>
+</svg>

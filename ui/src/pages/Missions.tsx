@@ -6,26 +6,37 @@ type M = { id: string; name: string; input_type: string; mode: string; processin
 
 export default function Missions() {
   const [list, setList] = useState<M[] | null>(null);
+  const [loadError, setLoadError] = useState("");
   const [sys, setSys] = useState<any>(null);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   const loadSys = () => api("/system").then(setSys).catch(() => {});
-  useEffect(() => { api("/missions").then((r) => setList(r.missions)); loadSys(); }, []);
+  const loadMissions = () => {
+    setList(null);
+    setLoadError("");
+    api("/missions").then((r) => setList(r.missions)).catch((e) => {
+      setList([]);
+      setLoadError(e instanceof Error ? e.message : "Could not load missions.");
+    });
+    loadSys();
+  };
+  useEffect(() => { loadMissions(); }, []);
   return (
     <div className="page">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <h1>Missions</h1>
-        <a className="btn primary" href="#/new"><button className="primary">New mission</button></a>
+        <a className="btn primary" href="#/new">+ New mission</a>
       </div>
-      {list === null && <p className="muted">Loading…</p>}
-      {list?.length === 0 && <div className="card"><p>No missions yet.</p><p className="muted">A mission reads one source folder of images or videos, analyses them in one mode and exports to one output folder.</p></div>}
+      {list === null && <p className="muted" role="status" aria-live="polite">Loading missions…</p>}
+      {loadError && <div className="card msg err" role="alert"><b>Could not load missions.</b><p>{loadError}</p><button onClick={loadMissions}>Try again</button></div>}
+      {list?.length === 0 && !loadError && <div className="card"><h2>No missions yet</h2><p className="muted">Start by choosing a source folder and what you want to analyse. Your original images and videos stay untouched.</p><a className="btn primary" href="#/new">Create your first mission</a></div>}
       {list && list.length > 0 && (
         <div className="tablewrap">
           <table className="t">
             <thead><tr><th>Name</th><th>Input</th><th>Mode</th><th>Processing</th><th className="num">Files</th><th className="num">Queued</th><th>Activity</th><th>Created (UTC)</th></tr></thead>
             <tbody>
               {list.map((m) => (
-                <tr key={m.id} className="click" onClick={() => (window.location.hash = `#/m/${m.id}`)}>
-                  <td><b className="bidi">{m.name}</b></td>
+                <tr key={m.id}>
+                  <td><a href={`#/m/${m.id}`} aria-label={`Open mission ${m.name}`}><b className="bidi">{m.name}</b></a></td>
                   <td>{m.input_type}</td>
                   <td>{m.mode.replace(/_/g, " ")}</td>
                   <td>{m.processing === "continuous" ? `continuous, monitoring ${m.monitoring ? "on" : "off"}` : "one-time"}</td>

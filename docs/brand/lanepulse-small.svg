@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="LanePulse logo">
+  <rect width="64" height="64" rx="17" fill="#0b1727"/>
+  <path d="M17 55C21 42 25 27 28 10M47 55C43 42 39 27 36 10" fill="none" stroke="#d8e7f5" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M20 34h7l4-8 5 16 4-8h6" fill="none" stroke="#59e0c2" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

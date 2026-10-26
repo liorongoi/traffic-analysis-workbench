@@ -8,7 +8,7 @@
 
 ## Local access
 
-- Lanemark does not require an account, password, or sign-in. Changes are attributed to the Windows/macOS/Linux account running the server.
+- LanePulse does not require an account, password, or sign-in. Changes are attributed to the Windows/macOS/Linux account running the server.
 - The server listens on localhost by default. `--lan` makes it reachable on the local network without a sign-in, so use that only on a trusted, closed network.
 - Every request that changes data must carry the header `X-TWB: 1`, which blocks cross-site form posts.
 

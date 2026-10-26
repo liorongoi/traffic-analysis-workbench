@@ -264,7 +264,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             backups.stop()
         jobs.shutdown()
 
-    app = FastAPI(title="Lanemark", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="LanePulse", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.jobs = jobs
 
     @app.exception_handler(HTTPException)
@@ -289,7 +289,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             con.close()
 
     def user() -> User:
-        # Lanemark is a local workstation app. Edits remain attributed to its OS user,
+        # LanePulse is a local workstation app. Edits remain attributed to its OS user,
         # without an additional account, password, session timeout, or sign-in screen.
         import getpass
         name = getpass.getuser() or "local"
@@ -1136,7 +1136,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     else:
         @app.get("/", include_in_schema=False)
         def no_ui():
-            return HTMLResponse("<h1>Lanemark</h1><p>The UI has not been built. "
+            return HTMLResponse("<h1>LanePulse</h1><p>The UI has not been built. "
                                 "Run <code>python scripts/build_ui.py</code> on the staging machine.</p>")
     return app
 

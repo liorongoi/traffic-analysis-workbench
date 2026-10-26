@@ -1,8 +1,8 @@
-# Lanemark
+# LanePulse
 
-<img src="docs/brand/lanemark.svg" width="72" alt="Lanemark logo">
+<img src="docs/brand/lanepulse.svg" width="72" alt="LanePulse logo">
 
-Lanemark (formerly Traffic Analysis Workbench) is offline road-traffic still-image and video analysis for a single workstation. It listens only on the local computer by default; network access is an explicit option. It is a new, independent application.
+LanePulse (formerly Traffic Analysis Workbench) is offline road-traffic still-image and video analysis for a single workstation. It listens only on the local computer by default; network access is an explicit option. It is a new, independent application.
 
 Status: **still images (phases 0 to 4), web screens, object search, video part 1, plates part 1, learning part 1 and hardening part 1 (offline install, backups, GPU choice) are done**. Only the pieces below exist. Plate reads are evaluation only until a country passes its own test set.
 
@@ -33,7 +33,7 @@ Status: **still images (phases 0 to 4), web screens, object search, video part 1
 
 ## Install on the workstation
 
-Build the offline bundle on a connected staging machine, then wrap it in the single `Lanemark-Setup-<version>.exe` installer; see `docs/design/deployment.md` and `packaging/INSTALL.txt`. The embedded `install.ps1` is the wizard's shared install engine, not a second published installer.
+Build the offline bundle on a connected staging machine, then wrap it in the single `LanePulse-Setup-<version>.exe` installer; see `docs/design/deployment.md` and `packaging/INSTALL.txt`. The embedded `install.ps1` is the wizard's shared install engine, not a second published installer.
 
 ## Run (development)
 

@@ -29,7 +29,7 @@ The wizard's UTC date/time preview displays the local time, UTC offset, abbrevia
 
 Map boundaries are approximate, community-maintained time-zone boundaries derived from OpenStreetMap. The offline map data is a simplified derivative of timezone-boundary-builder 2026e `timezones.geojson.zip` (SHA-256 `a75361c760d6de2fc95c63e97e0b1086d5dfe6fdb2bc6d96efeb3a94673aaa01`). It is distributed under ODbL 1.0; attribution and limitations are recorded in `docs/data/timezone-map-NOTICE.md`. Exact capture-time offsets and daylight-saving rules come from the bundled IANA tzdata, not from the map polygons.
 
-If the timestamp embedded in a filename is itself wrong or malformed, Lanemark currently flags it for correction and does not provide a per-file UTC override. That remains an acceptance gap; the mission-level timezone override is available now.
+If the timestamp embedded in a filename is itself wrong or malformed, LanePulse currently flags it for correction and does not provide a per-file UTC override. That remains an acceptance gap; the mission-level timezone override is available now.
 
 ## Schedules
 

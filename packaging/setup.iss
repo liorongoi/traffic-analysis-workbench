@@ -1,4 +1,4 @@
-; Setup wizard for Lanemark (Inno Setup 6).
+; Setup wizard for LanePulse (Inno Setup 6).
 ; Wraps the offline bundle: the wizard asks for the folders, unpacks the bundle to a temporary folder and runs
 ; install.ps1 from it, so the checks, the backup before an update and the automatic start are the same as a
 ; manual install. No administrator rights are needed. Nothing is downloaded.
@@ -18,15 +18,15 @@
 
 [Setup]
 AppId={{6C1E3F0A-7A51-4E0B-9C8E-1F2B7D9A4E21}
-AppName=Lanemark
+AppName=LanePulse
 AppVersion={#AppVersion}
-AppVerName=Lanemark {#AppVersion}
+AppVerName=LanePulse {#AppVersion}
 DefaultDirName={localappdata}\TrafficWorkbench
-DefaultGroupName=Lanemark
+DefaultGroupName=LanePulse
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir={#OutDir}
-OutputBaseFilename=Lanemark-Setup-{#AppVersion}
+OutputBaseFilename=LanePulse-Setup-{#AppVersion}
 ; The bundle is mostly compressed wheels already; fast compression keeps the build and the install quick.
 Compression=lzma2/fast
 SolidCompression=no
@@ -34,8 +34,8 @@ DiskSpanning=no
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayName=Lanemark
-SetupIconFile=lanemark.ico
+UninstallDisplayName=LanePulse
+SetupIconFile=lanepulse.ico
 UninstallDisplayIcon={uninstallexe}
 SetupLogging=yes
 
@@ -44,17 +44,17 @@ SetupLogging=yes
 Source: "{#BundleDir}\*"; DestDir: "{tmp}\bundle"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [InstallDelete]
-; Start menu entries from before the app was called Lanemark.
+; Start menu entries from before the app was called LanePulse.
 Type: files; Name: "{autoprograms}\Traffic Analysis Workbench.url"
 Type: files; Name: "{autoprograms}\Traffic Analysis Workbench - speed check.lnk"
 
 [Icons]
-Name: "{autoprograms}\Lanemark"; Filename: "http://127.0.0.1:8765"; Comment: "Open Lanemark in the browser"
-Name: "{autoprograms}\Lanemark - speed check"; Filename: "{app}\speed-check.cmd"; WorkingDir: "{app}"
+Name: "{autoprograms}\LanePulse"; Filename: "http://127.0.0.1:8765"; Comment: "Open LanePulse in the browser"
+Name: "{autoprograms}\LanePulse - speed check"; Filename: "{app}\speed-check.cmd"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Description: "Start Lanemark now"; Flags: postinstall nowait runminimized skipifsilent; Check: InstallOK
-Filename: "http://127.0.0.1:8765"; Description: "Open Lanemark now"; Flags: postinstall shellexec nowait skipifsilent; Check: InstallOK
+Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Description: "Start LanePulse now"; Flags: postinstall nowait runminimized skipifsilent; Check: InstallOK
+Filename: "http://127.0.0.1:8765"; Description: "Open LanePulse now"; Flags: postinstall shellexec nowait skipifsilent; Check: InstallOK
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\autostart.ps1"" -Mode remove -Target ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveAutostart"
@@ -86,7 +86,7 @@ end;
 procedure InitializeWizard;
 begin
   FoldersPage := CreateInputDirPage(wpSelectDir, 'Data folders',
-    'Where should Lanemark keep its data and backups?',
+    'Where should LanePulse keep its data and backups?',
     'Missions, results and evidence go in the data folder. Pick a drive with plenty of space. ' +
     'The backup folder gets a copy of the data before every update and every night; another drive is best. ' +
     'Your source images and videos are only read, never moved.',
@@ -163,7 +163,7 @@ begin
   begin
     SuppressibleMsgBox('The installation did not finish (code ' + IntToStr(Code) + ').' + #13#10 + #13#10 +
            'Details are in:' + #13#10 + Log + #13#10 + #13#10 +
-           'Your data and previous version have been kept. Close Lanemark and retry the installer. If it fails again, share install.log.', mbError, MB_OK, IDOK);
+           'Your data and previous version have been kept. Close LanePulse and retry the installer. If it fails again, share install.log.', mbError, MB_OK, IDOK);
     Failed := True;
   end;
 end;

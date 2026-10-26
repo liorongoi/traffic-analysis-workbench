@@ -1,4 +1,4 @@
-# Start Lanemark automatically (ENV-08). Run from the install folder, in PowerShell:
+# Start LanePulse automatically (ENV-08). Run from the install folder, in PowerShell:
 #
 #   powershell -ExecutionPolicy Bypass -File autostart.ps1 -Mode status
 #   powershell -ExecutionPolicy Bypass -File autostart.ps1 -Mode signin          # no administrator rights needed
@@ -24,7 +24,7 @@ param(
   [int]$Port = 0
 )
 $ErrorActionPreference = "Stop"
-# The task and shortcut keep the names from before the app was called Lanemark, so existing installs are found.
+# The task and shortcut keep the names from before the app was called LanePulse, so existing installs are found.
 $TaskName = "Traffic Analysis Workbench"
 $Start = Join-Path $Target "start.cmd"
 $Runner = Join-Path $Target "run-server.cmd"
@@ -150,7 +150,7 @@ if ($Mode -eq "signin") {
   $lnk.TargetPath = $Runner
   $lnk.WorkingDirectory = $Target
   $lnk.WindowStyle = 7                      # minimised
-  $lnk.Description = "Lanemark server"
+  $lnk.Description = "LanePulse server"
   $lnk.Save()
   Write-Host "The server will start when you sign in to Windows (minimised window, log in $Logs)."
   $p = Get-Port
