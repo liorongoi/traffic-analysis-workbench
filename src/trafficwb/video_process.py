@@ -15,8 +15,9 @@ Rules:
   confirmed filename or operator correction, with its precision.
 - Plate recognition missions read the plate of each vehicle event on a few of
   its frames after processing (see plates.combine_frame_reads).
-- Not in this version: camera views and regions for video, night light
-  tracking (blob, pair, body).
+- Camera views use the first presentation frame as a signature; named and
+  inclusion/exclusion regions filter reviewed event boxes during search.
+- Not in this version: night-light tracking (blob, pair, body).
 """
 from __future__ import annotations
 
