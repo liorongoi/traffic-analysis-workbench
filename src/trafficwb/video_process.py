@@ -123,10 +123,12 @@ class VideoProcessor:
         pre["vehicle_detection"] = desc["preprocessing"]
         pre["video"] = {"interval_s": self.s.interval_s, "chunk_frames": self.s.chunk_frames,
                         "tracker": asdict(self.s.tracker), "time_base": "presentation timestamps",
-                        "regions": "not applied to video in this version"}
+                        "view_signature": "first presentation frame", "regions": "applied to event search boxes"}
         self.con.execute("UPDATE run SET state='running', started_at=COALESCE(started_at,?), model_versions=?, "
                          "preprocessing=? WHERE id=?", (utcnow(), json.dumps(models), json.dumps(pre), run_id))
         self._model_id = model_id
+        self.control.stage = "grouping camera views"
+        self.views.assign_or_propose(min_size=1)
         items = self.con.execute(
             "SELECT i.*, f.rel_path FROM run_item i JOIN source_version v ON v.id=i.source_version_id "
             "JOIN source_file f ON f.id=v.source_file_id WHERE i.run_id=? AND i.processing_state IN ('queued','running') "

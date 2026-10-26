@@ -423,17 +423,21 @@ class SearchService:
         return s
 
     def _execute_video(self, run_id: int, spec: dict, control, progress) -> dict:
-        """Search video events: one object per event, read on its best frame. Regions are not applied to video yet."""
+        """Search video events: one object per event, read on its best frame and filtered by its view regions."""
         from .night import measure_condition
         from .video import frame_at
         from .video_review import VideoService
+        from .views import ViewService
         vsv = VideoService(self.m)
+        vws = ViewService(self.m)
         zone = self.m.zone
+        named_in, named_out = spec["regions"]["include"], spec["regions"]["exclude"]
+        region_cache: dict[int | None, tuple[RegionSet, bool]] = {}
         s = {"events_total": 0, "events_searched": 0, "events_not_counted": 0, "events_outside_time": 0,
              "events_time_unknown": 0, "events_other_condition": 0, "hits_match": 0, "hits_possible": 0,
              "possible_left_out": 0, "recordings_with_hits": 0, "recordings_below_min_count": 0,
-             "objects_checked": 0, "colour": {"observed": 0, "uncertain": 0, "not_observable": 0},
-             "note": "Analysis regions are not applied to video in this version."}
+             "events_outside_regions": 0, "events_without_named_region": 0,
+             "objects_checked": 0, "colour": {"observed": 0, "uncertain": 0, "not_observable": 0}}
         events = vsv.events()
         s["events_total"] = len(events)
         timed = bool(spec["time"]["windows"] or spec["time"]["date_from"] or spec["time"]["date_to"])
@@ -458,6 +462,32 @@ class SearchService:
                     if not time_ok(spec, local, span):
                         s["events_outside_time"] += 1
                         continue
+                view_id = vws.current_view(e.source_version_id)
+                if view_id not in region_cache:
+                    region_cache[view_id] = (
+                        RegionSet.load(self.con, view_id) if view_id is not None else RegionSet([]),
+                        vws.regions_applicable(view_id) if view_id is not None else True)
+                regions, applicable = region_cache[view_id]
+                box = tuple(e.thumb_box) if e.thumb_box else None
+                if box is None:
+                    continue
+                bx, by = (box[0] + box[2]) / 2, box[3]
+                polys_in = [r.polygon for r in regions.include + regions.exclude if r.name in named_in]
+                polys_out = [r.polygon for r in regions.include + regions.exclude if r.name in named_out]
+                if named_in:
+                    if not polys_in:
+                        s["events_without_named_region"] += 1
+                        continue
+                    if not any(point_in_polygon(bx, by, p) for p in polys_in):
+                        s["events_outside_regions"] += 1
+                        continue
+                elif applicable and not regions.contains_box(box):
+                    s["events_outside_regions"] += 1
+                    continue
+                if any(point_in_polygon(bx, by, p) for p in polys_out):
+                    s["events_outside_regions"] += 1
+                    continue
+                region_uncertain = not applicable and not named_in
                 cache: dict = {}
 
                 def frame(ev=e):
@@ -491,6 +521,9 @@ class SearchService:
                 if d.status is None:
                     continue
                 reasons = list(d.reasons)
+                if region_uncertain:
+                    reasons.append("analysis regions are not applied because this camera view needs review")
+                    d = _Decision("possible", reasons)
                 if "class_uncertain" in e.flags:
                     reasons.append(f"class uncertain over the track ({round(e.cls_share * 100)}% {e.cls})")
                     d = _Decision("possible", reasons)

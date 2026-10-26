@@ -399,6 +399,31 @@ def test_video_search_finds_events(api):
     assert c.get(f"/api/missions/{mid}/search-runs/{j2['result']['search_run']}").json()["total"] == 1
 
 
+def test_video_search_applies_named_camera_regions(api):
+    c, make = api
+    mid = make()
+    events = c.get(f"/api/missions/{mid}/events").json()["events"]
+    views = c.get(f"/api/missions/{mid}/views").json()["views"]
+    assert len(views) == 1 and views[0]["size"] == 1
+    target = events[0]
+    x1, y1, x2, y2 = target["thumb_box"]
+    x, y = (x1 + x2) / 2, y2
+    region = c.post(f"/api/missions/{mid}/views/{views[0]['id']}/regions", headers=H1,
+                    json={"kind": "include", "name": "north lane",
+                          "polygon": [[x - 2, y - 2], [x + 2, y - 2], [x + 2, y + 2], [x - 2, y + 2]]})
+    assert region.status_code == 200, region.text
+    req = c.post(f"/api/missions/{mid}/search/ask", json={"text": "cars in north lane"}, headers=H1)
+    assert req.status_code == 200, req.text
+    assert c.post(f"/api/missions/{mid}/search/{req.json()['id']}/confirm", json={}, headers=H1).status_code == 200
+    run = c.post(f"/api/missions/{mid}/search/{req.json()['id']}/run", headers=H1)
+    assert run.status_code == 200, run.text
+    job = wait(c, mid)
+    result = c.get(f"/api/missions/{mid}/search-runs/{job['result']['search_run']}").json()
+    assert result["total"] == 1
+    assert result["hits"][0]["object_uid"] == f"ev{target['id']}"
+    assert result["summary"]["events_outside_regions"] == 1
+
+
 def test_image_mission_has_no_video_endpoints(api, tmp_path):
     c, _ = api
     body = {"name": "Img", "mode": "general_traffic", "country": "IL", "iana_zone": "Asia/Jerusalem",
