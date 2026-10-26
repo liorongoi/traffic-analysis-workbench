@@ -66,8 +66,8 @@ def client(tmp_path, delay=0.0):
     return TestClient(app)
 
 
-def local_operator(c):
-    assert c.get("/api/session").json()["user"]["username"]
+def direct_access(c):
+    assert c.get("/api/health").json() == {"status": "ok"}
     return c
 
 
@@ -92,7 +92,8 @@ def wait_job(c, mid, timeout=30):
 def test_no_sign_in_required_but_mutations_need_application_header(env):
     tmp, src, out = env
     c = client(tmp)
-    assert c.get("/api/missions").status_code == 200
+    assert c.get("/api/health").status_code == 200
+    assert c.get("/api/session").status_code == 404
     assert c.post("/api/login", json={"username": "x", "password": "y"}, headers=H1).status_code in (404, 405)
     assert c.get("/api/missions").status_code == 200
     assert c.post("/api/missions/validate", json={}, headers={}).status_code == 403
@@ -121,7 +122,7 @@ def test_offline_timezone_preview_uses_capture_date_rules(env):
 
 def test_wizard_preview_create_process_review_export(env):
     tmp, src, out = env
-    c = local_operator(client(tmp))
+    c = direct_access(client(tmp))
     prev = c.post("/api/source-preview", json={"source_dir": str(src), "include_subdirs": False}, headers=H1).json()
     ok = [f for f in prev["files"] if f["ok"]]
     bad = [f for f in prev["files"] if not f["ok"]]
@@ -161,7 +162,7 @@ def test_wizard_preview_create_process_review_export(env):
 
 def test_job_pause_resume_cancel(env):
     tmp, src, out = env
-    c = local_operator(client(tmp, delay=0.3))
+    c = direct_access(client(tmp, delay=0.3))
     mid = mission(c, src, out)
     c.post(f"/api/missions/{mid}/job", headers=H1)
     time.sleep(0.8)
@@ -180,7 +181,7 @@ def test_job_pause_resume_cancel(env):
 
 def test_views_and_regions(env):
     tmp, src, out = env
-    c = local_operator(client(tmp))
+    c = direct_access(client(tmp))
     mid = mission(c, src, out)
     c.post(f"/api/missions/{mid}/job", headers=H1)
     wait_job(c, mid)
@@ -244,7 +245,7 @@ def test_learning_dataset_evaluate_promote_rollback(env, monkeypatch):
     monkeypatch.setenv("TWB_MODELS", str(models))
     app = create_app(tmp / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
                      start_monitoring=False, stability_seconds=0, model_loader=lambda n, v: Named(n, v))
-    c = local_operator(TestClient(app))
+    c = direct_access(TestClient(app))
     mid = mission(c, src, out)
     c.post(f"/api/missions/{mid}/job", headers=H1)
     wait_job(c, mid)
@@ -276,7 +277,7 @@ def test_system_backup_and_delete_mission(env):
     tmp, src, out = env
     app = create_app(tmp / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
                      start_monitoring=False, stability_seconds=0, backup_dir=tmp / "bk")
-    c = local_operator(TestClient(app))
+    c = direct_access(TestClient(app))
     mid = mission(c, src, out)
     c.post(f"/api/missions/{mid}/job", headers=H1)
     wait_job(c, mid)

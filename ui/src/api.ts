@@ -28,8 +28,6 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
 
 export const post = <T = any>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body });
 
-export type User = { id: number; username: string; display_name: string; role: string };
-
 export type Filter = {
   search?: string;
   view_id?: number;

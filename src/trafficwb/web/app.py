@@ -305,10 +305,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def flt(b: FilterBody | None) -> Filter:
         return Filter(**b.model_dump()) if b else Filter()
 
-    # ---------- session ----------
-    @app.get("/api/session")
-    def session():
-        return {"user": asdict(user())}
+    # A neutral health probe keeps installers and supervisors independent of any user or session API.
+    @app.get("/api/health")
+    def health():
+        return {"status": "ok"}
 
     @app.post("/api/time-preview")
     def time_preview(body: TimePreviewBody):

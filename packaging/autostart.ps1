@@ -50,7 +50,7 @@ function Test-Server([int]$p) {
   try {
     $wc = New-Object System.Net.WebClient
     $wc.Proxy = $null
-    $null = $wc.DownloadString("http://127.0.0.1:$p/api/session")
+    $null = $wc.DownloadString("http://127.0.0.1:$p/api/health")
     return $true
   } catch { return $false }
 }
