@@ -61,7 +61,7 @@ jobs:
           Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$dir\start.cmd`"" -WorkingDirectory $dir -WindowStyle Hidden
           $ready = $false
           for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
-            try { $null = $wc.DownloadString("http://127.0.0.1:8765/api/session"); $ready = $true }
+            try { $null = $wc.DownloadString("http://127.0.0.1:8765/api/health"); $ready = $true }
             catch { Start-Sleep -Seconds 2 }
           }
           if (-not $ready) { Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40; throw "installed server did not answer after manual start" }
@@ -77,7 +77,7 @@ jobs:
           Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$dir\start.cmd`"" -WorkingDirectory $dir -WindowStyle Hidden
           $ready = $false
           for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
-            try { $null = $wc.DownloadString("http://127.0.0.1:8765/api/session"); $ready = $true }
+            try { $null = $wc.DownloadString("http://127.0.0.1:8765/api/health"); $ready = $true }
             catch { Start-Sleep -Seconds 2 }
           }
           if (-not $ready) { Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40; throw "reinstalled server did not answer after manual start" }
