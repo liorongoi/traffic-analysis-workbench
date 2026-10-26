@@ -221,8 +221,6 @@ class VideoService:
                 raise VideoError("Enter a start time with an explicit UTC offset, such as Z.")
             if precision not in ("minute", "second"):
                 raise VideoError("Precision must be minute or second.")
-            # Ensure the recording has been probed; frame decoding itself is not changed.
-            self.probe_version(version_id)
             normalized = start.astimezone(timezone.utc)
             if precision == "minute":
                 normalized = normalized.replace(second=0, microsecond=0)
