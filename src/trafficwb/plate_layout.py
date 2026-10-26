@@ -63,8 +63,9 @@ class CountryPlates:
     max_len: int = 10
 
 
-# Sources: English Wikipedia "Vehicle registration plates of Israel / Latvia / Iran / Lebanon" (read 24 Oct 2026)
-# and licenseplatemania.com for Lebanon. Not yet checked against official sources or camera samples.
+# Sources: English Wikipedia "Vehicle registration plates of Israel / Latvia / Iran / Lebanon" (read 24 Oct 2026),
+# licenseplatemania.com for Lebanon, and the user's supplied Iran and Lebanon plate reference images (26 Oct 2026).
+# Not yet checked against official sources or camera samples.
 IR_PRIVATE_LETTERS = "بجدسصطقلمنوهی"
 IR_OTHER_LETTERS = "اپتثزژشعفکگ"
 LB_AREA_LETTERS = "ABYGNOSTKZJRM"
@@ -90,7 +91,12 @@ COUNTRIES: dict[str, CountryPlates] = {
         min_len=8, max_len=8),
     "LB": CountryPlates(
         "LB", "Lebanon", "Latin area letter and digits (Arabic name on the blue band)", True,
-        (Layout("private", rf"[{LB_AREA_LETTERS}]\d{{1,6}}", (), "area letter and up to six digits, B 123456"),
+        (Layout("consular", r"C\d{5}", (), "consular example C 201-54; country and vehicle numbers"),
+         Layout("diplomatic", r"D\d{5}", (), "diplomatic example D 201-54; country and vehicle numbers"),
+         Layout("public-transport", r"P\d{6}", (), "public transport example P 123456"),
+         Layout("commercial-service-family", r"M\d{6}", (),
+                "M plus six digits (also illustrated for motorcycles and private commercial vehicles); color is needed to distinguish service subtypes"),
+         Layout("private", rf"[{LB_AREA_LETTERS}]\d{{1,6}}", (), "area letter and up to six digits, e.g. B 123456"),
          Layout("rl", r"RL\d{6}", (), "RL and six digits"),
          Layout("parliament", r"(?:MP)?(?:12[0-8]|1[01]\d|\d{1,2})", (), "members of parliament, 1 to 128")),
         min_len=1, max_len=8),

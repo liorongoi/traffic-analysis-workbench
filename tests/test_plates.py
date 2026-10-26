@@ -49,6 +49,10 @@ def test_layouts_and_display():
     assert layout_of("AAAA12", "LV") is None                      # no symbol four times in a row
     assert layout_of("A1234", "LV").name == "trailer"             # one letter is a trailer, not a car
     assert layout_of("B123456", "LB").name == "private" and layout_of("RL123456", "LB").name == "rl"
+    assert layout_of("C20154", "LB").name == "consular"
+    assert layout_of("D20154", "LB").name == "diplomatic"
+    assert layout_of("P123456", "LB").name == "public-transport"
+    assert layout_of("M123456", "LB").name == "commercial-service-family"
     assert layout_of("MP45", "LB").name == "parliament" and layout_of("129", "LB") is None
     assert assess(slots("123456"), PAD, "IL").display == "123-456"
     assert normalize("۱۲هـ۳۴۵۶۷") == "12ه34567"                   # tatweel removed, letter kept
