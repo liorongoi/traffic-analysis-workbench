@@ -111,6 +111,7 @@ export type Item = {
   width: number | null;
   height: number | null;
   view: { id: number | null; name: string | null; regions_applied: boolean | null };
+  view_assignment_history: { view_id: number | null; method: string; author: string; reason: string; created_at: string }[];
   condition: { condition: string; flags: string } | null;
   processing_state: string;
   error: string | null;

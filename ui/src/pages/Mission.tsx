@@ -291,6 +291,7 @@ function Views({ missionId }: { missionId: string }) {
               <div className="thumbs">{ids.map((id) => <a key={id} href={`#/m/${missionId}/i/${id}`}><img src={`/api/missions/${missionId}/thumbs/${id}?w=200`} alt="" /></a>)}</div>
             </div>
           ))}
+          <ViewMembership missionId={missionId} view={v} views={data.views} reload={load} />
           {data.views.length > 1 && (
             <div className="row"><span className="muted">Merge another view into this one:</span>
               <select defaultValue="" onChange={(e) => e.target.value && act(v.id, "merge", { absorb: Number(e.target.value) })}>
@@ -304,9 +305,115 @@ function Views({ missionId }: { missionId: string }) {
           <h2>Not assigned to a view ({data.unassigned.length})</h2>
           <p className="muted">These images did not match any view closely enough (for example rain on the lens). They are analysed without regions.</p>
           <div className="thumbs">{data.unassigned.slice(0, 30).map((id) => <a key={id} href={`#/m/${missionId}/i/${id}`}><img src={`/api/missions/${missionId}/thumbs/${id}?w=200`} alt="" /></a>)}</div>
+          {data.views.length > 0 && <UnassignedMembership missionId={missionId} views={data.views} reload={load} />}
         </div>
       )}
     </div>
+  );
+}
+
+function UnassignedMembership({ missionId, views, reload }: { missionId: string; views: any[]; reload: () => void }) {
+  const pageSize = 60;
+  const [offset, setOffset] = useState(0);
+  const [ids, setIds] = useState<number[]>([]);
+  const [total, setTotal] = useState(0);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [target, setTarget] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = async () => {
+    const r = await api(`/missions/${missionId}/views/unassigned/members?offset=${offset}&limit=${pageSize}`);
+    setIds(r.ids); setTotal(r.total);
+  };
+  useEffect(() => { setSelected([]); load(); }, [missionId, offset]);
+  const toggle = (id: number) => setSelected((xs) => xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]);
+  const assign = async () => {
+    if (!target || !selected.length) return;
+    setBusy(true); setMessage(null);
+    try {
+      await post(`/missions/${missionId}/views/${target}/actions/reassign`, { version_ids: selected, target_view: Number(target) });
+      setSelected([]); setMessage("Selected images assigned to the chosen view."); await load(); reload();
+    } catch (e) { setMessage((e as ApiError).message); }
+    finally { setBusy(false); }
+  };
+  return <details style={{ marginTop: 8 }}>
+    <summary>Assign ungrouped images</summary>
+    <div className="thumbs" style={{ marginTop: 8 }}>
+      {ids.map((id) => <label key={id} style={{ display: "inline-grid", gap: 3, cursor: "pointer" }}>
+        <img src={`/api/missions/${missionId}/thumbs/${id}?w=200`} alt={`Image ${id}`} />
+        <span><input type="checkbox" checked={selected.includes(id)} onChange={() => toggle(id)} /> Image {id}</span>
+      </label>)}
+    </div>
+    <div className="row" style={{ marginTop: 8 }}>
+      <button disabled={!offset} onClick={() => { setOffset(Math.max(0, offset - pageSize)); setSelected([]); }}>Previous images</button>
+      <span className="muted">{total ? offset + 1 : 0}–{Math.min(offset + pageSize, total)} of {total}</span>
+      <button disabled={offset + pageSize >= total} onClick={() => { setOffset(offset + pageSize); setSelected([]); }}>Next images</button>
+      <select value={target} onChange={(e) => setTarget(e.target.value)}><option value="">Choose destination view…</option>
+        {views.map((v) => <option key={v.id} value={String(v.id)}>{v.name}</option>)}
+      </select>
+      <button disabled={!selected.length || !target || busy} onClick={assign}>Assign selected</button>
+    </div>
+    {message && <p className="muted" role="status">{message}</p>}
+  </details>;
+}
+
+function ViewMembership({ missionId, view, views, reload }: { missionId: string; view: any; views: any[]; reload: () => void }) {
+  const pageSize = 60;
+  const [offset, setOffset] = useState(0);
+  const [ids, setIds] = useState<number[]>([]);
+  const [total, setTotal] = useState(0);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [target, setTarget] = useState<string>("");
+  const [name, setName] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = async () => {
+    const r = await api(`/missions/${missionId}/views/${view.id}/members?offset=${offset}&limit=${pageSize}`);
+    setIds(r.ids); setTotal(r.total);
+  };
+  useEffect(() => { setSelected([]); load(); }, [missionId, view.id, offset]);
+  const changePage = (next: number) => { setOffset(next); setSelected([]); };
+  const toggle = (id: number) => setSelected((xs) => xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]);
+  const act = async (action: "split" | "reassign") => {
+    if (!selected.length) return;
+    setBusy(true); setMessage(null);
+    try {
+      const body: any = { version_ids: selected };
+      if (action === "split") body.name = name.trim() || null;
+      else body.target_view = target === "unassigned" ? null : Number(target);
+      await post(`/missions/${missionId}/views/${view.id}/actions/${action}`, body);
+      setSelected([]); setName(""); setMessage(action === "split" ? "Selected images moved into a new view." : "Selected images reassigned.");
+      await load(); reload();
+    } catch (e) { setMessage((e as ApiError).message); }
+    finally { setBusy(false); }
+  };
+  return (
+    <details style={{ marginTop: 8 }}>
+      <summary>Manage image assignments ({view.size})</summary>
+      <p className="muted">Select images from this view to move them to another view or split them into a new view. Assignment changes remain in history.</p>
+      <div className="thumbs">
+        {ids.map((id) => <label key={id} style={{ display: "inline-grid", gap: 3, cursor: "pointer" }}>
+          <img src={`/api/missions/${missionId}/thumbs/${id}?w=200`} alt={`Image ${id}`} />
+          <span><input type="checkbox" checked={selected.includes(id)} onChange={() => toggle(id)} /> Image {id}</span>
+        </label>)}
+      </div>
+      <div className="row" style={{ marginTop: 8 }}>
+        <button disabled={!offset} onClick={() => changePage(Math.max(0, offset - pageSize))}>Previous images</button>
+        <span className="muted">{total ? offset + 1 : 0}–{Math.min(offset + pageSize, total)} of {total}</span>
+        <button disabled={offset + pageSize >= total} onClick={() => changePage(offset + pageSize)}>Next images</button>
+      </div>
+      <div className="row" style={{ marginTop: 8 }}>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="New view name (optional)" />
+        <button disabled={!selected.length || busy} onClick={() => act("split")}>Split selected into new view</button>
+        <select value={target} onChange={(e) => setTarget(e.target.value)}>
+          <option value="">Choose destination…</option>
+          <option value="unassigned">Unassigned</option>
+          {views.filter((v) => v.id !== view.id).map((v) => <option key={v.id} value={String(v.id)}>{v.name}</option>)}
+        </select>
+        <button disabled={!selected.length || !target || busy} onClick={() => act("reassign")}>Reassign selected</button>
+      </div>
+      {message && <p className="muted" role="status">{message}</p>}
+    </details>
   );
 }
 

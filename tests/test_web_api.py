@@ -178,6 +178,28 @@ def test_views_and_regions(env):
     assert len(views) == 1
     vid = views[0]["id"]
     assert c.post(f"/api/missions/{mid}/views/{vid}/actions/rename", json={"name": "North gantry"}, headers=H1).status_code == 200
+    members = c.get(f"/api/missions/{mid}/views/{vid}/members?limit=3").json()
+    assert members["total"] == 6 and len(members["ids"]) == 3
+    selected = members["ids"][:2]
+    split = c.post(f"/api/missions/{mid}/views/{vid}/actions/split", json={"version_ids": selected, "name": "Ramp"}, headers=H1)
+    assert split.status_code == 200
+    new_view = split.json()["view_id"]
+    assert len(c.get(f"/api/missions/{mid}/views/{new_view}/members").json()["ids"]) == 2
+    moved = c.post(f"/api/missions/{mid}/views/{vid}/actions/reassign",
+                   json={"version_ids": selected, "target_view": vid}, headers=H1)
+    assert moved.status_code == 200
+    assert len(c.get(f"/api/missions/{mid}/views/{vid}/members").json()["ids"]) == 6
+    history = c.post(f"/api/missions/{mid}/items/{selected[0]}", json={}).json()["view_assignment_history"]
+    assert [r["method"] for r in history] == ["auto", "manual", "manual"]
+    assert history[-1]["author"]
+    unassigned = c.post(f"/api/missions/{mid}/views/{vid}/actions/reassign",
+                        json={"version_ids": selected, "target_view": None}, headers=H1)
+    assert unassigned.status_code == 200
+    assert c.get(f"/api/missions/{mid}/views/unassigned/members").json()["ids"] == selected
+    assigned = c.post(f"/api/missions/{mid}/views/{vid}/actions/reassign",
+                      json={"version_ids": selected, "target_view": vid}, headers=H1)
+    assert assigned.status_code == 200
+    assert c.post(f"/api/missions/{mid}/views/{vid}/actions/split", json={"version_ids": [999999]}, headers=H1).status_code == 400
     r = c.post(f"/api/missions/{mid}/views/{vid}/regions", headers=H1,
                json={"kind": "exclude", "polygon": [[380, 80], [460, 80], [460, 140], [380, 140]], "name": "parking"})
     assert r.status_code == 200

@@ -108,6 +108,8 @@ class CommitBody(BaseModel):
 class ViewBody(BaseModel):
     name: str | None = None
     absorb: int | None = None
+    version_ids: list[int] = Field(default_factory=list, max_length=200)
+    target_view: int | None = None
 
 
 class RegionBody(BaseModel):
@@ -477,6 +479,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             "width": sig["width"] if sig else None, "height": sig["height"] if sig else None,
             "view": {"id": view_id, "name": m.con.execute("SELECT name FROM camera_view WHERE id=?", (view_id,)).fetchone()[0]
                      if view_id else None, "regions_applied": vs.regions_applicable(view_id) if view_id else None},
+            "view_assignment_history": vs.history(version_id),
             "condition": dict(cond) if cond else None,
             "processing_state": item["processing_state"] if item else "not_queued",
             "error": item["error_detail"] if item else None,
@@ -581,15 +584,53 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     @app.post("/api/missions/{mission_id}/views/{view_id}/actions/{action}")
     def view_action(view_id: int, action: str, body: ViewBody, m: Mission = Depends(mission), u: User = Depends(user)):
         vs = ViewService(m)
+        if m.con.execute("SELECT 1 FROM camera_view WHERE id=? AND merged_into IS NULL", (view_id,)).fetchone() is None:
+            raise ApiError(404, "no_view", "That camera view does not exist.")
         if action == "rename" and body.name:
             vs.rename(view_id, body.name, u.username)
         elif action == "confirm":
             vs.confirm(view_id, u.username)
         elif action == "merge" and body.absorb:
             vs.merge(view_id, body.absorb, u.username)
+        elif action == "split":
+            if not body.version_ids:
+                raise ApiError(400, "empty_selection", "Select at least one image to split into a new view.")
+            current = set(vs.members(view_id))
+            if len(set(body.version_ids)) != len(body.version_ids) or not set(body.version_ids) <= current:
+                raise ApiError(400, "invalid_selection", "Every selected image must currently belong to this view.")
+            out = {}
+            _edit(lambda: out.update(view_id=vs.split(view_id, body.version_ids, u.username, body.name)))
+            return out
+        elif action == "reassign":
+            if not body.version_ids:
+                raise ApiError(400, "empty_selection", "Select at least one image to reassign.")
+            if len(set(body.version_ids)) != len(body.version_ids):
+                raise ApiError(400, "invalid_selection", "The selection contains duplicate images.")
+            if body.target_view is not None and m.con.execute(
+                    "SELECT 1 FROM camera_view WHERE id=? AND merged_into IS NULL", (body.target_view,)).fetchone() is None:
+                raise ApiError(404, "no_view", "The destination camera view does not exist.")
+            marks = ",".join("?" for _ in body.version_ids)
+            known = {r[0] for r in m.con.execute(f"SELECT id FROM source_version WHERE id IN ({marks})", body.version_ids)}
+            if known != set(body.version_ids):
+                raise ApiError(404, "no_image", "One or more selected images no longer exist.")
+            _edit(lambda: vs.reassign(body.version_ids, body.target_view, u.username))
         else:
-            raise ApiError(400, "bad_action", "Use rename (with name), confirm, or merge (with absorb).")
+            raise ApiError(400, "bad_action", "Use rename, confirm, merge, split, or reassign.")
         return {"ok": True}
+
+    @app.get("/api/missions/{mission_id}/views/{view_id}/members")
+    def view_members(view_id: int, m: Mission = Depends(mission), offset: int = Query(0, ge=0),
+                     limit: int = Query(60, ge=1, le=200)):
+        if m.con.execute("SELECT 1 FROM camera_view WHERE id=? AND merged_into IS NULL", (view_id,)).fetchone() is None:
+            raise ApiError(404, "no_view", "That camera view does not exist.")
+        ids = ViewService(m).members(view_id)
+        return {"total": len(ids), "offset": offset, "limit": limit, "ids": ids[offset:offset + limit]}
+
+    @app.get("/api/missions/{mission_id}/views/unassigned/members")
+    def unassigned_view_members(m: Mission = Depends(mission), offset: int = Query(0, ge=0),
+                                limit: int = Query(60, ge=1, le=200)):
+        ids = ViewService(m).unassigned()
+        return {"total": len(ids), "offset": offset, "limit": limit, "ids": ids[offset:offset + limit]}
 
     @app.get("/api/missions/{mission_id}/views/{view_id}/bands")
     def bands_get(view_id: int, m: Mission = Depends(mission)):
