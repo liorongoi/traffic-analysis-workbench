@@ -68,7 +68,7 @@ jobs:
         shell: pwsh
         run: |
           $t = "$env:RUNNER_TEMP\twb"
-          function Up { try { $wc = New-Object System.Net.WebClient; $wc.Proxy = $null; $null = $wc.DownloadString("http://127.0.0.1:8765/api/session"); $true } catch { $false } }
+          function Up { try { $wc = New-Object System.Net.WebClient; $wc.Proxy = $null; $null = $wc.DownloadString("http://127.0.0.1:8765/api/health"); $true } catch { $false } }
           function WaitFor([bool]$want) { for ($i = 0; $i -lt 60; $i++) { if ((Up) -eq $want) { return }; Start-Sleep 2 }; Get-Content "$t\logs\server.log" -ErrorAction SilentlyContinue; throw "server up=$want not reached" }
           # The installer does not require Windows sign-in startup; users start the server explicitly.
           $start = Start-Process -PassThru -FilePath "$t\start.cmd" -WindowStyle Hidden
