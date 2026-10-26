@@ -98,6 +98,16 @@ def test_no_sign_in_required_but_mutations_need_application_header(env):
     assert c.post("/api/missions/validate", json={}, headers={}).status_code == 403
 
 
+def test_job_snapshot_reports_nonblocking_resource_usage():
+    from trafficwb.web.jobs import Job
+    usage = Job("m", "process").snapshot()["resource_usage"]
+    assert usage is not None
+    assert 0 <= usage["process_cpu_percent"]
+    assert usage["process_rss_bytes"] > 0
+    assert usage["system_memory_available_bytes"] > 0
+    assert usage["system_memory_total_bytes"] >= usage["system_memory_available_bytes"]
+
+
 def test_offline_timezone_preview_uses_capture_date_rules(env):
     tmp, _, _ = env
     c = client(tmp)

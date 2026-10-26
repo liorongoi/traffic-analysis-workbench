@@ -16,6 +16,28 @@ from ..ingest import Monitor, cycle
 from ..process import Processor, RunControl
 from ..store import DataRoot
 
+_resource_lock = threading.Lock()
+_resource_process = None
+
+
+def _resource_usage() -> dict | None:
+    """Small, non-blocking resource sample for the operator's progress screen."""
+    global _resource_process
+    try:
+        import psutil
+        with _resource_lock:
+            if _resource_process is None:
+                _resource_process = psutil.Process()
+            proc = _resource_process
+            cpu = proc.cpu_percent(interval=None)
+            rss = proc.memory_info().rss
+            memory = psutil.virtual_memory()
+        return {"process_cpu_percent": round(cpu, 1), "process_rss_bytes": int(rss),
+                "system_memory_available_bytes": int(memory.available), "system_memory_total_bytes": int(memory.total)}
+    except Exception:
+        # Progress reporting must never turn a missing process metric into a failed job request.
+        return None
+
 
 @dataclass
 class Job:
@@ -44,7 +66,8 @@ class Job:
         state = "paused" if self.state == "running" and self.control.paused else self.state
         return {"kind": self.kind, "state": state, "stage": self.control.stage, "done": self.done, "total": self.total,
                 "elapsed_s": round(now - self.started), "eta_s": eta, "error": self.error, "result": self.result,
-                "eta_basis": "measured on this run" if eta is not None else "not enough images yet"}
+                "eta_basis": "measured on this run" if eta is not None else "not enough images yet",
+                "resource_usage": _resource_usage()}
 
 
 class JobManager:

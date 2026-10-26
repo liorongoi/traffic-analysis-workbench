@@ -133,6 +133,7 @@ export type Job = {
   elapsed_s: number;
   eta_s: number | null;
   eta_basis: string;
+  resource_usage: { process_cpu_percent: number; process_rss_bytes: number; system_memory_available_bytes: number; system_memory_total_bytes: number } | null;
   error: string | null;
   result?: { search_run?: number };
 };

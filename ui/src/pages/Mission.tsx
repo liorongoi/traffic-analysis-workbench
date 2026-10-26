@@ -75,6 +75,7 @@ function JobCard({ job, mid, reload, unit }: { job: Job | null; mid: string; rel
           </div>
           <div className="progress" style={{ margin: "8px 0" }}><div style={{ width: `${pct}%` }} /></div>
           <div className="muted">Elapsed {fmtDuration(job.elapsed_s)} · remaining {job.eta_s != null ? `about ${fmtDuration(job.eta_s)}` : "–"} ({job.eta_basis})</div>
+          {job.resource_usage && <div className="muted">App usage: {job.resource_usage.process_cpu_percent.toFixed(1)}% CPU · {fmtBytes(job.resource_usage.process_rss_bytes)} RAM · system available {fmtBytes(job.resource_usage.system_memory_available_bytes)} / {fmtBytes(job.resource_usage.system_memory_total_bytes)}</div>}
           {job.error && <div className="msg err">{job.error}</div>}
         </>
       )}
@@ -88,6 +89,11 @@ function JobCard({ job, mid, reload, unit }: { job: Job | null; mid: string; rel
       {err && <div className="msg err">{err}</div>}
     </div>
   );
+}
+
+function fmtBytes(n: number): string {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+  return `${(n / 1024 ** 2).toFixed(0)} MB`;
 }
 
 function Overview({ m, reload }: { m: any; reload: () => void }) {
