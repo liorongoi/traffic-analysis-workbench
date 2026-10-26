@@ -737,6 +737,22 @@ CREATE TABLE event_plate_read (
 );
 CREATE INDEX ix_event_plate_version ON event_plate_read(source_version_id);
 """,
+    14: """
+-- Confirmed manual recording start times. Latest revision controls the UTC start without rewriting probe or source metadata.
+CREATE TABLE video_start_revision (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  action TEXT NOT NULL,              -- set | clear
+  start_utc TEXT,
+  precision TEXT,
+  author TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL,
+  CHECK ((action='set' AND start_utc IS NOT NULL AND precision IN ('minute','second')) OR
+         (action='clear' AND start_utc IS NULL AND precision IS NULL))
+);
+CREATE INDEX ix_video_start_revision ON video_start_revision(source_version_id, id);
+""",
 }
 
 

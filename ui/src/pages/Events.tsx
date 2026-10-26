@@ -41,6 +41,9 @@ function EventList({ missionId }: { missionId: string }) {
   const [rec, setRec] = useState("");
   const [status, setStatus] = useState("");
   const [flag, setFlag] = useState("");
+  const [startTimes, setStartTimes] = useState<Record<number, string>>({});
+  const [precisions, setPrecisions] = useState<Record<number, string>>({});
+  const [timeRevision, setTimeRevision] = useState(0);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   useEffect(() => { api(`/missions/${missionId}/recordings`).then((r) => setRecs(r.recordings)); }, [missionId]);
   useEffect(() => {
@@ -49,7 +52,30 @@ function EventList({ missionId }: { missionId: string }) {
     if (status) q.set("status", status);
     if (flag) q.set("flag", flag);
     api(`/missions/${missionId}/events?${q}`).then((r) => setEvs(r.events));
-  }, [missionId, rec, status, flag]);
+  }, [missionId, rec, status, flag, timeRevision]);
+  const saveStart = async (r: any) => {
+    setMsg(null);
+    try {
+      await api(`/missions/${missionId}/recordings/${r.id}/start-time`, { method: "PUT", body: {
+        action: "set", utc: startTimes[r.id] ?? r.start_utc, precision: precisions[r.id] ?? r.start_precision ?? "second",
+        note: "Operator confirmed recording start in UTC",
+      } });
+      const updated = await api(`/missions/${missionId}/recordings`);
+      setRecs(updated.recordings); setTimeRevision((x) => x + 1);
+      setMsg({ kind: "ok", text: "UTC recording start saved. Event UTC times and exports now use this correction." });
+    } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
+  };
+  const clearStart = async (r: any) => {
+    setMsg(null);
+    try {
+      await api(`/missions/${missionId}/recordings/${r.id}/start-time`, { method: "PUT", body: {
+        action: "clear", note: "Operator cleared manual UTC start",
+      } });
+      const updated = await api(`/missions/${missionId}/recordings`);
+      setRecs(updated.recordings); setTimeRevision((x) => x + 1);
+      setMsg({ kind: "ok", text: "Manual UTC start cleared; the filename time is in use when available." });
+    } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
+  };
   const doExport = async () => {
     setMsg(null);
     try {
@@ -65,7 +91,25 @@ function EventList({ missionId }: { missionId: string }) {
           <tbody>{recs.map((r) => (
             <tr key={r.id}>
               <td className="mono bidi">{r.rel_path}</td>
-              <td className="mono">{r.start_utc ?? <span className="muted" title="The file name has no start time">unknown</span>}</td>
+              <td>
+                <div className="mono">{r.start_utc ?? <span className="muted" title="No confirmed UTC start">unknown</span>}</div>
+                <div className="muted">{r.start_source === "manual" ? `operator confirmed by ${r.start_revision_author} · ${r.start_revision_created_at}` : r.start_source === "filename" ? "from filename" : "no UTC start"}</div>
+                <details style={{ marginTop: 4 }}>
+                  <summary>{r.start_source === "manual" ? "Edit UTC start" : "Set UTC start"}</summary>
+                  <div className="grid" style={{ gap: 5, marginTop: 5 }}>
+                    <input aria-label={`UTC start for ${r.rel_path}`} value={startTimes[r.id] ?? r.start_utc ?? ""}
+                      onChange={(e) => setStartTimes({ ...startTimes, [r.id]: e.target.value })}
+                      placeholder="2026-10-21T12:00:00Z" />
+                    <select aria-label="UTC start precision" value={precisions[r.id] ?? r.start_precision ?? "second"}
+                      onChange={(e) => setPrecisions({ ...precisions, [r.id]: e.target.value })}>
+                      <option value="minute">Minute</option><option value="second">Second</option>
+                    </select>
+                    <button disabled={!(startTimes[r.id] ?? r.start_utc)} onClick={() => saveStart(r)}>Save confirmed UTC start</button>
+                    {r.start_source === "manual" && <button onClick={() => clearStart(r)}>Clear manual correction</button>}
+                    <span className="muted">Enter an ISO-8601 timestamp with a UTC offset (for example, ending in Z). This changes event UTC metadata, not video frames.</span>
+                  </div>
+                </details>
+              </td>
               <td className="num mono">{fmtT(r.duration_s)}</td>
               <td>{r.nominal_fps ? `${Number(r.nominal_fps).toFixed(2)} fps` : ""}{r.variable_frame_rate ? " (variable)" : ""}</td>
               <td>{r.error ? <span className="badge failed" title={r.error}>cannot decode</span> : r.processing_state ?? ""}</td>

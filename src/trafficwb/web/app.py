@@ -172,6 +172,13 @@ class ClipBody(BaseModel):
     method: str = "copy"
 
 
+class VideoStartBody(BaseModel):
+    action: str = "set"             # set | clear
+    utc: datetime | None = None
+    precision: str | None = None     # minute | second
+    note: str | None = None
+
+
 class MonitoringBody(BaseModel):
     enabled: bool
 
@@ -1038,6 +1045,11 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     @app.get("/api/missions/{mission_id}/recordings")
     def recordings(m: Mission = Depends(mission)):
         return {"recordings": _video(m).recordings()}
+
+    @app.put("/api/missions/{mission_id}/recordings/{version_id}/start-time")
+    def recording_start_time(version_id: int, body: VideoStartBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        return _video_call(lambda: _video(m).revise_start(version_id, body.action, u.username, body.utc,
+                                                           body.precision, body.note))
 
     @app.get("/api/missions/{mission_id}/videos/{version_id}")
     def video_file(version_id: int, m: Mission = Depends(mission)):

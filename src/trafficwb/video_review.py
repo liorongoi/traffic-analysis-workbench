@@ -95,18 +95,23 @@ class VideoService:
     # ---------- reading ----------
     def _base(self, where: str = "", args: tuple = ()) -> list[Event]:
         rows = self.con.execute(
-            "SELECT e.*, f.rel_path, i.run_id, p.start_utc, p.start_precision FROM video_event e "
+            "SELECT e.*, f.rel_path, i.run_id, "
+            "CASE WHEN sr.action='set' THEN sr.start_utc ELSE p.start_utc END AS effective_start_utc, "
+            "CASE WHEN sr.action='set' THEN sr.precision ELSE p.start_precision END AS effective_start_precision "
+            "FROM video_event e "
             "JOIN source_version v ON v.id=e.source_version_id JOIN source_file f ON f.id=v.source_file_id "
             "JOIN run_item i ON i.id=e.run_item_id LEFT JOIN video_probe p ON p.source_version_id=e.source_version_id "
+            "LEFT JOIN video_start_revision sr ON sr.id=(SELECT MAX(r.id) FROM video_start_revision r "
+            "WHERE r.source_version_id=e.source_version_id) "
             f"{where} ORDER BY f.rel_path, e.first_t, e.id", args).fetchall()
         out = []
         for r in rows:
             out.append(Event(r["id"], r["event_key"], r["source_version_id"], r["rel_path"], r["run_id"], r["first_t"],
                              r["last_t"], r["first_t"], r["last_t"], r["cls"], r["cls"], r["cls_share"],
                              json.loads(r["flags"]), json.loads(r["related"]), r["end_reason"], json.loads(r["entry"]),
-                             json.loads(r["exit"]), utc_precision=r["start_precision"], thumb_t=r["thumb_t"],
+                             json.loads(r["exit"]), utc_precision=r["effective_start_precision"], thumb_t=r["thumb_t"],
                              thumb_box=json.loads(r["thumb_box"])))
-            out[-1]._start = start_utc(r["start_utc"])  # type: ignore[attr-defined]
+            out[-1]._start = start_utc(r["effective_start_utc"])  # type: ignore[attr-defined]
         return out
 
     def _apply(self, events: list[Event]) -> list[Event]:
@@ -173,10 +178,62 @@ class VideoService:
         rows = self.con.execute(
             "SELECT v.id, f.rel_path, p.*, (SELECT processing_state FROM run_item i WHERE i.source_version_id=v.id "
             " ORDER BY i.id DESC LIMIT 1) AS processing_state, "
-            "(SELECT COUNT(*) FROM video_event e WHERE e.source_version_id=v.id) AS events "
+            "(SELECT COUNT(*) FROM video_event e WHERE e.source_version_id=v.id) AS events, "
+            "sr.id AS start_revision_id, sr.action AS start_revision_action, sr.start_utc AS revised_start_utc, "
+            "sr.precision AS revised_start_precision, sr.author AS start_revision_author, "
+            "sr.note AS start_revision_note, sr.created_at AS start_revision_created_at "
             "FROM source_version v JOIN source_file f ON f.id=v.source_file_id "
-            "LEFT JOIN video_probe p ON p.source_version_id=v.id WHERE v.superseded_by IS NULL ORDER BY f.rel_path").fetchall()
-        return [dict(r) | {"id": r[0]} for r in rows]
+            "LEFT JOIN video_probe p ON p.source_version_id=v.id "
+            "LEFT JOIN video_start_revision sr ON sr.id=(SELECT MAX(r.id) FROM video_start_revision r "
+            "WHERE r.source_version_id=v.id) "
+            "WHERE v.superseded_by IS NULL ORDER BY f.rel_path").fetchall()
+        out = []
+        for row in rows:
+            d = dict(row) | {"id": row["id"]}
+            filename_start, filename_precision = d.get("start_utc"), d.get("start_precision")
+            if d["start_revision_id"] is not None:
+                if d["start_revision_action"] == "set":
+                    d["start_utc"] = d["revised_start_utc"]
+                    d["start_precision"] = d["revised_start_precision"]
+                    d["start_source"] = "manual"
+                else:
+                    d["start_utc"], d["start_precision"] = filename_start, filename_precision
+                    d["start_source"] = "filename" if filename_start else "none"
+            else:
+                d["start_source"] = "filename" if d.get("start_utc") else "none"
+            return_fields = ("start_revision_id", "start_revision_action", "revised_start_utc", "revised_start_precision")
+            for field in return_fields:
+                d.pop(field, None)
+            out.append(d)
+        return out
+
+    def revise_start(self, version_id: int, action: str, author: str, start: datetime | None = None,
+                     precision: str | None = None, note: str | None = None) -> dict:
+        """Append an operator-confirmed UTC start or clear the latest manual override."""
+        if self.m.config().input_type != "video":
+            raise VideoError("Recording start times can only be corrected in a video mission.")
+        if self.con.execute("SELECT 1 FROM source_version WHERE id=?", (version_id,)).fetchone() is None:
+            raise VideoError("That recording does not exist in this mission.")
+        if action not in ("set", "clear"):
+            raise VideoError("Action must be set or clear.")
+        if action == "set":
+            if start is None or start.tzinfo is None or start.utcoffset() is None:
+                raise VideoError("Enter a start time with an explicit UTC offset, such as Z.")
+            if precision not in ("minute", "second"):
+                raise VideoError("Precision must be minute or second.")
+            # Ensure the recording has been probed; frame decoding itself is not changed.
+            self.probe_version(version_id)
+            normalized = start.astimezone(timezone.utc)
+            if precision == "minute":
+                normalized = normalized.replace(second=0, microsecond=0)
+            value = normalized.isoformat(timespec="seconds").replace("+00:00", "Z")
+        else:
+            value = None
+            precision = None
+        self.con.execute(
+            "INSERT INTO video_start_revision(source_version_id,action,start_utc,precision,author,note,created_at) "
+            "VALUES (?,?,?,?,?,?,?)", (version_id, action, value, precision, author, note, utcnow()))
+        return next(r for r in self.recordings() if r["id"] == version_id)
 
     # ---------- decisions ----------
     def revise(self, event_id: int, action: str, author: str, note: str | None = None, **payload) -> Event:

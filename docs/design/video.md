@@ -5,11 +5,13 @@ Requirements VID-01 to VID-04. Video missions use the **object search** mode; th
 ## Time
 
 - Every time inside a recording is the frame's **presentation timestamp** (PTS), converted to seconds from the stream start. Frames are never counted, so recordings with a variable frame rate keep correct times. `trafficwb.video.probe` records whether the rate is variable (frame intervals of the first 300 packets differ by more than 10%).
-- The **absolute UTC start** comes only from the file name (the same patterns as still images). The container's creation time is stored but not trusted.
-  - When the name gives the start, every event gets a UTC start and end: the start plus the PTS.
-  - When the name has no time, the recording is still analysed. Its events have relative times only, and the absolute time shows as "unknown" on screen and in exports. Search time limits cannot apply to those events, and the search summary counts them.
+- The **absolute UTC start** comes from a confirmed source: the file name (the same patterns as still images) or an operator's explicit correction. The container's creation time is stored but not trusted.
+  - When a start is confirmed, every event gets a UTC start and end: the start plus the PTS.
+  - When the name has no time, the recording is still analysed. The operator can set an ISO-8601 UTC start and its minute/second precision on the Recordings screen. The change is append-only and stores the local OS username, timestamp and note. Clearing the correction restores the original filename-derived value, if any.
+  - Without a confirmed start, events have relative times only, and absolute time shows as "unknown" on screen and in exports. Search time limits cannot apply to those events, and the search summary counts them.
   - The camera's real time source is still open (Q03). A sample video will show whether names carry the start.
 - Time precision follows the name: a name with minutes gives events at minute precision plus the PTS offset, and the export says so.
+- A manual start-time correction changes UTC metadata only. It does not shift, re-encode or alter video frames, event-relative PTS, or source file metadata.
 
 ## Sampling and resumable processing
 

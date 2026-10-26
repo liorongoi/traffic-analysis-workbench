@@ -12,7 +12,7 @@ Rules:
   identity is carried across recordings.
 - Event times are presentation times in seconds from the stream start.
   Absolute UTC is added only when the recording's start is known from a
-  confirmed source (the filename), with that source's precision.
+  confirmed filename or operator correction, with its precision.
 - Plate recognition missions read the plate of each vehicle event on a few of
   its frames after processing (see plates.combine_frame_reads).
 - Not in this version: camera views and regions for video, night light
