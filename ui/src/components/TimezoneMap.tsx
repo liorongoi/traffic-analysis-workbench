@@ -16,6 +16,8 @@ export default function TimezoneMap({ selected, onPick }: {
     return () => { live = false; };
   }, []);
 
+  if (!map) return <div className="timezone-map-loading muted">Loading offline timezone map…</div>;
+
   const pick = (event: React.MouseEvent<SVGPathElement>, zone: string) => {
     const svg = event.currentTarget.ownerSVGElement;
     const matrix = svg?.getScreenCTM();
@@ -29,7 +31,6 @@ export default function TimezoneMap({ selected, onPick }: {
     onPick(zone, latitude, longitude);
   };
 
-  if (!map) return <div className="timezone-map-loading muted">Loading offline timezone map…</div>;
   return (
     <div className="timezone-map-wrap">
       <svg className="timezone-map" viewBox={`0 0 ${map.width} ${map.height}`} role="img" aria-label="Interactive world time-zone map">
