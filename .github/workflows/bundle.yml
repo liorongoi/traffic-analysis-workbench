@@ -48,23 +48,40 @@ jobs:
         run: |
           $exe = (Get-ChildItem setup -Filter *.exe | Select-Object -First 1).FullName
           $dir = "$env:LOCALAPPDATA\TrafficWorkbench"
-          # Not Start-Process -Wait: PowerShell 7 would also wait for the server the wizard leaves running.
+          # Keep a bounded wait so a slow install fails with diagnostics instead of hanging the job.
           $p = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup.log"
           $done = $p.WaitForExit(15 * 60 * 1000)
           Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 25
           if (-not $done) { Get-Content "$env:RUNNER_TEMP\setup.log" | Select-Object -Last 40; throw "setup did not finish in 15 minutes" }
           if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\setup.log" | Select-Object -Last 40; throw "setup exit code $($p.ExitCode)" }
           if (-not (Test-Path "$dir\current.txt")) { throw "the wizard did not install the app" }
+          $firstBuild = (Get-Content "$dir\current.txt" -Raw).Trim()
           $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
-          $null = $wc.DownloadString("http://127.0.0.1:8765/api/session")
-          Write-Host "Server answering after the wizard."
+          # The wizard is configured for manual start; exercise the installed start command explicitly.
+          Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$dir\start.cmd`"" -WorkingDirectory $dir -WindowStyle Hidden
+          $ready = $false
+          for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
+            try { $null = $wc.DownloadString("http://127.0.0.1:8765/api/session"); $ready = $true }
+            catch { Start-Sleep -Seconds 2 }
+          }
+          if (-not $ready) { Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40; throw "installed server did not answer after manual start" }
+          Write-Host "Installed server answers after manual start."
           # A second run of the same installer must repair in place without deleting the old build/data.
-          & "$dir\autostart.ps1" -Mode restart
+          & "$dir\autostart.ps1" -Mode remove
           $again = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup-reinstall.log"
           if (-not $again.WaitForExit(15 * 60 * 1000)) { throw "same-version reinstall did not finish" }
           if ($again.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\setup-reinstall.log" | Select-Object -Last 40; throw "same-version reinstall exit code $($again.ExitCode)" }
-          $null = $wc.DownloadString("http://127.0.0.1:8765/api/session")
-          Write-Host "Same-version reinstall succeeded."
+          $secondBuild = (Get-Content "$dir\current.txt" -Raw).Trim()
+          if ($secondBuild -eq $firstBuild -or -not (Test-Path $firstBuild)) { throw "same-version repair replaced or lost the prior build" }
+          if (-not (Test-Path "$env:USERPROFILE\TrafficData")) { throw "same-version repair removed mission data" }
+          Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$dir\start.cmd`"" -WorkingDirectory $dir -WindowStyle Hidden
+          $ready = $false
+          for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
+            try { $null = $wc.DownloadString("http://127.0.0.1:8765/api/session"); $ready = $true }
+            catch { Start-Sleep -Seconds 2 }
+          }
+          if (-not $ready) { Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40; throw "reinstalled server did not answer after manual start" }
+          Write-Host "Same-version repair kept the prior build and data; the new server answers."
           # The uninstaller hands over to a copy of itself in TEMP and exits; wait for that copy too.
           $u = Start-Process -PassThru "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
           $null = $u.WaitForExit(5 * 60 * 1000)
