@@ -618,18 +618,18 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "bad_action", "Use rename, confirm, merge, split, or reassign.")
         return {"ok": True}
 
+    @app.get("/api/missions/{mission_id}/views/unassigned/members")
+    def unassigned_view_members(m: Mission = Depends(mission), offset: int = Query(0, ge=0),
+                                limit: int = Query(60, ge=1, le=200)):
+        ids = ViewService(m).unassigned()
+        return {"total": len(ids), "offset": offset, "limit": limit, "ids": ids[offset:offset + limit]}
+
     @app.get("/api/missions/{mission_id}/views/{view_id}/members")
     def view_members(view_id: int, m: Mission = Depends(mission), offset: int = Query(0, ge=0),
                      limit: int = Query(60, ge=1, le=200)):
         if m.con.execute("SELECT 1 FROM camera_view WHERE id=? AND merged_into IS NULL", (view_id,)).fetchone() is None:
             raise ApiError(404, "no_view", "That camera view does not exist.")
         ids = ViewService(m).members(view_id)
-        return {"total": len(ids), "offset": offset, "limit": limit, "ids": ids[offset:offset + limit]}
-
-    @app.get("/api/missions/{mission_id}/views/unassigned/members")
-    def unassigned_view_members(m: Mission = Depends(mission), offset: int = Query(0, ge=0),
-                                limit: int = Query(60, ge=1, le=200)):
-        ids = ViewService(m).unassigned()
         return {"total": len(ids), "offset": offset, "limit": limit, "ids": ids[offset:offset + limit]}
 
     @app.get("/api/missions/{mission_id}/views/{view_id}/bands")

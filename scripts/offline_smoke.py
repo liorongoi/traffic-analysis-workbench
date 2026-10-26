@@ -1,8 +1,8 @@
 """Disconnected install-to-export check (ENV-04). Run with the installed application's Python.
 
 Creates synthetic images named with UTC times, makes a mission, scans, detects with the
-installed vehicle detector, exports CSV and Excel, takes and verifies a backup, and asks
-the web app for its sign-in page. It uses no network. Prints one JSON line and exits 0 on success.
+installed vehicle detector, exports CSV and Excel, takes and verifies a backup, and checks
+that the local web app opens without an application sign-in. It uses no network. Prints one JSON line and exits 0 on success.
 
     python offline_smoke.py --work <empty folder> [--models <models folder>]
 """
@@ -107,7 +107,7 @@ def main(argv=None) -> int:
     b = admin.backup(data, bk, "smoke")
     assert admin.verify(b) == []
     page, session = web_check(data)
-    assert '<div id="root">' in page and session["needs_setup"] is True
+    assert '<div id="root">' in page and session["user"]["username"]
     from trafficwb.models import find
     from trafficwb.runtime import make_session
     _, info = make_session(find("yolox-s").weights)
