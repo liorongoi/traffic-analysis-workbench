@@ -511,10 +511,8 @@ def test_night_review_api(mission, tmp_path):
     from trafficwb.web.app import create_app
     m, src = _night_mission(mission)
     Processor(m, RedBoxDetector()).process_all()
-    h = {"X-TWB": "1"}
     c = TestClient(create_app(tmp_path / "data", start_monitoring=False, stability_seconds=0))
-    c.post("/api/setup", json={"username": "lior", "display_name": "Lior", "password": "longpassword"}, headers=h)
-    c.post("/api/login", json={"username": "lior", "password": "longpassword"}, headers=h)
+    h = {"X-TWB": "1"}
     r = c.get(f"/api/missions/{m.id}/night/queue?limit=5", headers=h)
     assert r.status_code == 200, r.text
     q = r.json()

@@ -6,11 +6,10 @@
 - Processing and folder monitoring run in server threads, not in the browser. Closing the browser does not stop them. Monitoring that was on resumes when the server starts.
 - One background job per mission: processing a source scan or the files that monitoring found. Pause, resume and cancel act between images. The ETA is measured on the running job, and the screen says what it is based on.
 
-## Accounts and sessions
+## Local access
 
-- The first account can only be created from the workstation itself (localhost). Later accounts are added by a signed-in operator, or with `trafficwb-web add-account`.
-- Passwords are stored as scrypt hashes. Sessions use an HttpOnly, SameSite=Strict cookie and expire after 30 minutes idle.
-- One active operator at a time. A second sign-in is refused unless the operator chooses "take over", which ends the other session. Every sign-in, take-over and sign-out is logged in `auth_event`.
+- Lanemark does not require an account, password, or sign-in. Changes are attributed to the Windows/macOS/Linux account running the server.
+- The server listens on localhost by default. `--lan` makes it reachable on the local network without a sign-in, so use that only on a trusted, closed network.
 - Every request that changes data must carry the header `X-TWB: 1`, which blocks cross-site form posts.
 
 ## Screens

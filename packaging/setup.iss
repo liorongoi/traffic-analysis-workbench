@@ -39,9 +39,6 @@ SetupIconFile=lanemark.ico
 UninstallDisplayIcon={uninstallexe}
 SetupLogging=yes
 
-[Tasks]
-Name: "autostart"; Description: "Start Lanemark when I sign in to Windows (recommended)"
-
 [Files]
 ; Unpacked to the temporary folder, which Setup removes when it ends.
 Source: "{#BundleDir}\*"; DestDir: "{tmp}\bundle"; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -56,7 +53,7 @@ Name: "{autoprograms}\Lanemark"; Filename: "http://127.0.0.1:8765"; Comment: "Op
 Name: "{autoprograms}\Lanemark - speed check"; Filename: "{app}\speed-check.cmd"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Description: "Start Lanemark now"; Flags: postinstall nowait runminimized skipifsilent; Tasks: not autostart; Check: InstallOK
+Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Description: "Start Lanemark now"; Flags: postinstall nowait runminimized skipifsilent; Check: InstallOK
 Filename: "http://127.0.0.1:8765"; Description: "Open Lanemark now"; Flags: postinstall shellexec nowait skipifsilent; Check: InstallOK
 
 [UninstallRun]
@@ -116,12 +113,6 @@ begin
       SuppressibleMsgBox('Please choose a data folder.', mbError, MB_OK, IDOK);
       Result := False;
     end
-    else if DirExists(ExpandConstant('{app}\app-{#AppVersion}')) then
-    begin
-      SuppressibleMsgBox('Version {#AppVersion} is already installed in ' + ExpandConstant('{app}') + '.' + #13#10 +
-             'Open Lanemark from the Start menu, or install a newer version.', mbInformation, MB_OK, IDOK);
-      Result := False;
-    end;
   end;
 end;
 
@@ -146,19 +137,18 @@ end;
 
 procedure RunInstaller;
 var
-  Log, Cmd, Auto: String;
+  Log, Cmd: String;
   Code: Integer;
 begin
   ForceDirectories(ExpandConstant('{app}\logs'));
   Log := ExpandConstant('{app}\logs\install.log');
   LogPath := Log;
-  if WizardIsTaskSelected('autostart') then Auto := 'signin' else Auto := 'none';
   // Windows PowerShell's own module path, in case Setup was started from PowerShell 7, whose path would load
   // the wrong modules. The log is written as UTF-8 so it reads anywhere.
   Cmd := '$env:PSModulePath=[Environment]::GetEnvironmentVariable(''PSModulePath'',''Machine''); ' +
     '$ErrorActionPreference=''Stop''; try { & ' + Quote(ExpandConstant('{tmp}\bundle\install.ps1')) +
     ' -Target ' + Quote(ExpandConstant('{app}')) + ' -Data ' + Quote(FoldersPage.Values[0]) +
-    ' -BackupDir ' + Quote(FoldersPage.Values[1]) + ' -AutoStart ' + Auto +
+    ' -BackupDir ' + Quote(FoldersPage.Values[1]) + ' -AutoStart none' +
     ' *>&1 | Out-File -Encoding utf8 ' + Quote(Log) + '; exit 0 } catch { $_ | Out-File -Append -Encoding utf8 ' + Quote(Log) + '; exit 1 }';
   WizardForm.StatusLabel.Caption := 'Checking the files, installing Python and the models, and testing the install. This takes a few minutes...';
   WizardForm.ProgressGauge.Style := npbstMarquee;
@@ -173,7 +163,7 @@ begin
   begin
     SuppressibleMsgBox('The installation did not finish (code ' + IntToStr(Code) + ').' + #13#10 + #13#10 +
            'Details are in:' + #13#10 + Log + #13#10 + #13#10 +
-           'If a version was already installed, it is still in use.', mbError, MB_OK, IDOK);
+           'Your data and previous version have been kept. Close Lanemark and retry the installer. If it fails again, share install.log.', mbError, MB_OK, IDOK);
     Failed := True;
   end;
 end;

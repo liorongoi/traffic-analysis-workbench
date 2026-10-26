@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, post, setSignedOutHandler, User } from "./api";
-import { go, useRoute } from "./router";
-import Login from "./pages/Login";
+import { api, User } from "./api";
+import { useRoute } from "./router";
 import Logo from "./Logo";
 import Missions from "./pages/Missions";
 import Wizard from "./pages/Wizard";
@@ -10,30 +9,20 @@ import Investigate from "./pages/Investigate";
 import RegionEditor from "./pages/RegionEditor";
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User>({ id: 0, username: "local", display_name: "Local operator", role: "admin" });
   const [checked, setChecked] = useState(false);
-  const [needsSetup, setNeedsSetup] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
   const route = useRoute();
 
   const refresh = async () => {
     const s = await api("/session");
-    setUser(s.signed_in ? s.user : null);
-    setNeedsSetup(!!s.needs_setup);
-    if (!s.signed_in && s.message && s.message !== "Sign in to continue.") setNotice(s.message);
+    setUser(s.user);
     setChecked(true);
   };
   useEffect(() => {
-    setSignedOutHandler((msg) => {
-      setUser(null);
-      setNotice(msg);
-    });
     refresh();
   }, []);
 
   if (!checked) return <div className="page muted">Loading…</div>;
-  if (!user) return <Login needsSetup={needsSetup} notice={notice} onDone={() => { setNotice(null); refresh(); }} />;
-
   const [section, id, sub, extra] = route;
   let body;
   if (section === "new") body = <Wizard />;
@@ -47,8 +36,7 @@ export default function App() {
       <header className="top">
         <a className="brand" href="#/"><Logo /> Lanemark</a>
         <span className="spacer" />
-        <span className="muted">Signed in as <b>{user.display_name}</b></span>
-        <button onClick={async () => { await post("/logout"); setUser(null); go("/"); }}>Sign out</button>
+        <span className="muted">Local operator: <b>{user.display_name}</b></span>
       </header>
       {body}
     </>

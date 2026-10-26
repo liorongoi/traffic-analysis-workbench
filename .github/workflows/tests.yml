@@ -1,7 +1,7 @@
 name: tests
 on:
   push:
-    branches: [main]
+    branches: [main, "codex/**"]
   pull_request:
 jobs:
   test:
@@ -64,22 +64,16 @@ jobs:
           if ("${{ matrix.ort }}" -eq "auto" -and -not ($log -match "ONNX Runtime build: directml")) { throw "auto bundle did not choose DirectML on a runner without NVIDIA" }
           if (-not (Test-Path "$env:RUNNER_TEMP\twb\start.cmd")) { throw "start.cmd was not written" }
           Get-Content "$env:RUNNER_TEMP\twb\start.cmd"
-      - name: Automatic start (sign-in default, restart, power-on task, remove)
+      - name: Manual start and optional power-on task
         shell: pwsh
         run: |
           $t = "$env:RUNNER_TEMP\twb"
           function Up { try { $wc = New-Object System.Net.WebClient; $wc.Proxy = $null; $null = $wc.DownloadString("http://127.0.0.1:8765/api/session"); $true } catch { $false } }
           function WaitFor([bool]$want) { for ($i = 0; $i -lt 60; $i++) { if ((Up) -eq $want) { return }; Start-Sleep 2 }; Get-Content "$t\logs\server.log" -ErrorAction SilentlyContinue; throw "server up=$want not reached" }
-          # The installer set up start at sign-in and started the server (no administrator rights used).
-          if (-not (Test-Path ([IO.Path]::Combine([Environment]::GetFolderPath("Startup"), "Traffic Analysis Workbench.lnk")))) { throw "sign-in start not set up" }
+          # The installer does not require Windows sign-in startup; users start the server explicitly.
+          $start = Start-Process -PassThru -FilePath "$t\start.cmd" -WindowStyle Hidden
           WaitFor $true
           & "$t\autostart.ps1" -Mode status
-          # restart: the server is stopped and comes back by itself
-          & "$t\autostart.ps1" -Mode restart
-          if (Up) { throw "server still answering right after restart" }
-          WaitFor $true
-          & "$t\autostart.ps1" -Mode remove
-          WaitFor $false
           # power-on task (the runner has administrator rights)
           & "$t\autostart.ps1" -Mode boot -System
           WaitFor $true

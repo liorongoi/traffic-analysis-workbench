@@ -20,11 +20,11 @@ Requirements ENV-01, ENV-04 to ENV-07, ARC-02, ARC-04, HW-01; questions Q20, Q22
 
 ## Install and update (workstation)
 
-`install.ps1`:
+The published Windows installer is one `Lanemark-Setup-<version>.exe`. It runs the bundled `install.ps1` as its shared install engine:
 
 1. checks every file against `SHA256SUMS`;
 2. finds Python (given, the `py` launcher, `python` on the path, or the installer in the bundle, installed for the current user without admin rights);
-3. copies the wheels into a local wheelhouse (`<target>\wheelhouse`, add-only), creates a new environment `<target>\app-<version>` and installs from the local wheelhouse with downloads off. Earlier versions' folders stay;
+3. copies the wheels into a local wheelhouse (`<target>\wheelhouse`, add-only), creates a fresh environment `<target>\app-<version>` (a uniquely named repair environment if that version already exists) and installs from the local wheelhouse with downloads off. Earlier versions' folders stay;
 4. adds model packs that are not yet there (existing versions are never replaced);
 5. chooses the ONNX Runtime build (see above), then runs the disconnected install-to-export check (`offline_smoke.py`): synthetic images, a mission, scan, detection with the installed detector, CSV and Excel export, a verified backup, and the web server's page and session answer. On failure the previous version stays in use;
 6. on an update, backs up the data with the previous version, then writes `start.cmd` for the new version and records `current.txt` and `previous.txt`.

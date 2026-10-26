@@ -10,7 +10,7 @@ param(
   [int]$Port = 8765,
   [string]$Ort = "",
   [ValidateSet("signin", "boot", "none")]
-  [string]$AutoStart = "signin",   # signin needs no administrator rights; boot is for an IT administrator
+  [string]$AutoStart = "none",     # Start manually by default; boot is for an IT administrator
   [switch]$SkipCheck
 )
 $ErrorActionPreference = "Stop"
@@ -45,19 +45,51 @@ if (-not $Python) {
     if ($v -eq $Info.python) { $Python = (& python -c "import sys; print(sys.executable)").Trim() }
   } catch { }
 }
+if ($Python) {
+  try {
+    $v = (& $Python -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')").Trim()
+    if ($v -ne $Info.python) { $Python = "" }
+  } catch { $Python = "" }
+}
 if (-not $Python) {
-  $installer = Get-ChildItem $Bundle -Filter "python-*.exe" | Select-Object -First 1
+  $existingPython = Join-Path (Join-Path $Target "python$($Info.python -replace '\.','')") "python.exe"
+  if (Test-Path -LiteralPath $existingPython -PathType Leaf) {
+    try {
+      $v = (& $existingPython -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')").Trim()
+      if ($v -eq $Info.python) { $Python = $existingPython }
+    } catch { }
+  }
+}
+if (-not $Python) {
+  $installer = Get-ChildItem $Bundle -Filter "python-*.exe" | Sort-Object Name | Select-Object -First 1
   if (-not $installer) { throw "Python $($Info.python) is not installed and no python-*.exe is in the bundle." }
   $pyDir = Join-Path $Target "python$($Info.python -replace '\.','')"
-  Start-Process -Wait -FilePath $installer.FullName -ArgumentList "/quiet","InstallAllUsers=0","PrependPath=0","Include_test=0","TargetDir=$pyDir"
+  if (Test-Path -LiteralPath (Join-Path $pyDir "python.exe")) {
+    $pyDir = Join-Path $Target "python$($Info.python -replace '\.','')-repair-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+  }
+  New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
+  # Invoke directly so PowerShell passes TargetDir as one argument even when the chosen folder has spaces.
+  & $installer.FullName "/quiet" "InstallAllUsers=0" "PrependPath=0" "Include_test=0" "TargetDir=$pyDir"
+  $pythonInstallerExit = $LASTEXITCODE
+  if ($pythonInstallerExit -ne 0) { throw "The bundled Python installer failed with exit code $pythonInstallerExit." }
   $Python = Join-Path $pyDir "python.exe"
+  if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    throw "The bundled Python installer completed but did not create $Python. Check the Python installer log and retry."
+  }
 }
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) { throw "Python was not found at '$Python'. Install Python $($Info.python) or repair the bundled runtime." }
 Write-Host "Python: $Python"
 
 # 3. Wheels collect in one local wheelhouse, so a small update bundle (application only) finds the runtime there.
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
 $Venv = Join-Path $Target "app-$($Info.version)"
-if (Test-Path $Venv) { throw "$Venv already exists. Remove it first to reinstall the same version." }
+# Keep the previous build intact for rollback. A same-version repair gets a fresh folder so reinstalling
+# the same setup executable does not collide with the existing environment.
+if (Test-Path $Venv) {
+  $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+  $Venv = Join-Path $Target "app-$($Info.version)-repair-$stamp"
+  if (Test-Path $Venv) { throw "A repair folder already exists at $Venv. Wait a moment and retry." }
+}
 $Wheels = Join-Path $Target "wheelhouse"
 New-Item -ItemType Directory -Force -Path $Wheels | Out-Null
 Get-ChildItem (Join-Path $Bundle "wheelhouse") -Filter *.whl | ForEach-Object {
@@ -154,8 +186,8 @@ pause
 "@ | Set-Content -Encoding ASCII (Join-Path $Target "speed-check.cmd")
 Write-Host "Installed $($Info.version)."
 
-# 7. Automatic start. The task and shortcut keep their old names so existing installs are found.
-# An update restarts a server that already starts by itself, so it runs the new version.
+# 7. Existing automatic start. The task and shortcut keep their old names so existing installs are found.
+# New installs start manually; an existing automatic start is preserved across updates.
 $auto = Join-Path $Target "autostart.ps1"
 $hasLink = Test-Path (Join-Path ([Environment]::GetFolderPath("Startup")) "Traffic Analysis Workbench.lnk")
 $hasTask = [bool](Get-ScheduledTask -TaskName "Traffic Analysis Workbench" -ErrorAction SilentlyContinue)
@@ -167,4 +199,4 @@ if ($hasLink -or $hasTask) {
 } else {
   Write-Host "Start with $Target\start.cmd."
 }
-Write-Host "Open http://127.0.0.1:$Port in a browser. The first account is created there, on this computer."
+Write-Host "Open http://127.0.0.1:$Port in a browser. No account or app sign-in is required."

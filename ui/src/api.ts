@@ -5,11 +5,6 @@ export class ApiError extends Error {
   }
 }
 
-let onSignedOut: (msg: string) => void = () => {};
-export function setSignedOutHandler(fn: (msg: string) => void) {
-  onSignedOut = fn;
-}
-
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
   const method = opts.method ?? (opts.body !== undefined ? "POST" : "GET");
   const res = await fetch(`/api${path}`, {
@@ -26,7 +21,6 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   }
   if (!res.ok) {
     const err = new ApiError(res.status, data?.error ?? "error", data?.message ?? res.statusText, data?.action);
-    if (res.status === 401 && err.code === "not_signed_in") onSignedOut(err.message);
     throw err;
   }
   return data as T;

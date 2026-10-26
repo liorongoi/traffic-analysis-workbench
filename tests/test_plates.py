@@ -155,9 +155,6 @@ def api(tmp_path):
     app = create_app(tmp_path / "data", detector_factory=lambda: (FixedDetector(), {"task": "vehicle_detection"}),
                      plate_factory=lambda: (YellowFinder(), reader), start_monitoring=False, stability_seconds=0)
     c = TestClient(app)
-    c.post("/api/setup", json={"username": "lior", "display_name": "Lior", "password": "longpassword"}, headers=H1)
-    c.post("/api/login", json={"username": "lior", "password": "longpassword"}, headers=H1)
-
     def make(country="IL", mode="plate_recognition"):
         body = {"name": f"P {country}", "mode": mode, "country": country, "iana_zone": "Asia/Jerusalem",
                 "source_dir": str(src), "include_subdirs": False, "processing": "one_time", "output_dir": str(out),

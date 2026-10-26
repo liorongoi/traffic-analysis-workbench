@@ -2,8 +2,7 @@
 
 Browsers never touch database files (ARC-02); every read and write goes through here.
 Each request opens its own database connections, so request threads never share one.
-Mutating requests need the X-TWB header in addition to the SameSite=Strict session
-cookie, which blocks cross-site form posts.
+Mutating requests need the X-TWB header, which blocks cross-site form posts.
 """
 from __future__ import annotations
 
@@ -13,7 +12,7 @@ import secrets
 from contextlib import asynccontextmanager
 import time
 import zoneinfo
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -33,10 +32,8 @@ from ..store import (COUNTRY_ZONES, MODES, TARGET_COUNTRIES, DataRoot, Mission, 
                      connect, utcnow, validate)
 from ..timeparse import MalformedName, parse_capture_time
 from ..views import ViewService, read_image
-from .auth import Auth, AuthError, User
 from .jobs import JobManager
 
-COOKIE = "twb_session"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -45,20 +42,15 @@ class ApiError(HTTPException):
         super().__init__(status, {"error": code, "message": message, "action": action})
 
 
+@dataclass
+class User:
+    id: int
+    username: str
+    display_name: str
+    role: str
+
+
 # ---------- request bodies ----------
-
-class LoginBody(BaseModel):
-    username: str
-    password: str
-    take_over: bool = False
-
-
-class AccountBody(BaseModel):
-    username: str
-    display_name: str = ""
-    password: str
-    role: str = "operator"
-
 
 class MissionBody(BaseModel):
     name: str
@@ -234,13 +226,12 @@ def default_detector_factory(data_root: Path | str | None = None):
     return YoloxDetector(pack), pack.card
 
 
-def create_app(data_root: Path | str, detector_factory: Callable | None = None, allow_setup_from: tuple = ("127.0.0.1", "::1", "testclient"),
+def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True,
                plate_factory: Callable | None = None, model_loader: Callable | None = None,
                backup_dir: Path | str | None = None, backup_at: str = "02:00") -> FastAPI:
     data_root = Path(data_root)
     DataRoot(data_root)  # create folders and control.db
-    Auth(connect(data_root / "control.db"))
     jobs = JobManager(data_root, detector_factory or (lambda: default_detector_factory(data_root)), monitor_interval,
                       stability_seconds, plate_factory, model_loader)
     previews: dict[str, tuple[float, dict]] = {}
@@ -260,11 +251,6 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
 
     app = FastAPI(title="Lanemark", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.jobs = jobs
-
-    @app.exception_handler(AuthError)
-    def _auth_error(_req, exc: AuthError):
-        status = 401 if exc.code in ("not_signed_in", "bad_credentials") else (409 if exc.code == "operator_active" else 400)
-        return JSONResponse({"error": exc.code, "message": exc.message}, status_code=status)
 
     @app.exception_handler(HTTPException)
     def _http_error(_req, exc: HTTPException):
@@ -287,8 +273,12 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
         finally:
             con.close()
 
-    def user(request: Request, con=Depends(control_con)) -> User:
-        return Auth(con).user_for(request.cookies.get(COOKIE))
+    def user() -> User:
+        # Lanemark is a local workstation app. Edits remain attributed to its OS user,
+        # without an additional account, password, session timeout, or sign-in screen.
+        import getpass
+        name = getpass.getuser() or "local"
+        return User(0, name, name, "admin")
 
     def mission(mission_id: str, _u: User = Depends(user)) -> Mission:
         try:
@@ -302,44 +292,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
 
     # ---------- session ----------
     @app.get("/api/session")
-    def session(request: Request, con=Depends(control_con)):
-        a = Auth(con)
-        try:
-            u = a.user_for(request.cookies.get(COOKIE))
-            return {"signed_in": True, "user": asdict(u), "needs_setup": False}
-        except AuthError as exc:
-            return {"signed_in": False, "needs_setup": not a.has_accounts(), "message": exc.message}
-
-    @app.post("/api/setup")
-    def setup(body: AccountBody, request: Request, con=Depends(control_con)):
-        a = Auth(con)
-        if a.has_accounts():
-            raise ApiError(409, "already_set_up", "Accounts already exist. Ask an administrator to add yours.")
-        if request.client and request.client.host not in allow_setup_from:
-            raise ApiError(403, "local_only", "The first account must be created on the workstation itself.")
-        u = a.create_account(body.username, body.display_name, body.password, "admin")
-        return {"user": asdict(u)}
-
-    @app.post("/api/login")
-    def login(body: LoginBody, request: Request, response: Response, con=Depends(control_con)):
-        token, u = Auth(con).login(body.username, body.password, request.client.host if request.client else None,
-                                   body.take_over)
-        response.set_cookie(COOKIE, token, httponly=True, samesite="strict", path="/")
-        return {"user": asdict(u)}
-
-    @app.post("/api/logout")
-    def logout(request: Request, response: Response, con=Depends(control_con)):
-        tok = request.cookies.get(COOKIE)
-        if tok:
-            Auth(con).logout(tok)
-        response.delete_cookie(COOKIE, path="/")
-        return {"ok": True}
-
-    @app.post("/api/accounts")
-    def add_account(body: AccountBody, u: User = Depends(user), con=Depends(control_con)):
-        if u.role != "admin":
-            raise ApiError(403, "admin_only", "Only an administrator can add accounts.")
-        return {"user": asdict(Auth(con).create_account(body.username, body.display_name, body.password, body.role))}
+    def session():
+        return {"user": asdict(user())}
 
     # ---------- reference data ----------
     @app.get("/api/reference")
@@ -1117,8 +1071,6 @@ def main(argv=None) -> int:
     from trafficwb import safe_console
     safe_console()
     import argparse
-    import getpass
-
     import uvicorn
 
     ap = argparse.ArgumentParser(prog="trafficwb-web")
@@ -1129,18 +1081,7 @@ def main(argv=None) -> int:
     s.add_argument("--lan", action="store_true", help="accept connections from other computers on the network")
     s.add_argument("--backup-dir", help="folder for the nightly database backup, ideally on another drive")
     s.add_argument("--backup-at", default="02:00", help="local time of the nightly backup (HH:MM)")
-    a = sub.add_parser("add-account")
-    a.add_argument("--data", required=True)
-    a.add_argument("--username", required=True)
-    a.add_argument("--name", default="")
-    a.add_argument("--role", default="operator", choices=["admin", "operator"])
     args = ap.parse_args(argv)
-    if args.cmd == "add-account":
-        pw = getpass.getpass("Password: ")
-        DataRoot(args.data)
-        u = Auth(connect(Path(args.data) / "control.db")).create_account(args.username, args.name, pw, args.role)
-        print(f"created {u.username} ({u.role})")
-        return 0
     if args.cmd == "serve":
         host = "0.0.0.0" if args.lan else "127.0.0.1"
         uvicorn.run(create_app(args.data, backup_dir=args.backup_dir, backup_at=args.backup_at), host=host, port=args.port, log_level="info")

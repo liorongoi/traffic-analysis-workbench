@@ -109,9 +109,10 @@ function Remove-All {
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     Write-Host "Removed the power-on task."
-    Stop-Runner
-    Stop-Server
   }
+  # Also stop a server that the installer launched directly, without a startup link or task.
+  Stop-Runner
+  Stop-Server
 }
 
 function Stop-Server {

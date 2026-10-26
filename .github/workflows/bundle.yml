@@ -1,10 +1,10 @@
 name: windows-installer
 # Builds the offline Windows package (app, dependencies, model packs, Python installer) and the setup wizard
-# made from it (Lanemark-Setup-<version>.exe), tries the wizard silently, and keeps both as
-# downloadable artifacts: Actions > windows-installer > latest run > Artifacts.
+# made from it (Lanemark-Setup-<version>.exe), tries the wizard silently, and publishes only
+# that single setup executable. The unpacked bundle is an internal build input.
 on:
   push:
-    branches: [main, "claude/**"]
+    branches: [main, "claude/**", "codex/**"]
   workflow_dispatch:
 jobs:
   bundle:
@@ -58,21 +58,20 @@ jobs:
           $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
           $null = $wc.DownloadString("http://127.0.0.1:8765/api/session")
           Write-Host "Server answering after the wizard."
-          $link = Join-Path ([Environment]::GetFolderPath("Startup")) "Traffic Analysis Workbench.lnk"
-          if (-not (Test-Path $link)) { throw "sign-in start not set up" }
+          # A second run of the same installer must repair in place without deleting the old build/data.
+          & "$dir\autostart.ps1" -Mode restart
+          $again = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup-reinstall.log"
+          if (-not $again.WaitForExit(15 * 60 * 1000)) { throw "same-version reinstall did not finish" }
+          if ($again.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\setup-reinstall.log" | Select-Object -Last 40; throw "same-version reinstall exit code $($again.ExitCode)" }
+          $null = $wc.DownloadString("http://127.0.0.1:8765/api/session")
+          Write-Host "Same-version reinstall succeeded."
           # The uninstaller hands over to a copy of itself in TEMP and exits; wait for that copy too.
           $u = Start-Process -PassThru "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
           $null = $u.WaitForExit(5 * 60 * 1000)
           for ($i = 0; $i -lt 60 -and (Test-Path "$dir\current.txt"); $i++) { Start-Sleep -Seconds 2 }
-          if (Test-Path $link) { throw "uninstall left the sign-in start" }
           if (Test-Path "$dir\current.txt") { throw "uninstall left the program" }
           if (-not (Test-Path "$env:USERPROFILE\TrafficData")) { throw "uninstall removed the data folder" }
           Write-Host "Uninstall removed the program and kept the data."
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Lanemark-${{ steps.py.outputs.folder }}
-          path: dist/${{ steps.py.outputs.folder }}
-          retention-days: 90
       - uses: actions/upload-artifact@v4
         with:
           name: Lanemark-Setup-${{ steps.py.outputs.version }}

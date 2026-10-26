@@ -4,8 +4,8 @@ Lanemark: offline install and update
 This folder contains everything the workstation needs. Nothing is downloaded during install or use.
 
 Easiest: the setup wizard (Windows)
-- Run Lanemark-Setup-<version>.exe and follow the screens: install folder, data folder, backup folder,
-  start at sign-in. No administrator rights are needed, Python is included, nothing is downloaded.
+- Run the single Lanemark-Setup-<version>.exe and choose the install, data and backup folders.
+  No administrator rights are needed, Python is included, nothing is downloaded. No account or sign-in is needed.
 - It runs the same install.ps1 as below, so the checks, the backup before an update and the automatic start
   are the same. The installer's own output is in <install folder>\logs\install.log.
 - Uninstall from Windows Settings > Apps. That removes the program and the automatic start; the data and
@@ -19,10 +19,8 @@ Install or update by hand (Windows)
    - The installer checks every file against SHA256SUMS, installs into C:\TrafficWorkbench\app-<version>,
      adds the model packs, runs a disconnected install-to-export check, backs up the data (on an update),
      and only then switches start.cmd to the new version.
-3. The installer sets the server to start when you sign in to Windows, and starts it now. No administrator
-   rights are needed. Open http://127.0.0.1:8765 on the workstation.
-   The first account (administrator of the app) can only be created from the workstation itself.
-   Add -AutoStart none to start it yourself with C:\TrafficWorkbench\start.cmd instead.
+3. The installer starts Lanemark now. To start it later, run C:\TrafficWorkbench\start.cmd.
+   Open http://127.0.0.1:8765 on the workstation. No account or sign-in is needed.
 
 Automatic start (C:\TrafficWorkbench\autostart.ps1)
 - Status:   powershell -ExecutionPolicy Bypass -File C:\TrafficWorkbench\autostart.ps1 -Mode status

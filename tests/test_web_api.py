@@ -66,11 +66,8 @@ def client(tmp_path, delay=0.0):
     return TestClient(app)
 
 
-def signed_in(c):
-    assert c.get("/api/session").json()["needs_setup"] is True
-    assert c.post("/api/setup", json={"username": "lior", "display_name": "Lior", "password": "longpassword"},
-                  headers=H1).status_code == 200
-    assert c.post("/api/login", json={"username": "lior", "password": "longpassword"}, headers=H1).status_code == 200
+def local_operator(c):
+    assert c.get("/api/session").json()["user"]["username"]
     return c
 
 
@@ -92,32 +89,18 @@ def wait_job(c, mid, timeout=30):
     raise AssertionError("job did not finish")
 
 
-def test_requires_sign_in_and_header(env):
+def test_no_sign_in_required_but_mutations_need_application_header(env):
     tmp, src, out = env
     c = client(tmp)
-    assert c.get("/api/missions").status_code == 401
-    assert c.post("/api/login", json={"username": "x", "password": "y"}).status_code == 403   # no X-TWB header
-    signed_in(c)
     assert c.get("/api/missions").status_code == 200
-    assert c.post("/api/setup", json={"username": "b", "password": "longpassword"}, headers=H1).status_code == 409
-
-
-def test_one_operator_at_a_time_with_takeover(env):
-    tmp, src, out = env
-    a = signed_in(client(tmp))
-    b = TestClient(a.app)
-    a.post("/api/accounts", json={"username": "dana", "password": "anotherpass"}, headers=H1)
-    r = b.post("/api/login", json={"username": "dana", "password": "anotherpass"}, headers=H1)
-    assert r.status_code == 409 and r.json()["error"] == "operator_active"
-    assert b.post("/api/login", json={"username": "dana", "password": "anotherpass", "take_over": True},
-                  headers=H1).status_code == 200
-    s = a.get("/api/session").json()
-    assert s["signed_in"] is False and "took over" in s["message"]
+    assert c.post("/api/login", json={"username": "x", "password": "y"}, headers=H1).status_code == 404
+    assert c.get("/api/missions").status_code == 200
+    assert c.post("/api/missions/validate", json={}, headers={}).status_code == 403
 
 
 def test_wizard_preview_create_process_review_export(env):
     tmp, src, out = env
-    c = signed_in(client(tmp))
+    c = local_operator(client(tmp))
     prev = c.post("/api/source-preview", json={"source_dir": str(src), "include_subdirs": False}, headers=H1).json()
     ok = [f for f in prev["files"] if f["ok"]]
     bad = [f for f in prev["files"] if not f["ok"]]
@@ -157,7 +140,7 @@ def test_wizard_preview_create_process_review_export(env):
 
 def test_job_pause_resume_cancel(env):
     tmp, src, out = env
-    c = signed_in(client(tmp, delay=0.3))
+    c = local_operator(client(tmp, delay=0.3))
     mid = mission(c, src, out)
     c.post(f"/api/missions/{mid}/job", headers=H1)
     time.sleep(0.8)
@@ -176,7 +159,7 @@ def test_job_pause_resume_cancel(env):
 
 def test_views_and_regions(env):
     tmp, src, out = env
-    c = signed_in(client(tmp))
+    c = local_operator(client(tmp))
     mid = mission(c, src, out)
     c.post(f"/api/missions/{mid}/job", headers=H1)
     wait_job(c, mid)
@@ -218,7 +201,7 @@ def test_learning_dataset_evaluate_promote_rollback(env, monkeypatch):
     monkeypatch.setenv("TWB_MODELS", str(models))
     app = create_app(tmp / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
                      start_monitoring=False, stability_seconds=0, model_loader=lambda n, v: Named(n, v))
-    c = signed_in(TestClient(app))
+    c = local_operator(TestClient(app))
     mid = mission(c, src, out)
     c.post(f"/api/missions/{mid}/job", headers=H1)
     wait_job(c, mid)
@@ -246,19 +229,11 @@ def test_learning_dataset_evaluate_promote_rollback(env, monkeypatch):
     assert p["production"]["version"] == "2"
     assert c.get(f"/api/missions/{mid}/learning").json()["production"]["name"] == "det"
     assert c.post("/api/models/rollback", json={}, headers=H1).json()["production"] is None
-    # Operators cannot change the production model.
-    c.post("/api/accounts", json={"username": "dana", "password": "anotherpass"}, headers=H1)
-    c.post("/api/login", json={"username": "dana", "password": "anotherpass", "take_over": True}, headers=H1)
-    r = c.post("/api/models/promote", json={"name": "det", "version": "2", "mission_id": mid, "evaluation_id": ev["id"]},
-               headers=H1)
-    assert r.status_code == 403
-
-
 def test_system_backup_and_delete_mission(env):
     tmp, src, out = env
     app = create_app(tmp / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
                      start_monitoring=False, stability_seconds=0, backup_dir=tmp / "bk")
-    c = signed_in(TestClient(app))
+    c = local_operator(TestClient(app))
     mid = mission(c, src, out)
     c.post(f"/api/missions/{mid}/job", headers=H1)
     wait_job(c, mid)
