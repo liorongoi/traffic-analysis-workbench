@@ -24,9 +24,9 @@ Install or update by hand (Windows)
 
 Automatic start (C:\TrafficWorkbench\autostart.ps1)
 - Status:   powershell -ExecutionPolicy Bypass -File C:\TrafficWorkbench\autostart.ps1 -Mode status
-- Sign-in:  -Mode signin   starts at Windows sign-in in a minimised window and restarts the server 10 s after
+- User session: -Mode signin   starts when the Windows user session opens, in a minimised window, and restarts the server 10 s after
             it stops. No administrator rights. The output goes to C:\TrafficWorkbench\logs\server.log
-            (kept to about 10 MB, with one older file).
+            (kept to about 10 MB, with one older file). This is Windows auto-start; Lanemark has no app sign-in.
 - Restart:  -Mode restart  e.g. after changing start.cmd. An update does this by itself.
 - Remove:   -Mode remove   removes the automatic start and stops the server.
 - Power-on: -Mode boot     for an IT administrator only: a scheduled task that starts the server when the

@@ -41,5 +41,5 @@ Model loading took under 0.3 s and scanning 143 files under 0.6 s. These are con
 - Anything on the target workstation, a GPU (CUDA or DirectML), or an air-gapped Windows machine. The Windows CI job blocks downloads but the runner itself is online.
 - The Python installer path in `install.ps1` (CI already has Python).
 - Peak VRAM, 16 GB and 48 GB machine profiles, storage speed.
-- Running as a Windows service or at sign-in (needs your installation permissions, ENV-08). Done later: start at sign-in with no administrator rights is now the installer default; start at power-on is an option for an administrator (`autostart.ps1`).
+- At the time of this report, Windows automatic startup was not tested. The current installer starts manually by default; `autostart.ps1` supports Windows user-session startup and an administrator-configured power-on task. Lanemark application sign-in was removed later.
 - HTTPS for LAN use (Q21).

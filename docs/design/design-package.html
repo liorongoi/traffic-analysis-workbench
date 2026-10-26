@@ -196,8 +196,8 @@ html{scroll-behavior:smooth}
     <tbody>
     <tr><td class="grp" colspan="4">Deployment and environment</td></tr>
     <tr><td class="id">ENV-01</td><td>Runs on a single Windows workstation hosting backend, workers, databases and local web UI. No separate server.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
-    <tr><td class="id">ENV-02</td><td>Accessible from a browser on the workstation and from authorized computers on the same LAN.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
-    <tr><td class="id">ENV-03</td><td>One active operator at a time.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ENV-02</td><td>Accessible on the workstation in a browser; LAN access is optional and unauthenticated when explicitly enabled.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ENV-03</td><td>Single local workstation operation; no application account or sign-in screen.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
     <tr><td class="id">ENV-04</td><td>Every function works with no internet: detection, tracking, OCR, language interpretation, time zones, fonts, maps, UI assets, export, training.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
     <tr><td class="id">ENV-05</td><td>No hosted APIs, cloud storage, online auth, CDNs or runtime model downloads.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
     <tr><td class="id">ENV-06</td><td>Dependencies, models and datasets prepared on a connected staging machine and transferred.</td><td>2</td><td><span class="tag t-c">Confirmed</span></td></tr>
@@ -274,14 +274,14 @@ html{scroll-behavior:smooth}
     <tr><td class="grp" colspan="4">Architecture, UX, validation</td></tr>
     <tr><td class="id">ARC-01</td><td>Separated responsibilities for ingestion, scheduling, detection, OCR, tracking, review, persistence, training, export. Persistent background tasks.</td><td>18</td><td><span class="tag t-c">Confirmed</span></td></tr>
     <tr><td class="id">ARC-02</td><td>Browsers never open DB files; all access via backend. Safe writes, backups, recovery.</td><td>17</td><td><span class="tag t-c">Confirmed</span></td></tr>
-    <tr><td class="id">ARC-03</td><td>LAN authentication and session handling.</td><td>18</td><td><span class="tag t-c">Confirmed</span></td></tr>
+    <tr><td class="id">ARC-03</td><td>No application authentication or session UI. Local operator identity comes from the operating-system account; localhost is the default, and optional LAN mode is for trusted networks.</td><td>18</td><td><span class="tag t-c">Confirmed</span></td></tr>
     <tr><td class="id">ARC-04</td><td>Offline packaging with small app updates separate from runtime and model packs; updates preserve all mission data and model history.</td><td>18</td><td><span class="tag t-c">Confirmed</span></td></tr>
     <tr><td class="id">UX-01</td><td>Guided wizard, editable config summaries, prominent monitoring controls, responsive review, shortcuts, pagination, clear states, contextual help, visible distinction of machine / candidate / human / training.</td><td>18</td><td><span class="tag t-c">Confirmed</span></td></tr>
     <tr><td class="id">VAL-01</td><td>Requirements-to-tests traceability matrix; unit, integration, browser, recovery and performance tests run continuously.</td><td>20</td><td><span class="tag t-c">Confirmed</span></td></tr>
     <tr><td class="id">VAL-02</td><td>Measured metrics broken down by condition, view, object type, country and hardware profile. Thresholds agreed with product owner, never invented.</td><td>20</td><td><span class="tag t-c">Confirmed</span></td></tr>
     <tr><td class="id">VAL-03</td><td>Per-delivery report: implemented, actually tested, commands and evidence, model versions, limitations, untested scenarios.</td><td>20</td><td><span class="tag t-c">Confirmed</span></td></tr>
     <tr><td class="grp" colspan="4">Derived requirements (please confirm)</td></tr>
-    <tr><td class="id">DER-01</td><td>Operator identity must be individual (named local accounts) because corrections record operator identity, even with one active user at a time.</td><td>15, 18</td><td><span class="tag t-d">Derived</span></td></tr>
+    <tr><td class="id">DER-01</td><td>Corrections record the local operating-system username; Lanemark does not maintain named application accounts.</td><td>15, 18</td><td><span class="tag t-d">Derived</span></td></tr>
     <tr><td class="id">DER-02</td><td>Schedules evaluated on a minute-precision capture time: a capture at 05:00 is treated as the whole minute 05:00:00–05:00:59. Boundary rule must be stated for this case.</td><td>6, 9A</td><td><span class="tag t-d">Derived</span></td></tr>
     <tr><td class="id">DER-03</td><td>Nighttime processing runs inside the general-traffic (and video) mode as a cooperating algorithm, activated by measured image condition, rather than being a separate mission mode.</td><td>4, 10</td><td><span class="tag t-d">Derived</span></td></tr>
     <tr><td class="id">DER-04</td><td>Output directory, data directory and evidence store must not lie inside a monitored source tree; the wizard blocks or excludes such paths.</td><td>7</td><td><span class="tag t-d">Derived</span></td></tr>
@@ -346,7 +346,7 @@ html{scroll-behavior:smooth}
     <tr><td class="id">Q16</td><td>Do you want any automatic approval policy for continuous missions?</td><td>P3</td><td>None. All new results pending review.</td></tr>
     <tr><td class="id">Q17</td><td>Notifications: in-app only, Windows notifications on the workstation, or an internal mail server?</td><td>P1</td><td>In-app notification center plus optional Windows toast.</td></tr>
     <tr><td class="id">Q20</td><td>Installed NVIDIA driver version on the A4000 workstation, and may it be updated?</td><td>P0</td><td>Detect at runtime; choose the newest packaged CUDA runtime the driver supports, else DirectML or CPU.</td></tr>
-    <tr><td class="id">Q21</td><td>LAN security: is HTTPS required? Internal CA certificates available? How many named operator accounts? Session timeout policy?</td><td>P1</td><td>Named local accounts, HTTPS with a locally generated certificate, idle timeout configurable.</td></tr>
+    <tr><td class="id">Q21</td><td>LAN security: is HTTPS required? Internal CA certificates available? How many named operator accounts? Session timeout policy?</td><td>P1</td><td>No application sign-in, named accounts, or session timeout. Localhost is the default; LAN mode is optional and unauthenticated on a trusted network.</td></tr>
     <tr><td class="id">Q22</td><td>Storage layout: separate data drive? Backup destination? Antivirus scanning on source folders?</td><td>P1</td><td>Data root chosen at install; nightly DB backup to a configurable folder.</td></tr>
     <tr><td class="id">Q23</td><td>Are source directories ever network shares (UNC paths)?</td><td>P1</td><td>Supported; reconciliation scan relied on more heavily because change notifications over SMB are unreliable.</td></tr>
     <tr><td class="id">Q24</td><td>May reviewed data from one mission be used to train models used by other missions? Who approves that?</td><td>P8</td><td>No pooling unless a mission is explicitly opted in by an operator.</td></tr>
@@ -371,7 +371,7 @@ flowchart LR
     B1[Browser on workstation]
     B2[Browser on LAN computer]
   end
-  subgraph Backend["Backend process (HTTP + WebSocket, auth, API)"]
+  subgraph Backend["Backend process (HTTP + WebSocket, API)"]
     API[REST / WebSocket API]
     SCH[Scheduler and job queue]
     WR[Mission DB writer]
@@ -446,7 +446,7 @@ flowchart LR
 <tr><td class="mono">&lt;app&gt;\versions\1.4.0\</td><td>Application code and UI; side-by-side versions for rollback</td></tr>
 <tr><td class="mono">&lt;app&gt;\runtime\py311-2026.10\</td><td>Runtime pack: Python, wheels, FFmpeg, ONNX Runtime variants</td></tr>
 <tr><td class="mono">&lt;app&gt;\models\&lt;model&gt;\&lt;version&gt;\</td><td>Model pack content: weights, model card, license, SHA-256</td></tr>
-<tr><td class="mono">&lt;data&gt;\control.db</td><td>Accounts, sessions, mission registry, jobs, hardware profile, global model registry</td></tr>
+<tr><td class="mono">&lt;data&gt;\control.db</td><td>Mission registry, jobs, hardware profile, global model registry</td></tr>
 <tr><td class="mono">&lt;data&gt;\missions\&lt;mission-id&gt;\mission.db</td><td>Authoritative mission record</td></tr>
 <tr><td class="mono">&lt;data&gt;\missions\&lt;mission-id&gt;\evidence\ thumbs\ crops\ clips\ bg\</td><td>Derived and preserved media, content-addressed by hash</td></tr>
 <tr><td class="mono">&lt;data&gt;\backups\</td><td>Rotating database backups</td></tr>
@@ -964,7 +964,7 @@ flowchart LR
     <li>Unpack to a user-writable folder (default under the user profile, or a chosen data drive). No registry writes outside the user hive.</li>
     <li>Start at logon via a per-user Task Scheduler task or Startup-folder shortcut; both work without admin. A Windows service (starts before logon) only if an administrator approves (Q18).</li>
     <li>Localhost access works immediately. LAN access needs the backend to listen on the LAN interface and, in most configurations, an inbound firewall rule created once by an administrator.</li>
-    <li>HTTPS with a certificate generated at install, or one issued by your internal CA (Q21). Named local accounts with salted password hashes, session cookies, idle timeout, login throttling.</li>
+    <li>No application login or password is used. The server binds to localhost by default. Optional LAN access has no authentication and is intended only for a trusted, closed network.</li>
   </ul>
 
   <h3>Updates and rollback</h3>
@@ -993,8 +993,8 @@ flowchart LR
   <div class="phase"><div class="pn">P1<small>Missions</small></div><div>
     <h4>Missions, time, ingestion, monitoring</h4>
     <div class="cols">
-      <div><b>Delivers</b><br>Wizard; mission DB on commit; filename parser with preview; offline tz map; schedules; ingestion with stability checks, notifications + reconciliation, checkpoints; continuous monitoring across restarts; accounts and LAN auth; notifications.</div>
-      <div><b>Acceptance tests</b><br>UTC parsing incl. malformed and impossible dates; minute precision kept; DST conversion across transitions for all four countries; overnight and multi-window schedules incl. DST edges; partial-copy detection; duplicate-notification storm; restart mid-ingest; identical bytes at different times kept distinct; outputs never re-ingested; remote-browser login.</div>
+      <div><b>Delivers</b><br>Wizard; mission DB on commit; filename parser with preview; offline tz map; schedules; ingestion with stability checks, notifications + reconciliation, checkpoints; continuous monitoring across restarts; local OS-user attribution; notifications.</div>
+      <div><b>Acceptance tests</b><br>UTC parsing incl. malformed and impossible dates; minute precision kept; DST conversion across transitions for all four countries; overnight and multi-window schedules incl. DST edges; partial-copy detection; duplicate-notification storm; restart mid-ingest; identical bytes at different times kept distinct; outputs never re-ingested; browser access without application sign-in.</div>
     </div></div></div>
 
   <div class="phase"><div class="pn">P2<small>Views</small></div><div>

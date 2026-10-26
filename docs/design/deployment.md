@@ -29,7 +29,7 @@ The published Windows installer is one `Lanemark-Setup-<version>.exe`. It runs t
 5. chooses the ONNX Runtime build (see above), then runs the disconnected install-to-export check (`offline_smoke.py`): synthetic images, a mission, scan, detection with the installed detector, CSV and Excel export, a verified backup, and the web server's page and session answer. On failure the previous version stays in use;
 6. on an update, backs up the data with the previous version, then writes `start.cmd` for the new version and records `current.txt` and `previous.txt`.
 
-No admin rights, Docker, WSL or Windows service are needed. Running as a service or at sign-in is not built yet (ENV-08: needs your installation permissions).
+No admin rights, Docker, WSL or Windows service are needed. Lanemark itself has no sign-in page or account requirement. Manual startup is the default; `autostart.ps1 -Mode signin` configures Windows to start the server when the Windows user session opens, while `-Mode boot` configures an administrator-created power-on task (ENV-08).
 
 Because wheels collect in the local wheelhouse, an `--app-only` update (a few hundred kB) installs as long as its dependencies were shipped before. If an update needs a new dependency, use a full bundle.
 

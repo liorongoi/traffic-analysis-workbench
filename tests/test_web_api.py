@@ -93,7 +93,7 @@ def test_no_sign_in_required_but_mutations_need_application_header(env):
     tmp, src, out = env
     c = client(tmp)
     assert c.get("/api/missions").status_code == 200
-    assert c.post("/api/login", json={"username": "x", "password": "y"}, headers=H1).status_code == 404
+    assert c.post("/api/login", json={"username": "x", "password": "y"}, headers=H1).status_code in (404, 405)
     assert c.get("/api/missions").status_code == 200
     assert c.post("/api/missions/validate", json={}, headers={}).status_code == 403
 
@@ -189,7 +189,7 @@ def test_views_and_regions(env):
                    json={"version_ids": selected, "target_view": vid}, headers=H1)
     assert moved.status_code == 200
     assert len(c.get(f"/api/missions/{mid}/views/{vid}/members").json()["ids"]) == 6
-    history = c.post(f"/api/missions/{mid}/items/{selected[0]}", json={}).json()["view_assignment_history"]
+    history = c.post(f"/api/missions/{mid}/items/{selected[0]}", json={}, headers=H1).json()["view_assignment_history"]
     assert [r["method"] for r in history] == ["auto", "manual", "manual"]
     assert history[-1]["author"]
     unassigned = c.post(f"/api/missions/{mid}/views/{vid}/actions/reassign",
