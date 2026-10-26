@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -351,6 +352,26 @@ def test_monitor_runs_in_background_and_resumes_after_restart(env):
             mon.stop()
     assert len(mons) == 1
     assert m.status()["runs"] == 1
+
+
+def test_filesystem_notification_wakes_monitor_before_poll_interval(env):
+    src, out, root = env
+    m = root.create_mission(cfg(src, out), "lior")
+    m.update_config("lior", "enable", monitoring_enabled=True)
+    completed_cycle = threading.Event()
+    mon = Monitor(m, interval_seconds=30, stability_seconds=0,
+                  on_cycle=lambda _result, _run_id: completed_cycle.set())
+    mon.start()
+    try:
+        assert mon._observer is not None, "watchdog observer must be available in the installed app"
+        assert completed_cycle.wait(5), "initial reconciliation did not complete"
+        completed_cycle.clear()
+        put(src / "17052026-1604-notified.jpg", jpeg_bytes(64, 48))
+        assert completed_cycle.wait(5), "filesystem event did not wake the long-polling monitor"
+        assert m.status()["runs"] == 1
+        assert m.con.execute("SELECT COUNT(*) FROM source_version").fetchone()[0] == 1
+    finally:
+        mon.stop()
 
 
 def test_monitor_not_started_when_disabled(env):

@@ -20,7 +20,7 @@ Requirement IDs come from the design package (`docs/design/design-package.html`,
 | MIS-03 run records config snapshot | `store.Mission.create_run` | `tests/test_store_ingest.py` | Config snapshot tested. Model versions not applicable yet. |
 | MIS-04 one input type and mode, immutable | `store.Mission.update_config` | `tests/test_store_ingest.py` | Tested (unit) |
 | MIS-06 validation of source, output, storage, consistency | `store.validate`, `ui/src/pages/Wizard.tsx` | `tests/test_store_ingest.py`, `tests/test_web_api.py` | Tested (unit + API). Wizard with file-name preview checked in a browser. |
-| MIS-07 continuous monitoring independent of browser, resumes after restart | `ingest.Monitor`, `ingest.resume_enabled` | `tests/test_store_ingest.py` | Tested with polling. Filesystem notifications not tested. |
+| MIS-07 continuous monitoring independent of browser, resumes after restart | `ingest.Monitor`, packaged `watchdog`, `ingest.resume_enabled` | `tests/test_store_ingest.py::test_monitor_runs_in_background_and_resumes_after_restart`, `test_filesystem_notification_wakes_monitor_before_poll_interval` | Polling and restart recovery previously passed; the new cross-platform filesystem wakeup test is awaiting CI before this requirement can be marked tested. |
 | ING-01 recursive discovery, stability, reconciliation, checkpoints, restart recovery | `src/trafficwb/ingest.py` | `tests/test_store_ingest.py`, sample run | Tested (unit + sample) |
 | ING-02 corrupt, partial, replaced, renamed, unsupported, unavailable | `ingest.Ingestor` | `tests/test_store_ingest.py` | Tested (unit) |
 | ING-04 identity, checksum, versions, originals untouched, replacements keep history | `ingest.Ingestor._ingest` | `tests/test_store_ingest.py` | Tested (unit) |

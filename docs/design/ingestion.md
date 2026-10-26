@@ -12,7 +12,7 @@ Implements MIS-02, MIS-03, MIS-05 (backend part), MIS-06, MIS-07 (backend part),
 
 ## Scans
 
-A reconciliation scan is the authority. Filesystem notifications (via `watchdog`, when installed) only trigger the next scan sooner, so a lost notification delays a file but never loses it, and a burst of notifications collapses into one scan.
+A reconciliation scan is the authority. Packaged `watchdog` filesystem notifications only trigger the next scan sooner, so a lost notification delays a file but never loses it, and a burst of notifications collapses into one scan. Periodic reconciliation remains enabled as the fallback.
 
 A file is ingested when it is stable:
 

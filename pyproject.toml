@@ -17,6 +17,7 @@ dependencies = [
     "starlette>=0.39",   # byte-range responses for video playback
     "av>=12",            # FFmpeg libraries for video decoding and clips
     "uvicorn>=0.29",
+    "watchdog>=4.0",       # filesystem notifications, with periodic reconciliation as the fallback
 ]
 
 [project.optional-dependencies]
