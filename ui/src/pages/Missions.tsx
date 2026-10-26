@@ -8,8 +8,15 @@ export default function Missions() {
   const [list, setList] = useState<M[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [sys, setSys] = useState<any>(null);
+  const [sysError, setSysError] = useState("");
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
-  const loadSys = () => api("/system").then(setSys).catch(() => {});
+  const loadSys = () => {
+    setSysError("");
+    return api("/system").then((result) => { setSys(result); return result; }).catch((e) => {
+      setSysError(e instanceof Error ? e.message : "Could not load system status.");
+      return null;
+    });
+  };
   const loadMissions = () => {
     setList(null);
     setLoadError("");
@@ -50,6 +57,7 @@ export default function Missions() {
           </table>
         </div>
       )}
+      {sysError && <div className="card msg err" role="alert"><b>Could not load system status.</b><p>{sysError}</p><button onClick={loadSys}>Try again</button></div>}
       {sys && <System sys={sys} msg={msg} backupNow={async () => {
         setMsg(null);
         try { const r = await post("/admin/backup"); setMsg({ kind: "ok", text: `Backed up to ${r.folder}` }); }
@@ -73,7 +81,7 @@ function System({ sys, msg, backupNow }: { sys: any; msg: any; backupNow: () => 
         {b.last ? <>Last: {b.last.at} ({b.last.detail.folder ?? b.last.detail.error}).</> : "No backup yet."}
         {b.last_error && <span className="msg err">Last scheduled backup failed: {b.last_error}</span>}
       </p>
-      <div className="row"><button disabled={!b.folder} onClick={backupNow}>Back up now</button>{msg && <span className={`msg ${msg.kind}`}>{msg.text}</span>}</div>
+      <div className="row"><button disabled={!b.folder} title={!b.folder ? "Set --backup-dir when starting the server to enable backups." : undefined} onClick={backupNow}>Back up now</button>{msg && <span className={`msg ${msg.kind}`} role={msg.kind === "err" ? "alert" : "status"} aria-live="polite">{msg.text}</span>}</div>
       {sys.audit && sys.audit.length > 0 && <details style={{ marginTop: 8 }}><summary>Audit log</summary>
         <ul className="muted">{sys.audit.map((e: any) => <li key={e.id}><span className="mono">{e.at}</span> {e.author}: {e.action.replace(/_/g, " ")}{e.detail.name ? ` “${e.detail.name}”` : ""}{e.detail.folder ? ` ${e.detail.folder}` : ""}</li>)}</ul></details>}
     </div>

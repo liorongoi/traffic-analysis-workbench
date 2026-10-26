@@ -200,3 +200,13 @@ table.t th, table.t td { padding: 9px 10px; }
 }
 .ntile .nact { margin-top: 4px; justify-content: center; }
 .ntile .nact button { padding: 2px 10px; }
+@media (max-width: 640px) {
+  .plate { grid-template-columns: minmax(0, 1fr); }
+  .plate img.veh { width: min(100%, 220px); height: 120px; }
+  .plate img.pl { max-width: min(100%, 280px); height: auto; max-height: 76px; }
+  .inv .side { max-height: none; }
+  .dialog { max-height: 88vh; overflow: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

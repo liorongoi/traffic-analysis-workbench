@@ -15,6 +15,7 @@ const MODE_HELP: Record<string, string> = {
 
 export default function Wizard() {
   const [ref, setRef] = useState<Ref | null>(null);
+  const [refError, setRefError] = useState("");
   const [step, setStep] = useState(0);
   const [cfg, setCfg] = useState({
     name: "", input_type: "images", mode: "general_traffic", country: "IL", iana_zone: "Asia/Jerusalem",
@@ -29,12 +30,22 @@ export default function Wizard() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { api("/reference").then(setRef); }, []);
+  useEffect(() => {
+    let live = true;
+    api("/reference").then((result) => { if (live) { setRef(result); setRefError(""); } }).catch((e) => {
+      if (live) setRefError(e instanceof Error ? e.message : "Could not load setup options.");
+    });
+    return () => { live = false; };
+  }, []);
   const set = (k: string, v: unknown) => setCfg((c) => ({ ...c, [k]: v }));
   const zones = useMemo(() => (ref?.zones ?? []).filter((z) => z.toLowerCase().includes(zoneFilter.toLowerCase())).slice(0, 200), [ref, zoneFilter]);
 
   useEffect(() => {
-    if (step === 4) post("/missions/validate", cfg).then(setCheck).catch((e: ApiError) => setErr(e.message));
+    if (step === 4) {
+      setCheck(null);
+      setErr(null);
+      post("/missions/validate", cfg).then(setCheck).catch((e: ApiError) => setErr(e.message));
+    }
   }, [step]);
 
   useEffect(() => {
@@ -70,7 +81,10 @@ export default function Wizard() {
     }
   };
 
-  if (!ref) return <div className="page muted">Loading…</div>;
+  if (!ref) return <div className="page">
+    {refError ? <div className="card msg err" role="alert"><b>Setup options could not be loaded.</b><p>{refError}</p><button onClick={() => { setRefError(""); api("/reference").then(setRef).catch((e) => setRefError(e instanceof Error ? e.message : "Could not load setup options.")); }}>Try again</button></div>
+      : <p className="muted" role="status" aria-live="polite">Loading setup options…</p>}
+  </div>;
   const canNext = [cfg.name.trim() !== "", !!cfg.iana_zone, cfg.source_dir.trim() !== "", cfg.output_dir.trim() !== "" && cfg.export_formats.length > 0, true][step];
 
   return (
@@ -178,16 +192,17 @@ export default function Wizard() {
                 Source: `${cfg.source_dir}${cfg.include_subdirs ? " (with subfolders)" : ""}`, Processing: cfg.processing.replace("_", "-"), Output: cfg.output_dir, Formats: cfg.export_formats.join(", ") })
                 .map(([k, v]) => <tr key={k}><th style={{ width: 140 }}>{k}</th><td className="bidi">{v}</td></tr>)}
             </tbody></table>
-            {check?.errors.map((e) => <div key={e} className="msg err">{e}</div>)}
+            {!check && !err && <p className="muted" role="status" aria-live="polite">Checking folders and settings…</p>}
+            {check?.errors.map((e) => <div key={e} className="msg err" role="alert">{e}</div>)}
             {check?.warnings.map((w) => <div key={w} className="msg warn">{w}</div>)}
             {check && check.errors.length === 0 && <div className="msg ok">Checks passed. The mission database is created when you press Create.</div>}
           </>
         )}
-        {err && <div className="msg err">{err}</div>}
+        {err && <div className="msg err" role="alert">{err}</div>}
         <div className="row" style={{ marginTop: 14, justifyContent: "space-between" }}>
           <button onClick={() => (step === 0 ? go("/") : setStep(step - 1))}>{step === 0 ? "Cancel" : "Back"}</button>
           {step < 4 ? <button className="primary" disabled={!canNext} onClick={() => setStep(step + 1)}>Next</button>
-            : <button className="primary" disabled={busy || !check || check.errors.length > 0} onClick={create}>Create mission</button>}
+            : <button className="primary" disabled={busy || !check || check.errors.length > 0} onClick={create}>{busy ? "Creating…" : "Create mission"}</button>}
         </div>
       </div>
     </div>
