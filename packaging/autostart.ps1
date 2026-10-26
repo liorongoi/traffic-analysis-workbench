@@ -5,18 +5,20 @@
 #   powershell -ExecutionPolicy Bypass -File autostart.ps1 -Mode boot            # administrator: starts at power-on
 #   powershell -ExecutionPolicy Bypass -File autostart.ps1 -Mode restart         # e.g. after an update
 #   powershell -ExecutionPolicy Bypass -File autostart.ps1 -Mode remove
+#   powershell -ExecutionPolicy Bypass -File autostart.ps1 -Mode open            # start if needed, open the browser
 #
 # signin:  the normal choice. Starts when you sign in to Windows, minimised, and restarts the server 10 s after
 #          it stops. Needs no administrator rights. It also starts the server now.
 # restart: stops the running server; it starts again by itself 10 s later, with the version start.cmd names.
 # remove:  removes the automatic start and stops the server.
+# open:    what the Lanemark shortcut runs: starts the server when it is not running, then opens the browser.
 # boot:    for an IT administrator: a scheduled task that starts at power-on, before anyone signs in.
 #          Creating it needs administrator rights. It runs as a Windows account you name (asked for its password),
 #         so source folders on network shares stay reachable. -System runs it as the local SYSTEM account instead,
 #         which cannot read network shares.
 # Both write the server's output to <Target>\logs\server.log. Nothing is downloaded.
 param(
-  [ValidateSet("status", "signin", "boot", "restart", "remove")]
+  [ValidateSet("status", "signin", "boot", "restart", "remove", "open")]
   [string]$Mode = "status",
   [string]$Target = $PSScriptRoot,
   [string]$User = "",
@@ -100,8 +102,6 @@ function Remove-All {
   if (Test-Path $Link) {
     Remove-Item $Link -Force
     Write-Host "Removed the sign-in start."
-    Stop-Runner
-    Stop-Server
   }
   $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   if ($task) {
@@ -109,9 +109,10 @@ function Remove-All {
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     Write-Host "Removed the power-on task."
-    Stop-Runner
-    Stop-Server
   }
+  # Also a server started by hand, so the program's files are free to be removed or replaced.
+  Stop-Runner
+  Stop-Server
 }
 
 function Stop-Server {
@@ -128,9 +129,30 @@ function Stop-Server {
       Write-Host "Stopped the server (process $($proc.Id))."
     }
   }
+  # Programs running from the install folder (the server's launcher, the bundled Python): stop them too and
+  # wait, so their files are not locked when an update or uninstall replaces them.
+  $root = (Resolve-Path $Target -ErrorAction SilentlyContinue).Path
+  if ($root) {
+    $mine = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($root + "\", [StringComparison]::OrdinalIgnoreCase) -and $_.Id -ne $PID })
+    foreach ($proc in $mine) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+    foreach ($proc in $mine) { try { $null = $proc.WaitForExit(10000) } catch { } }
+  }
 }
 
 if ($Mode -eq "status") { Show-Status; exit 0 }
+if ($Mode -eq "open") {
+  $p = Get-Port
+  $url = "http://127.0.0.1:$p"
+  if (-not (Test-Server $p)) {
+    # Not running: start it the way it is set up to start, otherwise with start.cmd, and wait for it.
+    if (Test-Path $Link) { Start-Process -FilePath $Link -WindowStyle Minimized }
+    elseif (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Start-ScheduledTask -TaskName $TaskName }
+    elseif (Test-Path $Start) { Start-Process -FilePath $Start -WorkingDirectory $Target -WindowStyle Minimized }
+    for ($i = 0; $i -lt 90 -and -not (Test-Server $p); $i++) { Start-Sleep -Seconds 1 }
+  }
+  Start-Process $url
+  exit 0
+}
 if ($Mode -eq "remove") { Remove-All; exit 0 }
 if ($Mode -eq "restart") {
   Stop-Server

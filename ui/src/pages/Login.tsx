@@ -51,6 +51,12 @@ export default function Login({ needsSetup, notice, onDone }: { needsSetup: bool
             )}
           </div>
         </form>
+        {!needsSetup && (
+          <p className="muted" style={{ marginTop: 12 }}>
+            Forgot your user name or password? On this computer, open the Start menu and choose
+            <b> Lanemark - reset password</b>. It shows the user names and lets you set a new password.
+          </p>
+        )}
       </div>
     </div>
   );

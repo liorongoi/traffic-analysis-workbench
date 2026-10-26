@@ -135,3 +135,32 @@ def test_speed_check_reports_each_backend(tmp_path, capsys):
     (b,) = r["backends"]
     assert b["backend"] == "cpu" and b["runs_on"] == "cpu" and b["s_per_image_median"] > 0
     assert r["fastest"] == "cpu" and "images per hour" in out.read_text()
+
+
+def test_reset_password_on_the_workstation(tmp_path, monkeypatch, capsys):
+    from trafficwb import admin
+    from trafficwb.store import connect
+    from trafficwb.web.auth import Auth, AuthError
+    DataRoot(tmp_path)
+    con = connect(tmp_path / "control.db")
+    a = Auth(con)
+    a.create_account("lior", "Lior", "old-password", "admin")
+    token, _ = a.login("lior", "old-password")
+    con.close()
+    assert admin.main(["accounts", "--data", str(tmp_path)]) == 0
+    assert "lior" in capsys.readouterr().out
+    pw = iter(["short", "short", "new-password", "new-password"])
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": next(pw))
+    monkeypatch.setattr("builtins.input", lambda prompt="": "LIOR")   # user names ignore case
+    assert admin.main(["reset-password", "--data", str(tmp_path)]) == 0
+    assert "Password changed for lior" in capsys.readouterr().out
+    con = connect(tmp_path / "control.db")
+    a = Auth(con)
+    with pytest.raises(AuthError):
+        a.user_for(token)                       # old session ended
+    with pytest.raises(AuthError):
+        a.login("lior", "old-password")
+    assert a.login("lior", "new-password")[1].username == "lior"
+    assert any(e["action"] == "password_reset" for e in audit_log(DataRoot(tmp_path)))
+    con.close()
+    assert admin.main(["reset-password", "--data", str(tmp_path), "--user", "nobody"]) == 2
