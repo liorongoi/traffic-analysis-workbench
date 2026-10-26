@@ -273,3 +273,15 @@ def test_system_backup_and_delete_mission(env):
     assert c.get(f"/api/missions/{mid}").status_code == 404
     assert c.get("/api/system").json()["audit"][0]["action"] == "mission_deleted"
     assert len(list(src.glob("*.jpg"))) == 7
+
+
+def test_no_sign_in_on_the_workstation(tmp_path):
+    app = create_app(tmp_path / "data", start_monitoring=False, sign_in=False)
+    with TestClient(app) as c:                       # TestClient connects as "testclient": counted as local
+        s = c.get("/api/session").json()
+        assert s["signed_in"] and s["sign_in"] is False and s["user"]["role"] == "admin"
+        assert c.get("/api/missions").status_code == 200
+    remote = create_app(tmp_path / "data", start_monitoring=False, sign_in=False, allow_setup_from=("127.0.0.1",))
+    with TestClient(remote) as c:                    # another computer still has to sign in
+        assert not c.get("/api/session").json()["signed_in"]
+        assert c.get("/api/missions").status_code == 401

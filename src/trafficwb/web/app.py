@@ -237,7 +237,9 @@ def default_detector_factory(data_root: Path | str | None = None):
 def create_app(data_root: Path | str, detector_factory: Callable | None = None, allow_setup_from: tuple = ("127.0.0.1", "::1", "testclient"),
                monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True,
                plate_factory: Callable | None = None, model_loader: Callable | None = None,
-               backup_dir: Path | str | None = None, backup_at: str = "02:00") -> FastAPI:
+               backup_dir: Path | str | None = None, backup_at: str = "02:00", sign_in: bool = True) -> FastAPI:
+    """sign_in=False: no user name or password on this computer; whoever uses the workstation works as its
+    Windows user. Connections from other computers (--lan) still sign in with an account."""
     data_root = Path(data_root)
     DataRoot(data_root)  # create folders and control.db
     Auth(connect(data_root / "control.db"))
@@ -287,7 +289,16 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
         finally:
             con.close()
 
+    import getpass
+    local_name = getpass.getuser() or "local"
+    local_user = User(0, local_name, local_name, "admin")
+
+    def is_local(request: Request) -> bool:
+        return bool(request.client) and request.client.host in allow_setup_from
+
     def user(request: Request, con=Depends(control_con)) -> User:
+        if not sign_in and is_local(request):
+            return local_user
         return Auth(con).user_for(request.cookies.get(COOKIE))
 
     def mission(mission_id: str, _u: User = Depends(user)) -> Mission:
@@ -304,6 +315,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
     @app.get("/api/session")
     def session(request: Request, con=Depends(control_con)):
         a = Auth(con)
+        if not sign_in and is_local(request):
+            return {"signed_in": True, "user": asdict(local_user), "needs_setup": False, "sign_in": False}
         try:
             u = a.user_for(request.cookies.get(COOKIE))
             return {"signed_in": True, "user": asdict(u), "needs_setup": False}
@@ -1129,6 +1142,8 @@ def main(argv=None) -> int:
     s.add_argument("--lan", action="store_true", help="accept connections from other computers on the network")
     s.add_argument("--backup-dir", help="folder for the nightly database backup, ideally on another drive")
     s.add_argument("--backup-at", default="02:00", help="local time of the nightly backup (HH:MM)")
+    s.add_argument("--no-sign-in", action="store_true",
+                   help="no user name or password on this computer (other computers still sign in)")
     a = sub.add_parser("add-account")
     a.add_argument("--data", required=True)
     a.add_argument("--username", required=True)
@@ -1143,7 +1158,8 @@ def main(argv=None) -> int:
         return 0
     if args.cmd == "serve":
         host = "0.0.0.0" if args.lan else "127.0.0.1"
-        uvicorn.run(create_app(args.data, backup_dir=args.backup_dir, backup_at=args.backup_at), host=host, port=args.port, log_level="info")
+        uvicorn.run(create_app(args.data, backup_dir=args.backup_dir, backup_at=args.backup_at,
+                               sign_in=not args.no_sign_in), host=host, port=args.port, log_level="info")
         return 0
     ap.print_help()
     return 1

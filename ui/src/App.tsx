@@ -14,12 +14,14 @@ export default function App() {
   const [checked, setChecked] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [signIn, setSignIn] = useState(true);
   const route = useRoute();
 
   const refresh = async () => {
     const s = await api("/session");
     setUser(s.signed_in ? s.user : null);
     setNeedsSetup(!!s.needs_setup);
+    setSignIn(s.sign_in !== false);
     if (!s.signed_in && s.message && s.message !== "Sign in to continue.") setNotice(s.message);
     setChecked(true);
   };
@@ -47,8 +49,14 @@ export default function App() {
       <header className="top">
         <a className="brand" href="#/"><Logo /> Lanemark</a>
         <span className="spacer" />
-        <span className="muted">Signed in as <b>{user.display_name}</b></span>
-        <button onClick={async () => { await post("/logout"); setUser(null); go("/"); }}>Sign out</button>
+        {signIn ? (
+          <>
+            <span className="muted">Signed in as <b>{user.display_name}</b></span>
+            <button onClick={async () => { await post("/logout"); setUser(null); go("/"); }}>Sign out</button>
+          </>
+        ) : (
+          <span className="muted"><b>{user.display_name}</b></span>
+        )}
       </header>
       {body}
     </>

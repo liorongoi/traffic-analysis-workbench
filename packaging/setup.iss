@@ -50,6 +50,8 @@ Source: "{#BundleDir}\*"; DestDir: "{tmp}\bundle"; Flags: recursesubdirs createa
 Source: "lanemark.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
+; Lanemark opens without a user name or password now, so the reset entry is not needed in the Start menu.
+Type: files; Name: "{autoprograms}\Lanemark - reset password.lnk"
 ; Start menu entries from before the app was called Lanemark.
 Type: files; Name: "{autoprograms}\Traffic Analysis Workbench.url"
 Type: files; Name: "{autoprograms}\Traffic Analysis Workbench - speed check.lnk"
@@ -60,7 +62,6 @@ Type: files; Name: "{autoprograms}\Lanemark.url"
 ; "Lanemark" starts the server when it is not running, then opens it in the browser.
 Name: "{autoprograms}\Lanemark"; Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; WorkingDir: "{app}"; IconFilename: "{app}\lanemark.ico"; Comment: "Open Lanemark"; Flags: runminimized
 Name: "{autodesktop}\Lanemark"; Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; WorkingDir: "{app}"; IconFilename: "{app}\lanemark.ico"; Comment: "Open Lanemark"; Flags: runminimized; Tasks: desktopicon
-Name: "{autoprograms}\Lanemark - reset password"; Filename: "{app}\reset-password.cmd"; WorkingDir: "{app}"; Comment: "Show the user names and set a new password"
 Name: "{autoprograms}\Lanemark - speed check"; Filename: "{app}\speed-check.cmd"; WorkingDir: "{app}"
 
 [Run]
@@ -191,8 +192,7 @@ begin
     else
       WizardForm.FinishedLabel.Caption := 'Lanemark is installed.' + #13#10 + #13#10 +
         'To open it later, use the Lanemark icon on the desktop or in the Start menu. It opens in your browser at ' +
-        'http://127.0.0.1:8765.' + #13#10 + #13#10 +
-        'Forgot your user name or password? Start menu > Lanemark - reset password.';
+        'http://127.0.0.1:8765.';
   end;
 end;
 

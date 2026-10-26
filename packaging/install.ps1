@@ -11,7 +11,8 @@ param(
   [string]$Ort = "",
   [ValidateSet("signin", "boot", "none")]
   [string]$AutoStart = "signin",   # signin needs no administrator rights; boot is for an IT administrator
-  [switch]$SkipCheck
+  [switch]$SkipCheck,
+  [switch]$SignIn                  # ask for a user name and password on this computer too (off: open straight in)
 )
 $ErrorActionPreference = "Stop"
 $Bundle = $PSScriptRoot
@@ -161,6 +162,7 @@ if ($BackupDir -and (Test-Path (Join-Path $Data "control.db"))) {
 }
 $backupArgs = ""
 if ($BackupDir) { $backupArgs = "--backup-dir `"$BackupDir`"" }
+if (-not $SignIn) { $backupArgs = "--no-sign-in $backupArgs" }
 @"
 @echo off
 rem Starts Lanemark $($Info.version). Open http://127.0.0.1:$Port in a browser.

@@ -62,7 +62,8 @@ jobs:
             if (-not (Test-Path "$dir\current.txt")) { throw "$what did not install the app" }
             $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
             for ($i = 0; $i -lt 60; $i++) { try { $null = $wc.DownloadString("http://127.0.0.1:8765/api/session"); break } catch { Start-Sleep -Seconds 2 } }
-            $null = $wc.DownloadString("http://127.0.0.1:8765/api/session")
+            $sess = $wc.DownloadString("http://127.0.0.1:8765/api/session") | ConvertFrom-Json
+            if (-not $sess.signed_in) { throw "$($what): Lanemark asks for a password on this computer" }
             if (-not (Test-Path $link)) { throw "$what did not set up the sign-in start" }
             if (-not (Test-Path $menu)) { throw "$what did not add the Start menu entry" }
             if (-not (Test-Path "$dir\reset-password.cmd")) { throw "$what did not write reset-password.cmd" }

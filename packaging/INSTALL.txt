@@ -14,9 +14,12 @@ Easiest: the setup wizard (Windows)
 - Uninstall from Windows Settings > Apps. That removes the program, the Python it installed and the automatic
   start; the data and backup folders are kept, so installing again picks up the same missions and accounts.
 
-Forgotten user name or password
-- Start menu > "Lanemark - reset password" lists the user names and sets a new password for one of them.
-  By hand: <install folder>\app-<version>\Scripts\trafficwb-admin.exe reset-password --data <data folder>
+Sign-in
+- On the workstation Lanemark opens straight in, with no user name or password; work is recorded under the
+  Windows user. Other computers (only with --lan) still sign in with an account. To ask for a password on the
+  workstation too, install by hand with -SignIn.
+- Forgotten user name or password: <install folder>\reset-password.cmd lists the user names and sets a new
+  password. By hand: <install folder>\app-<version>\Scripts\trafficwb-admin.exe reset-password --data <data folder>
   It works only on the workstation, by whoever can open the data folder, and is written to the audit log.
 
 Install or update by hand (Windows)
