@@ -10,9 +10,9 @@ Rules:
 - Decoding is resumable: it can start after any analysed time and continues
   the same grid, so a run that is interrupted and resumed analyses exactly the
   same frames as one that is not.
-- The absolute UTC start comes only from a confirmed source (the filename
-  pattern). The container's creation time is shown but not trusted. Without a
-  confirmed source, absolute times stay empty.
+- The absolute UTC start comes from a confirmed source: the filename pattern
+  or an explicit operator correction. The container's creation time is shown
+  but not trusted. Without a confirmed source, absolute times stay empty.
 """
 from __future__ import annotations
 

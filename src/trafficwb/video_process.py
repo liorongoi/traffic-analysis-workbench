@@ -12,11 +12,12 @@ Rules:
   identity is carried across recordings.
 - Event times are presentation times in seconds from the stream start.
   Absolute UTC is added only when the recording's start is known from a
-  confirmed source (the filename), with that source's precision.
+  confirmed filename or operator correction, with its precision.
 - Plate recognition missions read the plate of each vehicle event on a few of
   its frames after processing (see plates.combine_frame_reads).
-- Not in this version: camera views and regions for video, night light
-  tracking (blob, pair, body).
+- Camera views use the first presentation frame as a signature; named and
+  inclusion/exclusion regions filter reviewed event boxes during search.
+- Not in this version: night-light tracking (blob, pair, body).
 """
 from __future__ import annotations
 
@@ -123,10 +124,12 @@ class VideoProcessor:
         pre["vehicle_detection"] = desc["preprocessing"]
         pre["video"] = {"interval_s": self.s.interval_s, "chunk_frames": self.s.chunk_frames,
                         "tracker": asdict(self.s.tracker), "time_base": "presentation timestamps",
-                        "regions": "not applied to video in this version"}
+                        "view_signature": "first presentation frame", "regions": "applied to event search boxes"}
         self.con.execute("UPDATE run SET state='running', started_at=COALESCE(started_at,?), model_versions=?, "
                          "preprocessing=? WHERE id=?", (utcnow(), json.dumps(models), json.dumps(pre), run_id))
         self._model_id = model_id
+        self.control.stage = "grouping camera views"
+        self.views.assign_or_propose(min_size=1)
         items = self.con.execute(
             "SELECT i.*, f.rel_path FROM run_item i JOIN source_version v ON v.id=i.source_version_id "
             "JOIN source_file f ON f.id=v.source_file_id WHERE i.run_id=? AND i.processing_state IN ('queued','running') "

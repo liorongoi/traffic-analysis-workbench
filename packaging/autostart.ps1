@@ -1,4 +1,4 @@
-# Start Lanemark automatically (ENV-08). Run from the install folder, in PowerShell:
+# Start LanePulse automatically (ENV-08). Run from the install folder, in PowerShell:
 #
 #   powershell -ExecutionPolicy Bypass -File autostart.ps1 -Mode status
 #   powershell -ExecutionPolicy Bypass -File autostart.ps1 -Mode signin          # no administrator rights needed
@@ -26,7 +26,7 @@ param(
   [int]$Port = 0
 )
 $ErrorActionPreference = "Stop"
-# The task and shortcut keep the names from before the app was called Lanemark, so existing installs are found.
+# The task and shortcut keep the names from before the app was called LanePulse, so existing installs are found.
 $TaskName = "Traffic Analysis Workbench"
 $Start = Join-Path $Target "start.cmd"
 $Runner = Join-Path $Target "run-server.cmd"
@@ -52,7 +52,7 @@ function Test-Server([int]$p) {
   try {
     $wc = New-Object System.Net.WebClient
     $wc.Proxy = $null
-    $null = $wc.DownloadString("http://127.0.0.1:$p/api/session")
+    $null = $wc.DownloadString("http://127.0.0.1:$p/api/health")
     return $true
   } catch { return $false }
 }
@@ -110,7 +110,7 @@ function Remove-All {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     Write-Host "Removed the power-on task."
   }
-  # Also a server started by hand, so the program's files are free to be removed or replaced.
+  # Also stop a server that the installer launched directly, without a startup link or task.
   Stop-Runner
   Stop-Server
 }
@@ -171,7 +171,7 @@ if ($Mode -eq "signin") {
   $lnk.TargetPath = $Runner
   $lnk.WorkingDirectory = $Target
   $lnk.WindowStyle = 7                      # minimised
-  $lnk.Description = "Lanemark server"
+  $lnk.Description = "LanePulse server"
   $lnk.Save()
   Write-Host "The server will start when you sign in to Windows (minimised window, log in $Logs)."
   $p = Get-Port

@@ -1,26 +1,18 @@
-Lanemark: offline install and update
+LanePulse: offline install and update
 =======================================================
 
 This folder contains everything the workstation needs. Nothing is downloaded during install or use.
 
 Easiest: the setup wizard (Windows)
-- Run Lanemark-Setup-<version>.exe and follow the screens: install folder, data folder, backup folder,
-  start at sign-in. No administrator rights are needed, Python is included, nothing is downloaded.
+- Run the single LanePulse-Setup-<version>.exe and choose the install, data and backup folders.
+  No administrator rights are needed, Python is included, nothing is downloaded. No account or sign-in is needed.
 - It runs the same install.ps1 as below, so the checks, the backup before an update and the automatic start
   are the same. The installer's own output is in <install folder>\logs\install.log.
-- Open Lanemark with the Lanemark icon on the desktop or in the Start menu. It starts the server if it is not
+- Open LanePulse with the LanePulse icon on the desktop or in the Start menu. It starts the server if it is not
   running and opens http://127.0.0.1:8765 in the browser.
-- Running Setup again repairs the install (same version) or updates it (newer version); the data is kept.
-- Uninstall from Windows Settings > Apps. That removes the program, the Python it installed and the automatic
-  start; the data and backup folders are kept, so installing again picks up the same missions and accounts.
-
-Sign-in
-- On the workstation Lanemark opens straight in, with no user name or password; work is recorded under the
-  Windows user. Other computers (only with --lan) still sign in with an account. To ask for a password on the
-  workstation too, install by hand with -SignIn.
-- Forgotten user name or password: <install folder>\reset-password.cmd lists the user names and sets a new
-  password. By hand: <install folder>\app-<version>\Scripts\trafficwb-admin.exe reset-password --data <data folder>
-  It works only on the workstation, by whoever can open the data folder, and is written to the audit log.
+- Running Setup again repairs the install (same version, the previous build is kept) or updates it; the data is kept.
+- Uninstall from Windows Settings > Apps. That removes the program and the Python it installed; the data and
+  backup folders are kept, so installing again picks up the same missions.
 
 Install or update by hand (Windows)
 1. Copy this whole folder to the workstation (USB or internal share).
@@ -30,16 +22,14 @@ Install or update by hand (Windows)
    - The installer checks every file against SHA256SUMS, installs into C:\TrafficWorkbench\app-<version>,
      adds the model packs, runs a disconnected install-to-export check, backs up the data (on an update),
      and only then switches start.cmd to the new version.
-3. The installer sets the server to start when you sign in to Windows, and starts it now. No administrator
-   rights are needed. Open http://127.0.0.1:8765 on the workstation.
-   The first account (administrator of the app) can only be created from the workstation itself.
-   Add -AutoStart none to start it yourself with C:\TrafficWorkbench\start.cmd instead.
+3. The installer starts LanePulse now. To start it later, run C:\TrafficWorkbench\start.cmd.
+   Open http://127.0.0.1:8765 on the workstation. No account or sign-in is needed.
 
 Automatic start (C:\TrafficWorkbench\autostart.ps1)
 - Status:   powershell -ExecutionPolicy Bypass -File C:\TrafficWorkbench\autostart.ps1 -Mode status
-- Sign-in:  -Mode signin   starts at Windows sign-in in a minimised window and restarts the server 10 s after
+- User session: -Mode signin   starts when the Windows user session opens, in a minimised window, and restarts the server 10 s after
             it stops. No administrator rights. The output goes to C:\TrafficWorkbench\logs\server.log
-            (kept to about 10 MB, with one older file).
+            (kept to about 10 MB, with one older file). This is Windows auto-start; LanePulse has no app sign-in.
 - Restart:  -Mode restart  e.g. after changing start.cmd. An update does this by itself.
 - Remove:   -Mode remove   removes the automatic start and stops the server.
 - Power-on: -Mode boot     for an IT administrator only: a scheduled task that starts the server when the

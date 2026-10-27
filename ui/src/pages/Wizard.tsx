@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, post } from "../api";
 import { go } from "../router";
+import TimezoneMap from "../components/TimezoneMap";
 
 type Ref = { countries: Record<string, string>; country_zones: Record<string, string>; modes: Record<string, string[]>; zones: string[] };
 type Preview = { file: string; ok: boolean; utc?: string; precision?: string; pattern?: string; reason?: string };
@@ -14,24 +15,48 @@ const MODE_HELP: Record<string, string> = {
 
 export default function Wizard() {
   const [ref, setRef] = useState<Ref | null>(null);
+  const [refError, setRefError] = useState("");
   const [step, setStep] = useState(0);
   const [cfg, setCfg] = useState({
     name: "", input_type: "images", mode: "general_traffic", country: "IL", iana_zone: "Asia/Jerusalem",
+    latitude: null as number | null, longitude: null as number | null,
     source_dir: "", include_subdirs: true, processing: "one_time", output_dir: "", export_formats: ["xlsx", "csv"],
   });
   const [zoneFilter, setZoneFilter] = useState("");
+  const [utcPreview, setUtcPreview] = useState(() => new Date().toISOString().slice(0, 16));
+  const [timePreview, setTimePreview] = useState<{ local: string; offset: string; is_dst: boolean; abbreviation: string } | null>(null);
   const [preview, setPreview] = useState<Preview[] | null>(null);
   const [check, setCheck] = useState<{ errors: string[]; warnings: string[] } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { api("/reference").then(setRef); }, []);
+  useEffect(() => {
+    let live = true;
+    api("/reference").then((result) => { if (live) { setRef(result); setRefError(""); } }).catch((e) => {
+      if (live) setRefError(e instanceof Error ? e.message : "Could not load setup options.");
+    });
+    return () => { live = false; };
+  }, []);
   const set = (k: string, v: unknown) => setCfg((c) => ({ ...c, [k]: v }));
   const zones = useMemo(() => (ref?.zones ?? []).filter((z) => z.toLowerCase().includes(zoneFilter.toLowerCase())).slice(0, 200), [ref, zoneFilter]);
 
   useEffect(() => {
-    if (step === 4) post("/missions/validate", cfg).then(setCheck).catch((e: ApiError) => setErr(e.message));
+    if (step === 4) {
+      setCheck(null);
+      setErr(null);
+      post("/missions/validate", cfg).then(setCheck).catch((e: ApiError) => setErr(e.message));
+    }
   }, [step]);
+
+  useEffect(() => {
+    let live = true;
+    const utc = new Date(`${utcPreview}:00Z`);
+    if (Number.isNaN(utc.valueOf())) { setTimePreview(null); return; }
+    post("/time-preview", { iana_zone: cfg.iana_zone, utc: utc.toISOString() })
+      .then((result) => { if (live) setTimePreview(result); })
+      .catch(() => { if (live) setTimePreview(null); });
+    return () => { live = false; };
+  }, [cfg.iana_zone, utcPreview]);
 
   const loadPreview = async () => {
     setErr(null);
@@ -56,7 +81,10 @@ export default function Wizard() {
     }
   };
 
-  if (!ref) return <div className="page muted">Loading…</div>;
+  if (!ref) return <div className="page">
+    {refError ? <div className="card msg err" role="alert"><b>Setup options could not be loaded.</b><p>{refError}</p><button onClick={() => { setRefError(""); api("/reference").then(setRef).catch((e) => setRefError(e instanceof Error ? e.message : "Could not load setup options.")); }}>Try again</button></div>
+      : <p className="muted" role="status" aria-live="polite">Loading setup options…</p>}
+  </div>;
   const canNext = [cfg.name.trim() !== "", !!cfg.iana_zone, cfg.source_dir.trim() !== "", cfg.output_dir.trim() !== "" && cfg.export_formats.length > 0, true][step];
 
   return (
@@ -87,19 +115,33 @@ export default function Wizard() {
         {step === 1 && (
           <>
             <label className="field"><span>Country</span>
-              <select value={cfg.country} onChange={(e) => { set("country", e.target.value); if (ref.country_zones[e.target.value]) set("iana_zone", ref.country_zones[e.target.value]); }}>
+              <select value={cfg.country} onChange={(e) => {
+                const country = e.target.value;
+                setCfg((c) => ({ ...c, country, iana_zone: ref.country_zones[country] ?? c.iana_zone, latitude: null, longitude: null }));
+              }}>
                 {Object.entries(ref.countries).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 <option value="FI">Finland (sample data; no plate reading)</option>
               </select>
             </label>
-            <label className="field"><span>Time zone (IANA). Local time and DST are worked out for each capture time.</span>
-              <input placeholder="Filter zones…" value={zoneFilter} onChange={(e) => setZoneFilter(e.target.value)} />
-              <select size={6} value={cfg.iana_zone} onChange={(e) => set("iana_zone", e.target.value)}>
+            <label className="field"><span>Search by city or IANA time-zone name</span>
+              <input placeholder="e.g. Tehran, Beirut, Europe/Riga" value={zoneFilter} onChange={(e) => setZoneFilter(e.target.value)} />
+              <select size={5} value={cfg.iana_zone} onChange={(e) => setCfg((c) => ({
+                ...c, iana_zone: e.target.value, latitude: null, longitude: null,
+              }))}>
                 {!zones.includes(cfg.iana_zone) && <option value={cfg.iana_zone}>{cfg.iana_zone}</option>}
-                {zones.map((z) => <option key={z} value={z}>{z}</option>)}
+                {zones.map((z) => <option key={z} value={z}>{z} · {z.split("/").pop()?.replace(/_/g, " ")}</option>)}
               </select>
             </label>
-            <p className="muted">Selected: <b>{cfg.iana_zone}</b></p>
+            <TimezoneMap selected={cfg.iana_zone} onPick={(zone, latitude, longitude) => {
+              setCfg((c) => ({ ...c, iana_zone: zone, latitude, longitude }));
+            }} />
+            <div className="row muted">Selected zone: <b>{cfg.iana_zone}</b>
+              {cfg.latitude !== null && cfg.longitude !== null && <span> · Location: {cfg.latitude.toFixed(4)}, {cfg.longitude.toFixed(4)}</span>}
+            </div>
+            <label className="field" style={{ marginTop: 10 }}><span>Check local time for a UTC capture date</span>
+              <input type="datetime-local" value={utcPreview} onChange={(e) => setUtcPreview(e.target.value)} />
+            </label>
+            {timePreview && <p className="msg ok">{timePreview.local.replace("T", " ")} {timePreview.abbreviation} ({timePreview.offset}); daylight saving {timePreview.is_dst ? "applies" : "does not apply"} on this date.</p>}
           </>
         )}
         {step === 2 && (
@@ -146,19 +188,21 @@ export default function Wizard() {
           <>
             <table className="t"><tbody>
               {Object.entries({ Name: cfg.name, "Input type": cfg.input_type, Mode: cfg.mode.replace(/_/g, " "), Country: cfg.country, "Time zone": cfg.iana_zone,
+                Location: cfg.latitude === null || cfg.longitude === null ? "Not set" : `${cfg.latitude.toFixed(4)}, ${cfg.longitude.toFixed(4)}`,
                 Source: `${cfg.source_dir}${cfg.include_subdirs ? " (with subfolders)" : ""}`, Processing: cfg.processing.replace("_", "-"), Output: cfg.output_dir, Formats: cfg.export_formats.join(", ") })
                 .map(([k, v]) => <tr key={k}><th style={{ width: 140 }}>{k}</th><td className="bidi">{v}</td></tr>)}
             </tbody></table>
-            {check?.errors.map((e) => <div key={e} className="msg err">{e}</div>)}
+            {!check && !err && <p className="muted" role="status" aria-live="polite">Checking folders and settings…</p>}
+            {check?.errors.map((e) => <div key={e} className="msg err" role="alert">{e}</div>)}
             {check?.warnings.map((w) => <div key={w} className="msg warn">{w}</div>)}
             {check && check.errors.length === 0 && <div className="msg ok">Checks passed. The mission database is created when you press Create.</div>}
           </>
         )}
-        {err && <div className="msg err">{err}</div>}
+        {err && <div className="msg err" role="alert">{err}</div>}
         <div className="row" style={{ marginTop: 14, justifyContent: "space-between" }}>
           <button onClick={() => (step === 0 ? go("/") : setStep(step - 1))}>{step === 0 ? "Cancel" : "Back"}</button>
           {step < 4 ? <button className="primary" disabled={!canNext} onClick={() => setStep(step + 1)}>Next</button>
-            : <button className="primary" disabled={busy || !check || check.errors.length > 0} onClick={create}>Create mission</button>}
+            : <button className="primary" disabled={busy || !check || check.errors.length > 0} onClick={create}>{busy ? "Creating…" : "Create mission"}</button>}
         </div>
       </div>
     </div>

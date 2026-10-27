@@ -110,7 +110,7 @@ def time_plates(backend: str, imgs: list[np.ndarray]) -> dict | None:
 
 
 def report_text(r: dict) -> str:
-    L = [f"Lanemark speed check, {r['at']}",
+    L = [f"LanePulse speed check, {r['at']}",
          f"Computer: {r['machine']['system']}, {r['machine']['cpu']}, {r['machine']['cpu_count']} logical CPUs",
          f"Pictures: {r['pictures']}", ""]
     for b in r["backends"]:
