@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds the LanePulse server package for Ubuntu (x86_64) with NVIDIA GPU support, run in CI on Linux.
+# Builds the LanePulse server package for Ubuntu and Red Hat (x86_64) with NVIDIA GPU support, run in CI on Linux.
 #   packaging/server/build_server.sh <python-build-standalone x86_64 linux .tar.gz> <out folder>
 # Before: the web screens built (scripts/build_ui.py) and the model packs fetched (scripts/fetch_models.py).
 # The package carries its own Python and every library, including NVIDIA's CUDA and cuDNN libraries for ONNX
@@ -40,7 +40,7 @@ esac
 ORT="$("$PY" -c 'import onnxruntime as o; print(o.__version__)')"
 printf '{"version": "%s", "python": "3.12", "onnxruntime": "%s", "cuda_major": "%s", "min_driver": "%s"}\n' \
   "$VER" "$ORT" "$CUDA_MAJOR" "$MIN_DRIVER" > "$PKG/server.json"
-cp "$ROOT/packaging/server/install-server.sh" "$ROOT/packaging/server/uninstall-server.sh" \
+cp "$ROOT/packaging/server/install-server.sh" "$ROOT/packaging/server/uninstall-server.sh" "$ROOT/packaging/server/system.sh" \
    "$ROOT/packaging/server/lanepulse" "$ROOT/scripts/offline_smoke.py" "$PKG/"
 cp "$ROOT/packaging/server/INSTALL-SERVER.txt" "$PKG/INSTALL.txt"
 cp "$ROOT/packaging/training/TRAINING.txt" "$PKG/TRAINING.txt"

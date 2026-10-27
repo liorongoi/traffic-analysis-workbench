@@ -1,10 +1,10 @@
-LanePulse server for Ubuntu (x86_64, NVIDIA GPU)
-================================================
+LanePulse server for Ubuntu and Red Hat (x86_64, NVIDIA GPU)
+============================================================
 
 The full guide, with every step from a new server to daily use, is the PDF "LanePulse server installation guide".
 This is the short version.
 
-Needs: Ubuntu Server 22.04 or 24.04, an NVIDIA GPU with its driver (see server.json for the oldest driver
+Needs: Ubuntu Server 22.04 or 24.04, or Red Hat Enterprise Linux 8 or 9 (also Rocky Linux and AlmaLinux), an NVIDIA GPU with its driver (see server.json for the oldest driver
 version), and sudo rights. Nothing is downloaded during install. LanePulse brings its own Python and never uses or
 changes the system Python.
 
@@ -16,6 +16,8 @@ Install or update
            --allow-from CIDR (default: this server's local network; "any" for every address).
   It checks every file, installs into /opt/lanepulse, runs a small offline check, backs up the data (on an
   update), then starts the lanepulse service, which also starts whenever the server boots.
+  Red Hat: keep SELinux enforcing and firewalld on. The installer labels LanePulse's files for SELinux and opens
+  the port in firewalld (ufw on Ubuntu). The NVIDIA driver steps for Red Hat are in the PDF guide, section 18.
 
 Open it from other computers:  http://<server address>:8765
   There is no password. Anyone who can reach the port can see and change every mission, so keep the server on a
