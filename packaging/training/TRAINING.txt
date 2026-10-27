@@ -38,6 +38,7 @@ How many images
 - Copy the .zip to the LanePulse computer and drag it onto import-model.cmd in the install folder
   (By hand: <install folder>\app-<version>\Scripts\trafficwb-models.exe import <file.zip>)
   The pack is checked file by file; an installed version is never replaced.
+  LanePulse on a Mac: double-click "Import Model.command" in the LanePulse folder in your home folder instead.
 - On the learning page, evaluate the new model on the dataset's test images, compare it with the model in use,
   and promote it if it is better. Roll back there at any time.
 - The same .zip can be imported on every installation; each one evaluates and promotes it separately.
