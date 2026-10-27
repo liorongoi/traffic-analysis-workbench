@@ -13,6 +13,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+
 CPU = "CPUExecutionProvider"
 CUDA = "CUDAExecutionProvider"
 DML = "DmlExecutionProvider"
@@ -23,6 +25,31 @@ LABEL = {CUDA: "CUDA", DML: "DirectML", CPU: "CPU"}
 
 def _l(p: str) -> str:
     return LABEL.get(p, p.replace("ExecutionProvider", ""))
+
+
+def _warmup(session) -> None:
+    """Run a bounded zero-input inference to catch providers that initialize but cannot execute."""
+    feed = {}
+    dtype_map = {"tensor(float)": np.float32, "tensor(float16)": np.float16,
+                 "tensor(double)": np.float64, "tensor(uint8)": np.uint8,
+                 "tensor(int8)": np.int8, "tensor(int32)": np.int32,
+                 "tensor(int64)": np.int64, "tensor(bool)": np.bool_}
+    for node in session.get_inputs():
+        shape = []
+        for i, dim in enumerate(node.shape):
+            if isinstance(dim, int) and dim > 0:
+                shape.append(dim)
+            elif len(node.shape) == 4 and i in (2, 3):
+                shape.append(640)
+            else:
+                shape.append(1)
+        dtype = dtype_map.get(node.type)
+        if dtype is None:
+            raise RuntimeError(f"unsupported warm-up input type {node.type}")
+        feed[node.name] = np.zeros(shape, dtype=dtype)
+    if not feed:
+        raise RuntimeError("model has no inputs")
+    session.run(None, feed)
 
 
 class AcceleratorError(ValueError):
@@ -76,10 +103,12 @@ def make_session(weights: Path | str, setting: str | None = None, available: lis
     opts.log_severity_level = 3
     try:
         sess = ort.InferenceSession(str(weights), opts, providers=tried)
-    except Exception as exc:          # a GPU backend that fails to start: fall back to CPU, and say so
+        if tried[0] != CPU:
+            _warmup(sess)
+    except Exception as exc:          # a GPU backend that fails to start or execute: fall back to CPU
         if tried == [CPU]:
             raise
-        notes.append(f"{_l(tried[0])} failed to start ({type(exc).__name__}: {str(exc)[:200]}); using CPU")
+        notes.append(f"{_l(tried[0])} failed session or warm-up inference ({type(exc).__name__}: {str(exc)[:200]}); using CPU")
         sess = ort.InferenceSession(str(weights), opts, providers=[CPU])
         tried = [CPU]
     used = sess.get_providers()

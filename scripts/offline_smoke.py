@@ -1,8 +1,8 @@
 """Disconnected install-to-export check (ENV-04). Run with the installed application's Python.
 
 Creates synthetic images named with UTC times, makes a mission, scans, detects with the
-installed vehicle detector, exports CSV and Excel, takes and verifies a backup, and asks
-the web app for its sign-in page. It uses no network. Prints one JSON line and exits 0 on success.
+installed vehicle detector, exports CSV and Excel, takes and verifies a backup, and checks
+that the local web app opens directly without a session API. It uses no network. Prints one JSON line and exits 0 on success.
 
     python offline_smoke.py --work <empty folder> [--models <models folder>]
 """
@@ -27,9 +27,10 @@ def no_network() -> str:
 
 
 def web_check(data: Path) -> tuple[str, dict]:
-    """Start the real web server on a free local port and read its page and session state."""
+    """Start the real web server on a free local port and check the page, health and removed session route."""
     import threading
     import urllib.request
+    from urllib.error import HTTPError
 
     import uvicorn
 
@@ -49,11 +50,18 @@ def web_check(data: Path) -> tuple[str, dict]:
                 break
             time.sleep(0.1)
         page = opener.open(f"http://127.0.0.1:{port}/", timeout=10).read().decode("utf-8")
-        session = json.loads(opener.open(f"http://127.0.0.1:{port}/api/session", timeout=10).read())
+        health = json.loads(opener.open(f"http://127.0.0.1:{port}/api/health", timeout=10).read())
+        try:
+            opener.open(f"http://127.0.0.1:{port}/api/session", timeout=10)
+        except HTTPError as exc:
+            if exc.code != 404:
+                raise
+        else:
+            raise AssertionError("The removed session endpoint is still available.")
     finally:
         server.should_exit = True
         th.join(10)
-    return page, session
+    return page, health
 
 
 def main(argv=None) -> int:
@@ -106,8 +114,8 @@ def main(argv=None) -> int:
     assert any(n.endswith(".csv") for n in exported) and any(n.endswith(".xlsx") for n in exported), exported
     b = admin.backup(data, bk, "smoke")
     assert admin.verify(b) == []
-    page, session = web_check(data)
-    assert '<div id="root">' in page and session["needs_setup"] is True
+    page, health = web_check(data)
+    assert '<div id="root">' in page and health == {"status": "ok"}
     from trafficwb.models import find
     from trafficwb.runtime import make_session
     _, info = make_session(find("yolox-s").weights)

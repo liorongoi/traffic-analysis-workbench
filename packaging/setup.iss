@@ -1,4 +1,4 @@
-; Setup wizard for Lanemark (Inno Setup 6).
+; Setup wizard for LanePulse (Inno Setup 6).
 ; Wraps the offline bundle: the wizard asks for the folders, unpacks the bundle to a temporary folder and runs
 ; install.ps1 from it, so the checks, the backup before an update and the automatic start are the same as a
 ; manual install. No administrator rights are needed. Nothing is downloaded.
@@ -19,15 +19,15 @@
 
 [Setup]
 AppId={{6C1E3F0A-7A51-4E0B-9C8E-1F2B7D9A4E21}
-AppName=Lanemark
+AppName=LanePulse
 AppVersion={#AppVersion}
-AppVerName=Lanemark {#AppVersion}
+AppVerName=LanePulse {#AppVersion}
 DefaultDirName={localappdata}\TrafficWorkbench
-DefaultGroupName=Lanemark
+DefaultGroupName=LanePulse
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir={#OutDir}
-OutputBaseFilename=Lanemark-Setup-{#AppVersion}
+OutputBaseFilename=LanePulse-Setup-{#AppVersion}
 ; The bundle is mostly compressed wheels already; fast compression keeps the build and the install quick.
 Compression=lzma2/fast
 SolidCompression=no
@@ -35,37 +35,38 @@ DiskSpanning=no
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayName=Lanemark
-SetupIconFile=lanemark.ico
+UninstallDisplayName=LanePulse
+SetupIconFile=lanepulse.ico
 UninstallDisplayIcon={uninstallexe}
 SetupLogging=yes
 
 [Tasks]
-Name: "autostart"; Description: "Start Lanemark when I sign in to Windows (recommended)"
-Name: "desktopicon"; Description: "Put a Lanemark icon on the desktop"
+Name: "desktopicon"; Description: "Put a LanePulse icon on the desktop"
 
 [Files]
 ; Unpacked to the temporary folder, which Setup removes when it ends.
 Source: "{#BundleDir}\*"; DestDir: "{tmp}\bundle"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "lanemark.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "lanepulse.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
-; Lanemark opens without a user name or password now, so the reset entry is not needed in the Start menu.
+; Start menu entries from before the app was called LanePulse.
 Type: files; Name: "{autoprograms}\Lanemark - reset password.lnk"
-; Start menu entries from before the app was called Lanemark.
+Type: files; Name: "{autoprograms}\Lanemark.lnk"
+Type: files; Name: "{autoprograms}\Lanemark - speed check.lnk"
+Type: files; Name: "{autodesktop}\Lanemark.lnk"
 Type: files; Name: "{autoprograms}\Traffic Analysis Workbench.url"
 Type: files; Name: "{autoprograms}\Traffic Analysis Workbench - speed check.lnk"
-; The first Lanemark shortcut opened only the address and failed when the server was not running.
+; The first shortcut opened only the address and failed when the server was not running.
 Type: files; Name: "{autoprograms}\Lanemark.url"
 
 [Icons]
-; "Lanemark" starts the server when it is not running, then opens it in the browser.
-Name: "{autoprograms}\Lanemark"; Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; WorkingDir: "{app}"; IconFilename: "{app}\lanemark.ico"; Comment: "Open Lanemark"; Flags: runminimized
-Name: "{autodesktop}\Lanemark"; Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; WorkingDir: "{app}"; IconFilename: "{app}\lanemark.ico"; Comment: "Open Lanemark"; Flags: runminimized; Tasks: desktopicon
-Name: "{autoprograms}\Lanemark - speed check"; Filename: "{app}\speed-check.cmd"; WorkingDir: "{app}"
+; "LanePulse" starts the server when it is not running, then opens it in the browser.
+Name: "{autoprograms}\LanePulse"; Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; WorkingDir: "{app}"; IconFilename: "{app}\lanepulse.ico"; Comment: "Open LanePulse"; Flags: runminimized
+Name: "{autodesktop}\LanePulse"; Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; WorkingDir: "{app}"; IconFilename: "{app}\lanepulse.ico"; Comment: "Open LanePulse"; Flags: runminimized; Tasks: desktopicon
+Name: "{autoprograms}\LanePulse - speed check"; Filename: "{app}\speed-check.cmd"; WorkingDir: "{app}"
 
 [Run]
-Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; Description: "Open Lanemark now"; Flags: postinstall nowait runhidden skipifsilent; Check: InstallOK
+Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; Description: "Open LanePulse now"; Flags: postinstall nowait runhidden skipifsilent; Check: InstallOK
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\autostart.ps1"" -Mode remove -Target ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveAutostart"
@@ -101,7 +102,7 @@ end;
 procedure InitializeWizard;
 begin
   FoldersPage := CreateInputDirPage(wpSelectDir, 'Data folders',
-    'Where should Lanemark keep its data and backups?',
+    'Where should LanePulse keep its data and backups?',
     'Missions, results and evidence go in the data folder. Pick a drive with plenty of space. ' +
     'The backup folder gets a copy of the data before every update and every night; another drive is best. ' +
     'Your source images and videos are only read, never moved.',
@@ -152,19 +153,18 @@ end;
 
 procedure RunInstaller;
 var
-  Log, Cmd, Auto: String;
+  Log, Cmd: String;
   Code: Integer;
 begin
   ForceDirectories(ExpandConstant('{app}\logs'));
   Log := ExpandConstant('{app}\logs\install.log');
   LogPath := Log;
-  if WizardIsTaskSelected('autostart') then Auto := 'signin' else Auto := 'none';
   // Windows PowerShell's own module path, in case Setup was started from PowerShell 7, whose path would load
   // the wrong modules. The log is written as UTF-8 so it reads anywhere.
   Cmd := '$env:PSModulePath=[Environment]::GetEnvironmentVariable(''PSModulePath'',''Machine''); ' +
     '$ErrorActionPreference=''Stop''; try { & ' + Quote(ExpandConstant('{tmp}\bundle\install.ps1')) +
     ' -Target ' + Quote(ExpandConstant('{app}')) + ' -Data ' + Quote(FoldersPage.Values[0]) +
-    ' -BackupDir ' + Quote(FoldersPage.Values[1]) + ' -AutoStart ' + Auto +
+    ' -BackupDir ' + Quote(FoldersPage.Values[1]) + ' -AutoStart none' +
     ' *>&1 | Out-File -Encoding utf8 ' + Quote(Log) + '; exit 0 } catch { $_ | Out-File -Append -Encoding utf8 ' + Quote(Log) + '; exit 1 }';
   WizardForm.StatusLabel.Caption := 'Checking the files, installing Python and the models, and testing the install. This takes a few minutes...';
   WizardForm.ProgressGauge.Style := npbstMarquee;
@@ -179,7 +179,7 @@ begin
   begin
     SuppressibleMsgBox('The installation did not finish (code ' + IntToStr(Code) + ').' + #13#10 + #13#10 +
            'Details are in:' + #13#10 + Log + #13#10 + #13#10 +
-           'If a version was already installed, it is still in use.', mbError, MB_OK, IDOK);
+           'Your data and previous version have been kept. Close LanePulse and retry the installer. If it fails again, share install.log.', mbError, MB_OK, IDOK);
     Failed := True;
   end;
 end;
@@ -191,8 +191,8 @@ begin
     if Failed then
       WizardForm.FinishedLabel.Caption := 'The installation did not finish. Details are in ' + LogPath + '.'
     else
-      WizardForm.FinishedLabel.Caption := 'Lanemark is installed.' + #13#10 + #13#10 +
-        'To open it later, use the Lanemark icon on the desktop or in the Start menu. It opens in your browser at ' +
+      WizardForm.FinishedLabel.Caption := 'LanePulse is installed.' + #13#10 + #13#10 +
+        'To open it, use the LanePulse icon on the desktop or in the Start menu. It opens in your browser at ' +
         'http://127.0.0.1:8765.';
   end;
 end;

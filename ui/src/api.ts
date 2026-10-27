@@ -5,11 +5,6 @@ export class ApiError extends Error {
   }
 }
 
-let onSignedOut: (msg: string) => void = () => {};
-export function setSignedOutHandler(fn: (msg: string) => void) {
-  onSignedOut = fn;
-}
-
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
   const method = opts.method ?? (opts.body !== undefined ? "POST" : "GET");
   const res = await fetch(`/api${path}`, {
@@ -26,15 +21,12 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   }
   if (!res.ok) {
     const err = new ApiError(res.status, data?.error ?? "error", data?.message ?? res.statusText, data?.action);
-    if (res.status === 401 && err.code === "not_signed_in") onSignedOut(err.message);
     throw err;
   }
   return data as T;
 }
 
 export const post = <T = any>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body });
-
-export type User = { id: number; username: string; display_name: string; role: string };
 
 export type Filter = {
   search?: string;
@@ -117,6 +109,7 @@ export type Item = {
   width: number | null;
   height: number | null;
   view: { id: number | null; name: string | null; regions_applied: boolean | null };
+  view_assignment_history: { view_id: number | null; method: string; author: string; reason: string; created_at: string }[];
   condition: { condition: string; flags: string } | null;
   processing_state: string;
   error: string | null;
@@ -138,6 +131,7 @@ export type Job = {
   elapsed_s: number;
   eta_s: number | null;
   eta_basis: string;
+  resource_usage: { process_cpu_percent: number; process_rss_bytes: number; system_memory_available_bytes: number; system_memory_total_bytes: number } | null;
   error: string | null;
   result?: { search_run?: number };
 };

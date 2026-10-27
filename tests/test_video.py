@@ -306,9 +306,6 @@ def api(tmp_path):
     app = create_app(tmp_path / "data", detector_factory=lambda: (RedDetector(), {"task": "vehicle_detection"}),
                      start_monitoring=False, stability_seconds=0)
     c = TestClient(app)
-    c.post("/api/setup", json={"username": "lior", "display_name": "Lior", "password": "longpassword"}, headers=H1)
-    c.post("/api/login", json={"username": "lior", "password": "longpassword"}, headers=H1)
-
     def make(mode="object_search"):
         body = {"name": "Vid", "input_type": "video", "mode": mode, "country": "IL", "iana_zone": "Asia/Jerusalem",
                 "source_dir": str(src), "include_subdirs": False, "processing": "one_time", "output_dir": str(out),
@@ -339,6 +336,22 @@ def test_video_api_review_flow(api):
     recs = c.get(f"/api/missions/{mid}/recordings").json()["recordings"]
     assert len(recs) == 1 and recs[0]["events"] == 2 and recs[0]["processing_state"] == "done"
     vid = recs[0]["id"]
+    assert recs[0]["start_source"] == "filename"
+    manual = c.put(f"/api/missions/{mid}/recordings/{vid}/start-time", headers=H1,
+                   json={"action": "set", "utc": "2026-10-21T13:15:00Z", "precision": "minute",
+                         "note": "Confirmed against recording log"})
+    assert manual.status_code == 200, manual.text
+    assert manual.json()["start_utc"] == "2026-10-21T13:15:00Z"
+    assert manual.json()["start_source"] == "manual" and manual.json()["start_revision_author"]
+    assert c.get(f"/api/missions/{mid}/events").json()["events"][0]["first_utc"].startswith("2026-10-21T13:15:00")
+    naive = c.put(f"/api/missions/{mid}/recordings/{vid}/start-time", headers=H1,
+                  json={"action": "set", "utc": "2026-10-21T13:15:00", "precision": "second"})
+    assert naive.status_code == 400
+    cleared = c.put(f"/api/missions/{mid}/recordings/{vid}/start-time", headers=H1,
+                    json={"action": "clear", "note": "Restore filename timestamp"})
+    assert cleared.status_code == 200 and cleared.json()["start_source"] == "filename"
+    assert cleared.json()["start_utc"] == "2026-10-21T12:00:00Z"
+    assert c.get(f"/api/missions/{mid}/events").json()["events"][0]["first_utc"].startswith("2026-10-21T12:00:00")
     r = c.get(f"/api/missions/{mid}/videos/{vid}", headers={"Range": "bytes=0-99"})
     assert r.status_code == 206 and len(r.content) == 100
     evs = c.get(f"/api/missions/{mid}/events").json()["events"]
@@ -384,6 +397,31 @@ def test_video_search_finds_events(api):
     c.post(f"/api/missions/{mid}/search/{r2['id']}/run", headers=H1)
     j2 = wait(c, mid)
     assert c.get(f"/api/missions/{mid}/search-runs/{j2['result']['search_run']}").json()["total"] == 1
+
+
+def test_video_search_applies_named_camera_regions(api):
+    c, make = api
+    mid = make()
+    events = c.get(f"/api/missions/{mid}/events").json()["events"]
+    views = c.get(f"/api/missions/{mid}/views").json()["views"]
+    assert len(views) == 1 and views[0]["size"] == 1
+    target = events[0]
+    x1, y1, x2, y2 = target["thumb_box"]
+    x, y = (x1 + x2) / 2, y2
+    region = c.post(f"/api/missions/{mid}/views/{views[0]['id']}/regions", headers=H1,
+                    json={"kind": "include", "name": "north lane",
+                          "polygon": [[x - 2, y - 2], [x + 2, y - 2], [x + 2, y + 2], [x - 2, y + 2]]})
+    assert region.status_code == 200, region.text
+    req = c.post(f"/api/missions/{mid}/search/ask", json={"text": "cars in north lane"}, headers=H1)
+    assert req.status_code == 200, req.text
+    assert c.post(f"/api/missions/{mid}/search/{req.json()['id']}/confirm", json={}, headers=H1).status_code == 200
+    run = c.post(f"/api/missions/{mid}/search/{req.json()['id']}/run", headers=H1)
+    assert run.status_code == 200, run.text
+    job = wait(c, mid)
+    result = c.get(f"/api/missions/{mid}/search-runs/{job['result']['search_run']}").json()
+    assert result["total"] == 1
+    assert result["hits"][0]["object_uid"] == f"ev{target['id']}"
+    assert result["summary"]["events_outside_regions"] == 1
 
 
 def test_image_mission_has_no_video_endpoints(api, tmp_path):

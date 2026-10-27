@@ -29,3 +29,9 @@ Date: 24 Oct 2026. Status: **evaluation only**, chosen by Lior on 24 Oct 2026 ("
 ## Replacing them
 
 Model packs are versioned, checksum-verified folders. A new finder or reader pack is a new folder; plates are read again for the new pair and earlier reads stay stored with the models that made them.
+
+## Supplied Global License Plate Dataset paper
+
+The supplied `Global_License_Plate_Dataset.pdf` is the eight-page research paper, not the image archive or annotations. The paper describes a 5M+ image corpus across 74 countries, collected primarily from Platesmania, and says reuse of Platesmania material requires an attribution link. Its text also notes that consent and licensing for some third-party datasets can be vague. The paper's CC BY-NC-ND 4.0 notice applies to the paper; it does not establish reuse rights for every source image in the corpus.
+
+The authors' [GitHub repository](https://github.com/siddagra/Global-License-Plate-Dataset) currently contains a README linking to a Hugging Face dataset, but no dataset license or image files. The linked dataset endpoint could not be accessed from the connected review session (HTTP 401), so its contents, terms, and authorization for this project's intended use could not be verified. Do not import it for training, evaluation, or packaging unless those rights and access terms are confirmed. The corpus's published aggregate metrics do not replace evaluation on authorized Lebanese, Iranian, Israeli, or Latvian camera samples.

@@ -17,6 +17,8 @@ dependencies = [
     "starlette>=0.39",   # byte-range responses for video playback
     "av>=12",            # FFmpeg libraries for video decoding and clips
     "uvicorn>=0.29",
+    "watchdog>=4.0",       # filesystem notifications, with periodic reconciliation as the fallback
+    "psutil>=5.9",          # non-blocking process/system resource figures in the progress UI
 ]
 
 [project.optional-dependencies]
@@ -24,7 +26,7 @@ dependencies = [
 cpu = ["onnxruntime>=1.17"]
 cuda = ["onnxruntime-gpu[cuda,cudnn]>=1.21"]
 directml = ["onnxruntime-directml>=1.17"]
-probe = ["psutil>=5.9"]
+probe = []
 dev = ["pytest>=8", "httpx>=0.27"]
 # Training the vehicle detector, on a computer with an NVIDIA GPU or an Apple-silicon Mac (never the workstation).
 train = ["torch>=2.3", "onnx>=1.16", "onnxruntime>=1.17"]

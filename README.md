@@ -1,8 +1,8 @@
-# Lanemark
+# LanePulse
 
-<img src="docs/brand/lanemark.svg" width="72" alt="Lanemark logo">
+<img src="docs/brand/lanepulse.svg" width="72" alt="LanePulse logo">
 
-Lanemark (formerly Traffic Analysis Workbench) is offline road-traffic still-image and video analysis for a single Windows workstation, reachable from browsers on the local network. It is a new, independent application.
+LanePulse (formerly Traffic Analysis Workbench) is offline road-traffic still-image and video analysis for a single workstation. It listens only on the local computer by default; network access is an explicit option. It is a new, independent application.
 
 Status: **still images (phases 0 to 4), web screens, object search, video part 1, plates part 1, learning part 1 and hardening part 1 (offline install, backups, GPU choice) are done**. Only the pieces below exist. Plate reads are evaluation only until a country passes its own test set.
 
@@ -33,7 +33,7 @@ Status: **still images (phases 0 to 4), web screens, object search, video part 1
 
 ## Install on the workstation
 
-Build an offline bundle on a connected staging machine with `scripts/make_bundle.py` and install it with `install.ps1`; see `docs/design/deployment.md` and `packaging/INSTALL.txt`.
+Build the offline bundle on a connected staging machine, then wrap it in the single `LanePulse-Setup-<version>.exe` installer; see `docs/design/deployment.md` and `packaging/INSTALL.txt`. The embedded `install.ps1` is the wizard's shared install engine, not a second published installer.
 
 ## Run (development)
 
@@ -46,7 +46,7 @@ python scripts/build_ui.py        # staging machine only (needs Node.js 20+); bu
 pytest
 trafficwb-probe --paths D:\ E:\
 trafficwb-inventory path\to\sample-folder --json inventory.json
-trafficwb-web serve --data D:\twb-data   # open http://127.0.0.1:8765, create the first account there
+trafficwb-web serve --data D:\twb-data   # open http://127.0.0.1:8765; no account or sign-in is needed
 trafficwb-mission create --data D:\twb-data --name "Route 6" --country IL --zone Asia/Jerusalem --source D:\Feeds\R6 --output E:\Exports\R6
 trafficwb-mission scan --data D:\twb-data --mission <id printed by create>
 trafficwb-mission detect --data D:\twb-data --mission <id>
@@ -60,7 +60,7 @@ trafficwb-mission export --data D:\twb-data --mission <id>
 - `docs/design/time-and-schedules.md`: timestamp and schedule rules
 - `docs/design/ingestion.md`: mission and ingestion rules
 - `docs/design/object-search.md`: object search rules
-- `docs/design/web-ui.md`: web server, sign-in and screen rules
+- `docs/design/web-ui.md`: web server and screen rules
 - `docs/design/video.md`: video timing, tracking, events, review and clips
 - `docs/design/plates.md`: plate reading rules; `docs/decisions/plate-models.md`: which plate models and why
 - `docs/design/learning.md`: training data eligibility, dataset versions, evaluation and promotion

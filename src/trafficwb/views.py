@@ -187,12 +187,20 @@ class ViewService:
         return Path(r["path"]) / r["rel_path"]
 
     def image(self, version_id: int) -> np.ndarray:
-        return read_image(self._path(version_id))
+        path = self._path(version_id)
+        if self.m.input_type == "video":
+            from .video import frame_at
+            frame = frame_at(path, 0.0)
+            if frame is None:
+                raise ValueError(f"cannot decode a frame from {path}")
+            return frame.image
+        return read_image(path)
 
     def compute_signatures(self) -> int:
+        integrity = "v.integrity IN ('ok','unverified')" if self.m.input_type == "video" else "v.integrity='ok'"
         rows = self.con.execute(
             "SELECT v.id FROM source_version v LEFT JOIN view_signature s ON s.source_version_id=v.id "
-            "WHERE s.source_version_id IS NULL AND v.superseded_by IS NULL AND v.integrity='ok'").fetchall()
+            f"WHERE s.source_version_id IS NULL AND v.superseded_by IS NULL AND {integrity}").fetchall()
         n = 0
         for r in rows:
             try:

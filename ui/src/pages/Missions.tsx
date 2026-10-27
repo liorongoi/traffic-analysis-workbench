@@ -6,26 +6,44 @@ type M = { id: string; name: string; input_type: string; mode: string; processin
 
 export default function Missions() {
   const [list, setList] = useState<M[] | null>(null);
+  const [loadError, setLoadError] = useState("");
   const [sys, setSys] = useState<any>(null);
+  const [sysError, setSysError] = useState("");
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
-  const loadSys = () => api("/system").then(setSys).catch(() => {});
-  useEffect(() => { api("/missions").then((r) => setList(r.missions)); loadSys(); }, []);
+  const loadSys = () => {
+    setSysError("");
+    return api("/system").then((result) => { setSys(result); return result; }).catch((e) => {
+      setSysError(e instanceof Error ? e.message : "Could not load system status.");
+      return null;
+    });
+  };
+  const loadMissions = () => {
+    setList(null);
+    setLoadError("");
+    api("/missions").then((r) => setList(r.missions)).catch((e) => {
+      setList([]);
+      setLoadError(e instanceof Error ? e.message : "Could not load missions.");
+    });
+    loadSys();
+  };
+  useEffect(() => { loadMissions(); }, []);
   return (
     <div className="page">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <h1>Missions</h1>
-        <a className="btn primary" href="#/new"><button className="primary">New mission</button></a>
+        <a className="btn primary" href="#/new">+ New mission</a>
       </div>
-      {list === null && <p className="muted">Loading…</p>}
-      {list?.length === 0 && <div className="card"><p>No missions yet.</p><p className="muted">A mission reads one source folder of images or videos, analyses them in one mode and exports to one output folder.</p></div>}
+      {list === null && <p className="muted" role="status" aria-live="polite">Loading missions…</p>}
+      {loadError && <div className="card msg err" role="alert"><b>Could not load missions.</b><p>{loadError}</p><button onClick={loadMissions}>Try again</button></div>}
+      {list?.length === 0 && !loadError && <div className="card"><h2>No missions yet</h2><p className="muted">Start by choosing a source folder and what you want to analyse. Your original images and videos stay untouched.</p><a className="btn primary" href="#/new">Create your first mission</a></div>}
       {list && list.length > 0 && (
         <div className="tablewrap">
           <table className="t">
             <thead><tr><th>Name</th><th>Input</th><th>Mode</th><th>Processing</th><th className="num">Files</th><th className="num">Queued</th><th>Activity</th><th>Created (UTC)</th></tr></thead>
             <tbody>
               {list.map((m) => (
-                <tr key={m.id} className="click" onClick={() => (window.location.hash = `#/m/${m.id}`)}>
-                  <td><b className="bidi">{m.name}</b></td>
+                <tr key={m.id}>
+                  <td><a href={`#/m/${m.id}`} aria-label={`Open mission ${m.name}`}><b className="bidi">{m.name}</b></a></td>
                   <td>{m.input_type}</td>
                   <td>{m.mode.replace(/_/g, " ")}</td>
                   <td>{m.processing === "continuous" ? `continuous, monitoring ${m.monitoring ? "on" : "off"}` : "one-time"}</td>
@@ -39,6 +57,7 @@ export default function Missions() {
           </table>
         </div>
       )}
+      {sysError && <div className="card msg err" role="alert"><b>Could not load system status.</b><p>{sysError}</p><button onClick={loadSys}>Try again</button></div>}
       {sys && <System sys={sys} msg={msg} backupNow={async () => {
         setMsg(null);
         try { const r = await post("/admin/backup"); setMsg({ kind: "ok", text: `Backed up to ${r.folder}` }); }
@@ -62,7 +81,7 @@ function System({ sys, msg, backupNow }: { sys: any; msg: any; backupNow: () => 
         {b.last ? <>Last: {b.last.at} ({b.last.detail.folder ?? b.last.detail.error}).</> : "No backup yet."}
         {b.last_error && <span className="msg err">Last scheduled backup failed: {b.last_error}</span>}
       </p>
-      <div className="row"><button disabled={!b.folder} onClick={backupNow}>Back up now</button>{msg && <span className={`msg ${msg.kind}`}>{msg.text}</span>}</div>
+      <div className="row"><button disabled={!b.folder} title={!b.folder ? "Set --backup-dir when starting the server to enable backups." : undefined} onClick={backupNow}>Back up now</button>{msg && <span className={`msg ${msg.kind}`} role={msg.kind === "err" ? "alert" : "status"} aria-live="polite">{msg.text}</span>}</div>
       {sys.audit && sys.audit.length > 0 && <details style={{ marginTop: 8 }}><summary>Audit log</summary>
         <ul className="muted">{sys.audit.map((e: any) => <li key={e.id}><span className="mono">{e.at}</span> {e.author}: {e.action.replace(/_/g, " ")}{e.detail.name ? ` “${e.detail.name}”` : ""}{e.detail.folder ? ` ${e.detail.folder}` : ""}</li>)}</ul></details>}
     </div>

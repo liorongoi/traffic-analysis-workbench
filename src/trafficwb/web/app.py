@@ -2,8 +2,7 @@
 
 Browsers never touch database files (ARC-02); every read and write goes through here.
 Each request opens its own database connections, so request threads never share one.
-Mutating requests need the X-TWB header in addition to the SameSite=Strict session
-cookie, which blocks cross-site form posts.
+Mutating requests need the X-TWB header, which blocks cross-site form posts.
 """
 from __future__ import annotations
 
@@ -11,9 +10,10 @@ import json
 import os
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import time
 import zoneinfo
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -33,10 +33,8 @@ from ..store import (COUNTRY_ZONES, MODES, TARGET_COUNTRIES, DataRoot, Mission, 
                      connect, utcnow, validate)
 from ..timeparse import MalformedName, parse_capture_time
 from ..views import ViewService, read_image
-from .auth import Auth, AuthError, User
 from .jobs import JobManager
 
-COOKIE = "twb_session"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -45,20 +43,15 @@ class ApiError(HTTPException):
         super().__init__(status, {"error": code, "message": message, "action": action})
 
 
+@dataclass
+class User:
+    id: int
+    username: str
+    display_name: str
+    role: str
+
+
 # ---------- request bodies ----------
-
-class LoginBody(BaseModel):
-    username: str
-    password: str
-    take_over: bool = False
-
-
-class AccountBody(BaseModel):
-    username: str
-    display_name: str = ""
-    password: str
-    role: str = "operator"
-
 
 class MissionBody(BaseModel):
     name: str
@@ -73,6 +66,11 @@ class MissionBody(BaseModel):
     export_formats: list[str] = Field(default_factory=lambda: ["xlsx", "csv"])
     latitude: float | None = None
     longitude: float | None = None
+
+
+class TimePreviewBody(BaseModel):
+    iana_zone: str
+    utc: datetime
 
 
 class ObjectBody(BaseModel):
@@ -110,6 +108,8 @@ class CommitBody(BaseModel):
 class ViewBody(BaseModel):
     name: str | None = None
     absorb: int | None = None
+    version_ids: list[int] = Field(default_factory=list, max_length=200)
+    target_view: int | None = None
 
 
 class RegionBody(BaseModel):
@@ -170,6 +170,13 @@ class ClipBody(BaseModel):
     before_s: float | None = None
     after_s: float | None = None
     method: str = "copy"
+
+
+class VideoStartBody(BaseModel):
+    action: str = "set"             # set | clear
+    utc: datetime | None = None
+    precision: str | None = None     # minute | second
+    note: str | None = None
 
 
 class MonitoringBody(BaseModel):
@@ -234,15 +241,12 @@ def default_detector_factory(data_root: Path | str | None = None):
     return YoloxDetector(pack), pack.card
 
 
-def create_app(data_root: Path | str, detector_factory: Callable | None = None, allow_setup_from: tuple = ("127.0.0.1", "::1", "testclient"),
+def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True,
                plate_factory: Callable | None = None, model_loader: Callable | None = None,
-               backup_dir: Path | str | None = None, backup_at: str = "02:00", sign_in: bool = True) -> FastAPI:
-    """sign_in=False: no user name or password on this computer; whoever uses the workstation works as its
-    Windows user. Connections from other computers (--lan) still sign in with an account."""
+               backup_dir: Path | str | None = None, backup_at: str = "02:00") -> FastAPI:
     data_root = Path(data_root)
     DataRoot(data_root)  # create folders and control.db
-    Auth(connect(data_root / "control.db"))
     jobs = JobManager(data_root, detector_factory or (lambda: default_detector_factory(data_root)), monitor_interval,
                       stability_seconds, plate_factory, model_loader)
     previews: dict[str, tuple[float, dict]] = {}
@@ -260,13 +264,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
             backups.stop()
         jobs.shutdown()
 
-    app = FastAPI(title="Lanemark", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="LanePulse", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.jobs = jobs
-
-    @app.exception_handler(AuthError)
-    def _auth_error(_req, exc: AuthError):
-        status = 401 if exc.code in ("not_signed_in", "bad_credentials") else (409 if exc.code == "operator_active" else 400)
-        return JSONResponse({"error": exc.code, "message": exc.message}, status_code=status)
 
     @app.exception_handler(HTTPException)
     def _http_error(_req, exc: HTTPException):
@@ -289,17 +288,12 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
         finally:
             con.close()
 
-    import getpass
-    local_name = getpass.getuser() or "local"
-    local_user = User(0, local_name, local_name, "admin")
-
-    def is_local(request: Request) -> bool:
-        return bool(request.client) and request.client.host in allow_setup_from
-
-    def user(request: Request, con=Depends(control_con)) -> User:
-        if not sign_in and is_local(request):
-            return local_user
-        return Auth(con).user_for(request.cookies.get(COOKIE))
+    def user() -> User:
+        # LanePulse is a local workstation app. Edits remain attributed to its OS user,
+        # without an additional account, password, session timeout, or sign-in screen.
+        import getpass
+        name = getpass.getuser() or "local"
+        return User(0, name, name, "admin")
 
     def mission(mission_id: str, _u: User = Depends(user)) -> Mission:
         try:
@@ -311,48 +305,25 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
     def flt(b: FilterBody | None) -> Filter:
         return Filter(**b.model_dump()) if b else Filter()
 
-    # ---------- session ----------
-    @app.get("/api/session")
-    def session(request: Request, con=Depends(control_con)):
-        a = Auth(con)
-        if not sign_in and is_local(request):
-            return {"signed_in": True, "user": asdict(local_user), "needs_setup": False, "sign_in": False}
+    # A neutral health probe keeps installers and supervisors independent of any user or session API.
+    @app.get("/api/health")
+    def health():
+        return {"status": "ok"}
+
+    @app.post("/api/time-preview")
+    def time_preview(body: TimePreviewBody):
+        if body.utc.tzinfo is None or body.utc.utcoffset() is None:
+            raise ApiError(400, "naive_time", "Enter a UTC date and time with a Z suffix.")
         try:
-            u = a.user_for(request.cookies.get(COOKIE))
-            return {"signed_in": True, "user": asdict(u), "needs_setup": False}
-        except AuthError as exc:
-            return {"signed_in": False, "needs_setup": not a.has_accounts(), "message": exc.message}
-
-    @app.post("/api/setup")
-    def setup(body: AccountBody, request: Request, con=Depends(control_con)):
-        a = Auth(con)
-        if a.has_accounts():
-            raise ApiError(409, "already_set_up", "Accounts already exist. Ask an administrator to add yours.")
-        if request.client and request.client.host not in allow_setup_from:
-            raise ApiError(403, "local_only", "The first account must be created on the workstation itself.")
-        u = a.create_account(body.username, body.display_name, body.password, "admin")
-        return {"user": asdict(u)}
-
-    @app.post("/api/login")
-    def login(body: LoginBody, request: Request, response: Response, con=Depends(control_con)):
-        token, u = Auth(con).login(body.username, body.password, request.client.host if request.client else None,
-                                   body.take_over)
-        response.set_cookie(COOKIE, token, httponly=True, samesite="strict", path="/")
-        return {"user": asdict(u)}
-
-    @app.post("/api/logout")
-    def logout(request: Request, response: Response, con=Depends(control_con)):
-        tok = request.cookies.get(COOKIE)
-        if tok:
-            Auth(con).logout(tok)
-        response.delete_cookie(COOKIE, path="/")
-        return {"ok": True}
-
-    @app.post("/api/accounts")
-    def add_account(body: AccountBody, u: User = Depends(user), con=Depends(control_con)):
-        if u.role != "admin":
-            raise ApiError(403, "admin_only", "Only an administrator can add accounts.")
-        return {"user": asdict(Auth(con).create_account(body.username, body.display_name, body.password, body.role))}
+            local = to_local(body.utc.astimezone(timezone.utc), body.iana_zone)
+        except (ValueError, zoneinfo.ZoneInfoNotFoundError):
+            raise ApiError(400, "bad_zone", f"'{body.iana_zone}' is not a known IANA time zone.") from None
+        offset_minutes = int(local.utc_offset.total_seconds() // 60)
+        sign = "+" if offset_minutes >= 0 else "-"
+        hours, minutes = divmod(abs(offset_minutes), 60)
+        return {"utc": local.utc.isoformat().replace("+00:00", "Z"), "local": local.local.isoformat(),
+                "zone": local.zone, "offset": f"UTC{sign}{hours:02d}:{minutes:02d}", "is_dst": local.is_dst,
+                "abbreviation": local.abbreviation}
 
     # ---------- reference data ----------
     @app.get("/api/reference")
@@ -515,6 +486,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
             "width": sig["width"] if sig else None, "height": sig["height"] if sig else None,
             "view": {"id": view_id, "name": m.con.execute("SELECT name FROM camera_view WHERE id=?", (view_id,)).fetchone()[0]
                      if view_id else None, "regions_applied": vs.regions_applicable(view_id) if view_id else None},
+            "view_assignment_history": vs.history(version_id),
             "condition": dict(cond) if cond else None,
             "processing_state": item["processing_state"] if item else "not_queued",
             "error": item["error_detail"] if item else None,
@@ -619,15 +591,53 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
     @app.post("/api/missions/{mission_id}/views/{view_id}/actions/{action}")
     def view_action(view_id: int, action: str, body: ViewBody, m: Mission = Depends(mission), u: User = Depends(user)):
         vs = ViewService(m)
+        if m.con.execute("SELECT 1 FROM camera_view WHERE id=? AND merged_into IS NULL", (view_id,)).fetchone() is None:
+            raise ApiError(404, "no_view", "That camera view does not exist.")
         if action == "rename" and body.name:
             vs.rename(view_id, body.name, u.username)
         elif action == "confirm":
             vs.confirm(view_id, u.username)
         elif action == "merge" and body.absorb:
             vs.merge(view_id, body.absorb, u.username)
+        elif action == "split":
+            if not body.version_ids:
+                raise ApiError(400, "empty_selection", "Select at least one image to split into a new view.")
+            current = set(vs.members(view_id))
+            if len(set(body.version_ids)) != len(body.version_ids) or not set(body.version_ids) <= current:
+                raise ApiError(400, "invalid_selection", "Every selected image must currently belong to this view.")
+            out = {}
+            _edit(lambda: out.update(view_id=vs.split(view_id, body.version_ids, u.username, body.name)))
+            return out
+        elif action == "reassign":
+            if not body.version_ids:
+                raise ApiError(400, "empty_selection", "Select at least one image to reassign.")
+            if len(set(body.version_ids)) != len(body.version_ids):
+                raise ApiError(400, "invalid_selection", "The selection contains duplicate images.")
+            if body.target_view is not None and m.con.execute(
+                    "SELECT 1 FROM camera_view WHERE id=? AND merged_into IS NULL", (body.target_view,)).fetchone() is None:
+                raise ApiError(404, "no_view", "The destination camera view does not exist.")
+            marks = ",".join("?" for _ in body.version_ids)
+            known = {r[0] for r in m.con.execute(f"SELECT id FROM source_version WHERE id IN ({marks})", body.version_ids)}
+            if known != set(body.version_ids):
+                raise ApiError(404, "no_image", "One or more selected images no longer exist.")
+            _edit(lambda: vs.reassign(body.version_ids, body.target_view, u.username))
         else:
-            raise ApiError(400, "bad_action", "Use rename (with name), confirm, or merge (with absorb).")
+            raise ApiError(400, "bad_action", "Use rename, confirm, merge, split, or reassign.")
         return {"ok": True}
+
+    @app.get("/api/missions/{mission_id}/views/unassigned/members")
+    def unassigned_view_members(m: Mission = Depends(mission), offset: int = Query(0, ge=0),
+                                limit: int = Query(60, ge=1, le=200)):
+        ids = ViewService(m).unassigned()
+        return {"total": len(ids), "offset": offset, "limit": limit, "ids": ids[offset:offset + limit]}
+
+    @app.get("/api/missions/{mission_id}/views/{view_id}/members")
+    def view_members(view_id: int, m: Mission = Depends(mission), offset: int = Query(0, ge=0),
+                     limit: int = Query(60, ge=1, le=200)):
+        if m.con.execute("SELECT 1 FROM camera_view WHERE id=? AND merged_into IS NULL", (view_id,)).fetchone() is None:
+            raise ApiError(404, "no_view", "That camera view does not exist.")
+        ids = ViewService(m).members(view_id)
+        return {"total": len(ids), "offset": offset, "limit": limit, "ids": ids[offset:offset + limit]}
 
     @app.get("/api/missions/{mission_id}/views/{view_id}/bands")
     def bands_get(view_id: int, m: Mission = Depends(mission)):
@@ -1036,6 +1046,11 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
     def recordings(m: Mission = Depends(mission)):
         return {"recordings": _video(m).recordings()}
 
+    @app.put("/api/missions/{mission_id}/recordings/{version_id}/start-time")
+    def recording_start_time(version_id: int, body: VideoStartBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        return _video_call(lambda: _video(m).revise_start(version_id, body.action, u.username, body.utc,
+                                                           body.precision, body.note))
+
     @app.get("/api/missions/{mission_id}/videos/{version_id}")
     def video_file(version_id: int, m: Mission = Depends(mission)):
         path = _video(m).path(_vid(m, version_id))
@@ -1121,7 +1136,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None, 
     else:
         @app.get("/", include_in_schema=False)
         def no_ui():
-            return HTMLResponse("<h1>Lanemark</h1><p>The UI has not been built. "
+            return HTMLResponse("<h1>LanePulse</h1><p>The UI has not been built. "
                                 "Run <code>python scripts/build_ui.py</code> on the staging machine.</p>")
     return app
 
@@ -1130,8 +1145,6 @@ def main(argv=None) -> int:
     from trafficwb import safe_console
     safe_console()
     import argparse
-    import getpass
-
     import uvicorn
 
     ap = argparse.ArgumentParser(prog="trafficwb-web")
@@ -1142,24 +1155,10 @@ def main(argv=None) -> int:
     s.add_argument("--lan", action="store_true", help="accept connections from other computers on the network")
     s.add_argument("--backup-dir", help="folder for the nightly database backup, ideally on another drive")
     s.add_argument("--backup-at", default="02:00", help="local time of the nightly backup (HH:MM)")
-    s.add_argument("--no-sign-in", action="store_true",
-                   help="no user name or password on this computer (other computers still sign in)")
-    a = sub.add_parser("add-account")
-    a.add_argument("--data", required=True)
-    a.add_argument("--username", required=True)
-    a.add_argument("--name", default="")
-    a.add_argument("--role", default="operator", choices=["admin", "operator"])
     args = ap.parse_args(argv)
-    if args.cmd == "add-account":
-        pw = getpass.getpass("Password: ")
-        DataRoot(args.data)
-        u = Auth(connect(Path(args.data) / "control.db")).create_account(args.username, args.name, pw, args.role)
-        print(f"created {u.username} ({u.role})")
-        return 0
     if args.cmd == "serve":
         host = "0.0.0.0" if args.lan else "127.0.0.1"
-        uvicorn.run(create_app(args.data, backup_dir=args.backup_dir, backup_at=args.backup_at,
-                               sign_in=not args.no_sign_in), host=host, port=args.port, log_level="info")
+        uvicorn.run(create_app(args.data, backup_dir=args.backup_dir, backup_at=args.backup_at), host=host, port=args.port, log_level="info")
         return 0
     ap.print_help()
     return 1

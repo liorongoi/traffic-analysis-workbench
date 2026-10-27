@@ -1,7 +1,4 @@
-import { useEffect, useState } from "react";
-import { api, post, setSignedOutHandler, User } from "./api";
-import { go, useRoute } from "./router";
-import Login from "./pages/Login";
+import { useRoute } from "./router";
 import Logo from "./Logo";
 import Missions from "./pages/Missions";
 import Wizard from "./pages/Wizard";
@@ -10,32 +7,7 @@ import Investigate from "./pages/Investigate";
 import RegionEditor from "./pages/RegionEditor";
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [checked, setChecked] = useState(false);
-  const [needsSetup, setNeedsSetup] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [signIn, setSignIn] = useState(true);
   const route = useRoute();
-
-  const refresh = async () => {
-    const s = await api("/session");
-    setUser(s.signed_in ? s.user : null);
-    setNeedsSetup(!!s.needs_setup);
-    setSignIn(s.sign_in !== false);
-    if (!s.signed_in && s.message && s.message !== "Sign in to continue.") setNotice(s.message);
-    setChecked(true);
-  };
-  useEffect(() => {
-    setSignedOutHandler((msg) => {
-      setUser(null);
-      setNotice(msg);
-    });
-    refresh();
-  }, []);
-
-  if (!checked) return <div className="page muted">Loading…</div>;
-  if (!user) return <Login needsSetup={needsSetup} notice={notice} onDone={() => { setNotice(null); refresh(); }} />;
-
   const [section, id, sub, extra] = route;
   let body;
   if (section === "new") body = <Wizard />;
@@ -46,19 +18,16 @@ export default function App() {
 
   return (
     <>
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <header className="top">
-        <a className="brand" href="#/"><Logo /> Lanemark</a>
+        <a className="brand" href="#/" aria-label="LanePulse home">
+          <Logo />
+          <span className="brand-wordmark"><strong>LanePulse</strong><small>OFFLINE TRAFFIC INTELLIGENCE</small></span>
+        </a>
         <span className="spacer" />
-        {signIn ? (
-          <>
-            <span className="muted">Signed in as <b>{user.display_name}</b></span>
-            <button onClick={async () => { await post("/logout"); setUser(null); go("/"); }}>Sign out</button>
-          </>
-        ) : (
-          <span className="muted"><b>{user.display_name}</b></span>
-        )}
+        <nav className="top-nav" aria-label="Main navigation"><a href="#/">Missions</a></nav>
       </header>
-      {body}
+      <main id="main-content">{body}</main>
     </>
   );
 }

@@ -20,16 +20,16 @@ Requirements ENV-01, ENV-04 to ENV-07, ARC-02, ARC-04, HW-01; questions Q20, Q22
 
 ## Install and update (workstation)
 
-`install.ps1`:
+The published Windows installer is one `LanePulse-Setup-<version>.exe`. It runs the bundled `install.ps1` as its shared install engine:
 
 1. checks every file against `SHA256SUMS`;
 2. finds Python (given, the `py` launcher, `python` on the path, or the installer in the bundle, installed for the current user without admin rights);
-3. copies the wheels into a local wheelhouse (`<target>\wheelhouse`, add-only), creates a new environment `<target>\app-<version>` and installs from the local wheelhouse with downloads off. Earlier versions' folders stay;
+3. copies the wheels into a local wheelhouse (`<target>\wheelhouse`, add-only), creates a fresh environment `<target>\app-<version>` (a uniquely named repair environment if that version already exists) and installs from the local wheelhouse with downloads off. Earlier versions' folders stay;
 4. adds model packs that are not yet there (existing versions are never replaced);
 5. chooses the ONNX Runtime build (see above), then runs the disconnected install-to-export check (`offline_smoke.py`): synthetic images, a mission, scan, detection with the installed detector, CSV and Excel export, a verified backup, and the web server's page and session answer. On failure the previous version stays in use;
 6. on an update, backs up the data with the previous version, then writes `start.cmd` for the new version and records `current.txt` and `previous.txt`.
 
-No admin rights, Docker, WSL or Windows service are needed. Running as a service or at sign-in is not built yet (ENV-08: needs your installation permissions).
+No admin rights, Docker, WSL or Windows service are needed. LanePulse itself has no sign-in page or account requirement. Manual startup is the default; `autostart.ps1 -Mode signin` configures Windows to start the server when the Windows user session opens, while `-Mode boot` configures an administrator-created power-on task (ENV-08).
 
 Because wheels collect in the local wheelhouse, an `--app-only` update (a few hundred kB) installs as long as its dependencies were shipped before. If an update needs a new dependency, use a full bundle.
 

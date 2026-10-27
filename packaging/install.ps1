@@ -1,4 +1,4 @@
-# Offline install or update of Lanemark on a Windows workstation.
+# Offline install or update of LanePulse on a Windows workstation.
 # Run from the unpacked bundle folder in PowerShell:
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Target C:\TrafficWorkbench -Data D:\TrafficData -BackupDir E:\TrafficBackups
 # Nothing is downloaded. Each version gets its own folder, so the previous one stays for rollback.
@@ -10,14 +10,13 @@ param(
   [int]$Port = 8765,
   [string]$Ort = "",
   [ValidateSet("signin", "boot", "none")]
-  [string]$AutoStart = "signin",   # signin needs no administrator rights; boot is for an IT administrator
-  [switch]$SkipCheck,
-  [switch]$SignIn                  # ask for a user name and password on this computer too (off: open straight in)
+  [string]$AutoStart = "none",     # Start manually by default; boot is for an IT administrator
+  [switch]$SkipCheck
 )
 $ErrorActionPreference = "Stop"
 $Bundle = $PSScriptRoot
 $Info = Get-Content (Join-Path $Bundle "bundle.json") -Raw | ConvertFrom-Json
-Write-Host "Lanemark $($Info.version) for Python $($Info.python)"
+Write-Host "LanePulse $($Info.version) for Python $($Info.python)"
 
 # 1. Check every file against SHA256SUMS. .NET directly, not Get-FileHash, which is missing when this runs
 #    under Windows PowerShell started from PowerShell 7 (its module path points at the wrong modules).
@@ -53,10 +52,26 @@ if (-not $Python) {
   try { $Python = (& python -c "import sys; print(sys.executable)" 2>$null).Trim() } catch { $Python = "" }
   if (-not (Test-Python $Python)) { $Python = "" }
 }
+if ($Python) {
+  try {
+    $v = (& $Python -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')").Trim()
+    if ($v -ne $Info.python) { $Python = "" }
+  } catch { $Python = "" }
+}
 if (-not $Python) {
-  $installer = Get-ChildItem $Bundle -Filter "python-*.exe" | Select-Object -First 1
+  $existingPython = Join-Path (Join-Path $Target "python$($Info.python -replace '\.','')") "python.exe"
+  if (Test-Path -LiteralPath $existingPython -PathType Leaf) {
+    try {
+      $v = (& $existingPython -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')").Trim()
+      if ($v -eq $Info.python) { $Python = $existingPython }
+    } catch { }
+  }
+}
+if (-not $Python) {
+  $installer = Get-ChildItem $Bundle -Filter "python-*.exe" | Sort-Object Name | Select-Object -First 1
   if (-not $installer) { throw "Python $($Info.python) is not installed and no python-*.exe is in the bundle." }
-  $pyArgs = @("/quiet", "InstallAllUsers=0", "PrependPath=0", "Include_test=0", "Include_launcher=0", "Shortcuts=0", "TargetDir=$pyDir")
+  # Quoted so a TargetDir with spaces stays one argument; Start-Process -Wait waits for the GUI installer.
+  $pyArgs = @("/quiet", "InstallAllUsers=0", "PrependPath=0", "Include_test=0", "Include_launcher=0", "Shortcuts=0", "TargetDir=`"$pyDir`"")
   Write-Host "Installing Python $($Info.python) for this user into $pyDir..."
   Start-Process -Wait -FilePath $installer.FullName -ArgumentList $pyArgs
   if (-not (Test-Python (Join-Path $pyDir "python.exe"))) {
@@ -66,24 +81,22 @@ if (-not $Python) {
     Start-Process -Wait -FilePath $installer.FullName -ArgumentList $pyArgs
   }
   $Python = Join-Path $pyDir "python.exe"
-  if (-not (Test-Python $Python)) { throw "Python $($Info.python) could not be installed into $pyDir." }
+  if (-not (Test-Python $Python)) { throw "Python $($Info.python) could not be installed into $pyDir. Check the Python installer log and retry." }
   # Kept so the uninstaller can remove this Python cleanly.
   Copy-Item $installer.FullName (Join-Path $Target "python-installer.exe") -Force
 }
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) { throw "Python was not found at '$Python'. Install Python $($Info.python) or repair the bundled runtime." }
 Write-Host "Python: $Python"
 
 # 3. Wheels collect in one local wheelhouse, so a small update bundle (application only) finds the runtime there.
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
 $Venv = Join-Path $Target "app-$($Info.version)"
+# Keep the previous build intact for rollback. A same-version repair gets a fresh folder so reinstalling
+# the same setup executable does not collide with the existing environment.
 if (Test-Path $Venv) {
-  # Same version again (a repair, or a folder left by an uninstall): stop the server and replace it.
-  Write-Host "$Venv exists already; replacing it."
-  $auto = Join-Path $Target "autostart.ps1"
-  if (Test-Path $auto) {
-    try { & $auto -Mode remove -Target $Target -Port $Port | Out-Host } catch { & $auto -Mode restart -Target $Target -Port $Port | Out-Host }
-  }
-  Remove-Item -Recurse -Force $Venv -ErrorAction SilentlyContinue
-  if (Test-Path $Venv) { throw "$Venv is in use and could not be replaced. Restart Windows and run Setup again." }
+  $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+  $Venv = Join-Path $Target "app-$($Info.version)-repair-$stamp"
+  if (Test-Path $Venv) { throw "A repair folder already exists at $Venv. Wait a moment and retry." }
 }
 $Wheels = Join-Path $Target "wheelhouse"
 New-Item -ItemType Directory -Force -Path $Wheels | Out-Null
@@ -162,10 +175,9 @@ if ($BackupDir -and (Test-Path (Join-Path $Data "control.db"))) {
 }
 $backupArgs = ""
 if ($BackupDir) { $backupArgs = "--backup-dir `"$BackupDir`"" }
-if (-not $SignIn) { $backupArgs = "--no-sign-in $backupArgs" }
 @"
 @echo off
-rem Starts Lanemark $($Info.version). Open http://127.0.0.1:$Port in a browser.
+rem Starts LanePulse $($Info.version). Open http://127.0.0.1:$Port in a browser.
 set TWB_MODELS=$Models
 "$Venv\Scripts\trafficwb-web.exe" serve --data "$Data" --port $Port $backupArgs
 "@ | Set-Content -Encoding ASCII (Join-Path $Target "start.cmd")
@@ -192,16 +204,10 @@ pause
 "@ | Set-Content -Encoding ASCII (Join-Path $Target "import-model.cmd")
 $training = Join-Path $Bundle "TRAINING.txt"
 if (Test-Path $training) { Copy-Item $training (Join-Path $Target "TRAINING.txt") -Force }
-@"
-@echo off
-rem Lists the Lanemark accounts and sets a new password for one of them. Works only on this computer.
-"$Venv\Scripts\trafficwb-admin.exe" reset-password --data "$Data"
-pause
-"@ | Set-Content -Encoding ASCII (Join-Path $Target "reset-password.cmd")
 Write-Host "Installed $($Info.version)."
 
-# 7. Automatic start. The task and shortcut keep their old names so existing installs are found.
-# An update restarts a server that already starts by itself, so it runs the new version.
+# 7. Existing automatic start. The task and shortcut keep their old names so existing installs are found.
+# New installs start manually; an existing automatic start is preserved across updates.
 $auto = Join-Path $Target "autostart.ps1"
 $hasLink = Test-Path (Join-Path ([Environment]::GetFolderPath("Startup")) "Traffic Analysis Workbench.lnk")
 $hasTask = [bool](Get-ScheduledTask -TaskName "Traffic Analysis Workbench" -ErrorAction SilentlyContinue)
@@ -213,4 +219,4 @@ if ($hasLink -or $hasTask) {
 } else {
   Write-Host "Start with $Target\start.cmd."
 }
-Write-Host "Open http://127.0.0.1:$Port in a browser. The first account is created there, on this computer."
+Write-Host "Open http://127.0.0.1:$Port in a browser. No account or app sign-in is required."

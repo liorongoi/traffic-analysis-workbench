@@ -218,6 +218,12 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
               Local <span className="mono">{item.local?.time.replace("T", " ")}</span> {item.local?.abbreviation} {item.local?.dst ? "(summer time)" : ""}<br />
               {item.zone} · view <b>{item.view.name ?? "none"}</b>{item.view.regions_applied === false ? " (regions not applied)" : ""} · {item.condition?.condition ?? ""}
             </div>
+            {item.view_assignment_history.length > 0 && <details style={{ marginTop: 6 }}>
+              <summary>View assignment history</summary>
+              <ul className="muted">{item.view_assignment_history.map((entry, i) => <li key={`${entry.created_at}-${i}`}>
+                {entry.created_at} · {entry.method} · {entry.view_id == null ? "unassigned" : `view ${entry.view_id}`} · {entry.author} · {entry.reason}
+              </li>)}</ul>
+            </details>}
             <div className="row" style={{ marginTop: 8 }}>
               <span className={`badge ${item.review_status}`}>{REVIEW_LABEL[item.review_status]}</span>
               <span className="badge">{item.processing_state}</span>

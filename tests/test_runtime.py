@@ -41,4 +41,25 @@ def test_gpu_offered_but_unusable_falls_back(monkeypatch):
 
     monkeypatch.setattr(ort, "InferenceSession", fake)
     s, info = make_session(_weights(), "auto", available=[CUDA, CPU])
-    assert info.used == [CPU] and "failed to start" in info.notes[-1]
+    assert info.used == [CPU] and "failed session" in info.notes[-1]
+
+
+def test_gpu_session_that_fails_first_inference_falls_back(monkeypatch):
+    import onnxruntime as ort
+    real = ort.InferenceSession
+
+    class BrokenGpu:
+        def get_inputs(self):
+            return [type("Input", (), {"name": "input", "shape": [1, 3, 640, 640], "type": "tensor(float)"})()]
+
+        def run(self, *_args):
+            raise RuntimeError("provider failed during inference")
+
+    def fake(path, opts=None, providers=None):
+        if providers and providers[0] == CUDA:
+            return BrokenGpu()
+        return real(path, opts, providers=providers)
+
+    monkeypatch.setattr(ort, "InferenceSession", fake)
+    _, info = make_session(_weights(), "auto", available=[CUDA, CPU])
+    assert info.used == [CPU] and "warm-up inference" in info.notes[-1]
