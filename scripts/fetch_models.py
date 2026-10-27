@@ -4,6 +4,9 @@ Run on a connected machine, then copy the resulting models/ folder to the
 offline workstation. The application itself never downloads anything.
 
     python scripts/fetch_models.py [--dest models]
+
+It also fetches the YOLOX-s training starting weights (yolox_s.pth) into training_weights/; the installers put
+them next to their own Python (share/lanepulse), so training on the learning page never goes online.
 """
 from __future__ import annotations
 
@@ -64,6 +67,14 @@ PACKS = [
 ]
 
 
+# Starting weights for training the vehicle detector (PyTorch checkpoint of the same released YOLOX-s).
+TRAINING_WEIGHTS = {
+    "url": "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.pth",
+    "sha256": "f55ded7181e1b0c13285c56e7790b8f0e8f8db590fe4edb37f0b7f345c913a30",
+    "file": "yolox_s.pth",
+}
+
+
 def fetch(url: str, dest: Path) -> None:
     with urllib.request.urlopen(url, timeout=120) as r, open(dest, "wb") as f:
         while chunk := r.read(1 << 20):
@@ -73,6 +84,7 @@ def fetch(url: str, dest: Path) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dest", default=str(Path(__file__).resolve().parents[1] / "models"))
+    ap.add_argument("--training-weights", default=str(Path(__file__).resolve().parents[1] / "training_weights"))
     a = ap.parse_args(argv)
     for p in PACKS:
         d = Path(a.dest) / p["name"] / p["version"]
@@ -90,6 +102,18 @@ def main(argv=None) -> int:
         card["weights"] = "model.onnx"
         (d / "model.json").write_text(json.dumps(card, indent=2), encoding="utf-8")
         print(f"ok {d}")
+    t = Path(a.training_weights)
+    t.mkdir(parents=True, exist_ok=True)
+    w = t / TRAINING_WEIGHTS["file"]
+    if not w.exists() or hashlib.sha256(w.read_bytes()).hexdigest() != TRAINING_WEIGHTS["sha256"]:
+        print(f"downloading {TRAINING_WEIGHTS['url']}")
+        fetch(TRAINING_WEIGHTS["url"], w)
+    got = hashlib.sha256(w.read_bytes()).hexdigest()
+    if got != TRAINING_WEIGHTS["sha256"]:
+        w.unlink()
+        print(f"error: checksum mismatch for {w.name}: {got}", file=sys.stderr)
+        return 1
+    print(f"ok {w}")
     return 0
 
 

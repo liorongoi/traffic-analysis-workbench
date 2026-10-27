@@ -10,14 +10,19 @@ PYTGZ="$1"; OUT="$2"
 VER="$(python3 -c 'import re,sys; print(re.search(r"__version__ = \"(.+?)\"", open(sys.argv[1]).read()).group(1))' "$ROOT/src/trafficwb/__init__.py")"
 NAME="lanepulse-server-$VER-linux-x86_64"
 PKG="$OUT/$NAME"
-rm -rf "$PKG"; mkdir -p "$PKG/runtime" "$PKG/wheels"
+rm -rf "$PKG"; mkdir -p "$PKG/runtime"
 tar -xzf "$PYTGZ" -C "$PKG/runtime"
 PY="$PKG/runtime/python/bin/python3"
-"$PY" -m pip install --quiet --no-cache-dir --disable-pip-version-check "$ROOT[probe,cuda]"
+# PyTorch for training on the learning page, built for CUDA 12.8 (the same CUDA 12 family as ONNX Runtime's
+# libraries), then the app. Training uses the server's GPU; nothing is fetched on the server.
+"$PY" -m pip install --quiet --no-cache-dir --disable-pip-version-check torch --index-url https://download.pytorch.org/whl/cu128
+"$PY" -m pip install --quiet --no-cache-dir --disable-pip-version-check "$ROOT[probe,cuda,train]"
+"$PY" -c 'import torch, onnxruntime; assert torch.version.cuda, "PyTorch without CUDA"; print("torch", torch.__version__, "CUDA", torch.version.cuda, "onnxruntime", onnxruntime.__version__)'
+test -f "$ROOT/training_weights/yolox_s.pth" || { echo "The training starting weights are missing: run scripts/fetch_models.py first." >&2; exit 1; }
+mkdir -p "$PKG/runtime/python/share/lanepulse"
+cp "$ROOT/training_weights/yolox_s.pth" "$PKG/runtime/python/share/lanepulse/"
 test -f "$("$PY" -c 'import trafficwb.web, pathlib; print(pathlib.Path(trafficwb.web.__file__).parent / "static" / "index.html")')" \
   || { echo "The web screens are missing: run scripts/build_ui.py first." >&2; exit 1; }
-# The application wheel, for setting up training on this server (lanepulse setup-training).
-"$PY" -m pip wheel --quiet --no-deps -w "$PKG/wheels" "$ROOT"
 mkdir -p "$PKG/models"
 for card in "$ROOT"/models/*/*/model.json; do
   d="$(dirname "$card")"; rel="${d#"$ROOT/models/"}"

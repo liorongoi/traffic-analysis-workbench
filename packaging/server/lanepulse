@@ -55,22 +55,14 @@ case "$cmd" in
     echo "Now running $(basename "$prev"). If the update changed the database format, restore the backup taken before it"
     echo "(see INSTALL.txt, Roll back).";;
   setup-training)
-    need_root setup-training
-    T="$BASE/training"
-    echo "Setting up training with PyTorch for NVIDIA GPUs (needs the internet, a few GB)..."
-    "$PY" -m venv "$T"
-    "$T/bin/python" -m pip install --quiet --upgrade pip
-    "$T/bin/python" -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cu128
-    "$T/bin/python" -m pip install --quiet "$(ls "$BASE"/current/wheels/trafficwb-*.whl | tail -1)[train]"
-    "$T/bin/trafficwb-train" device
-    echo "Ready: sudo lanepulse train <exported dataset folder> [--epochs 40]";;
+    echo "Training is built in: open a mission's learning page and press Train. It runs on this server's GPU."
+    "$PY" -c 'from trafficwb.train import pick_device, describe_device; print("Training would use:", describe_device(pick_device()))';;
   train)
     need_root train
-    [ -x "$BASE/training/bin/trafficwb-train" ] || { echo "Set up training first: sudo lanepulse setup-training"; exit 1; }
-    [ -n "${1:-}" ] || { echo "Usage: sudo lanepulse train <exported dataset folder> [--epochs 40]"; exit 2; }
+    [ -n "${1:-}" ] || { echo "Usage: sudo lanepulse train <exported dataset folder> [--epochs 40]  (or press Train on the learning page)"; exit 2; }
     DS="$1"; shift
     OUT="$(dirname "$MODELS")/trained"; mkdir -p "$OUT"
-    LANEPULSE_CACHE="$BASE/training/cache" "$BASE/training/bin/trafficwb-train" run --dataset "$DS" --out "$OUT" "$@"
+    "$PY" -c 'import sys; from trafficwb.train import main; sys.exit(main(sys.argv[1:]))' run --dataset "$DS" --out "$OUT" "$@"
     echo "To use it: sudo lanepulse import-model $(ls -t "$OUT"/*.zip | head -1)";;
   version) basename "$(readlink -f "$BASE/current")" | sed 's/^lanepulse-//';;
   *)
@@ -84,8 +76,8 @@ sudo lanepulse backup [--with-evidence]
 sudo lanepulse speed-check [--images FOLDER]
 sudo lanepulse firewall          allow only $ALLOW to port $PORT (and SSH), turn the firewall on
 sudo lanepulse rollback          go back to the previous version
-sudo lanepulse setup-training    install PyTorch to train the vehicle detector on this server's GPU (internet)
-sudo lanepulse train FOLDER      train on an exported dataset
+lanepulse setup-training         which GPU training on the learning page uses (PyTorch is built in)
+sudo lanepulse train FOLDER      train on an exported dataset from the command line
 Settings: $CONF (then sudo lanepulse restart)
 HELP
     ;;

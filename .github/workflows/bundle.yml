@@ -6,10 +6,14 @@ on:
   push:
     branches: [main, "claude/**", "codex/**"]
   workflow_dispatch:
+# actions: read lets each job fetch the previous build from main, to test updating over it.
+permissions:
+  contents: read
+  actions: read
 jobs:
   bundle:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,7 +26,15 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - run: python scripts/build_ui.py
       - run: python scripts/fetch_models.py
-      - run: python scripts/make_bundle.py --platform win_amd64 --python 3.12 --ort auto --out dist
+      - name: LanePulse's own Python (python-build-standalone, checked against its SHA-256; never registered in Windows)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://github.com/astral-sh/python-build-standalone/releases/download/20250409/cpython-3.12.10+20250409-x86_64-pc-windows-msvc-install_only.tar.gz" -OutFile "$env:RUNNER_TEMP\pbs.tar.gz"
+          $h = (Get-FileHash "$env:RUNNER_TEMP\pbs.tar.gz" -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne "5ac66ae49a2104efeba985c1dc1cb40987757ee81cc6c7f218d10b801f3276ed") { throw "python-build-standalone checksum mismatch: $h" }
+          New-Item -ItemType Directory "$env:RUNNER_TEMP\pbs" | Out-Null
+          tar -xzf "$env:RUNNER_TEMP\pbs.tar.gz" -C "$env:RUNNER_TEMP\pbs"
+      - run: python scripts/make_bundle.py --platform win_amd64 --python 3.12 --ort auto --out dist --with-training --python-runtime "${{ runner.temp }}\pbs\python"
       - name: Add the Python installer (per-user install, no administrator rights)
         id: py
         shell: pwsh
@@ -39,7 +51,16 @@ jobs:
           & $iscc "/DBundleDir=$PWD\dist\${{ steps.py.outputs.folder }}" "/DAppVersion=${{ steps.py.outputs.version }}" "/DOutDir=$PWD\setup" packaging\setup.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           Get-ChildItem setup | Format-Table Name, Length
-      - name: Try the wizard (install, repair, uninstall, install again, uninstall) with the bundled Python
+      - name: The previous build from main, to test updating over it
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $run = gh run list -R "${{ github.repository }}" --workflow bundle.yml --branch main --status success -L 1 --json databaseId -q ".[0].databaseId"
+          if (-not $run) { throw "No earlier successful build on main to update from." }
+          gh run download $run -R "${{ github.repository }}" -p "LanePulse-Setup-*" -D prev
+          Get-ChildItem -Recurse prev | Format-Table FullName, Length
+      - name: Try the wizard (update over the previous build, repair, uninstall, install again, uninstall)
         shell: pwsh
         env:
           PIP_NO_INDEX: "1"
@@ -71,10 +92,16 @@ jobs:
             $env:TWB_MODELS = "$dir\models"
             & "$((Get-Content "$dir\current.txt" -Raw).Trim())\Scripts\trafficwb-models.exe" list | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "$($what): trafficwb-models does not run" }
-            if (-not (Test-Path "$dir\python312\python.exe")) { throw "$what did not use the bundled Python" }
+            $venv = (Get-Content "$dir\current.txt" -Raw).Trim()
+            if (-not (Select-String -Path "$venv\pyvenv.cfg" -Pattern "python-3\.12\.10" -Quiet)) { Get-Content "$venv\pyvenv.cfg"; throw "$what did not use LanePulse's own Python" }
+            if (-not (Test-Path "$venv\share\lanepulse\yolox_s.pth")) { throw "$what did not install the training starting weights" }
+            & "$venv\Scripts\python.exe" -c "from trafficwb import training_env as t; s = t.status(wait=True); print(s); assert s['state'] == 'ready' and s['coco_weights'], s"
+            if ($LASTEXITCODE -ne 0) { throw "$($what): training is not ready" }
             # Manual start, as the Start menu entry does it.
             Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$dir\start.cmd`"" -WorkingDirectory $dir -WindowStyle Hidden
             Wait-Server $what
+            $h = $wc.DownloadString("http://127.0.0.1:8765/api/health") | ConvertFrom-Json
+            if ($h.version -ne "${{ steps.py.outputs.version }}" -or $h.install -ne (Split-Path -Leaf $venv)) { throw "$($what): the running server is $($h.version) $($h.install), not the installed build" }
             Write-Host "$what OK: server answering, Start menu entry and bundled Python in place."
             return (Get-Content "$dir\current.txt" -Raw).Trim()
           }
@@ -82,14 +109,25 @@ jobs:
             # The uninstaller hands over to a copy of itself in TEMP and exits; wait for the files to go.
             $u = Start-Process -PassThru "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
             $null = $u.WaitForExit(5 * 60 * 1000)
-            for ($i = 0; $i -lt 90 -and ((Test-Path "$dir\current.txt") -or (Test-Path "$dir\python312")); $i++) { Start-Sleep -Seconds 2 }
+            for ($i = 0; $i -lt 90 -and ((Test-Path "$dir\current.txt") -or (Get-ChildItem "$dir\python*" -ErrorAction SilentlyContinue)); $i++) { Start-Sleep -Seconds 2 }
             if (Test-Path "$dir\current.txt") { throw "uninstall left the program" }
-            if (Test-Path "$dir\python312") { throw "uninstall left the bundled Python" }
+            if (Get-ChildItem "$dir\python*" -ErrorAction SilentlyContinue) { throw "uninstall left a bundled Python" }
             if (Get-ChildItem "$dir\app-*" -ErrorAction SilentlyContinue) { throw "uninstall left an app folder" }
             if (-not (Test-Path "$env:USERPROFILE\TrafficData")) { throw "uninstall removed the data folder" }
             Write-Host "Uninstall removed the program and kept the data."
           }
-          $first = Install-Wizard "install"
+          # The previous build from main, started the way its icon starts it, then this build over it while it runs.
+          $old = (Get-ChildItem prev -Recurse -Filter *.exe | Select-Object -First 1).FullName
+          $p = Start-Process -PassThru $old -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup-previous.log"
+          if (-not $p.WaitForExit(20 * 60 * 1000) -or $p.ExitCode -ne 0) { Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 30; throw "the previous build did not install" }
+          Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$dir\start.cmd`"" -WorkingDirectory $dir -WindowStyle Hidden
+          Wait-Server "previous build"
+          $before = $wc.DownloadString("http://127.0.0.1:8765/api/health")
+          Write-Host "Previous build running: $before"
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\TrafficData\keep-me" | Out-Null
+          $first = Install-Wizard "update"
+          if (-not (Test-Path "$env:USERPROFILE\TrafficData\keep-me")) { throw "the update lost the data folder" }
+          if (-not (Get-Content "$dir\previous.txt" -ErrorAction SilentlyContinue)) { throw "the update did not keep the previous version for rollback" }
           & "$dir\autostart.ps1" -Mode remove      # stop the server before running Setup again
           $second = Install-Wizard "repair"         # the same version again: a fresh folder, the old one kept
           if ($second -eq $first -or -not (Test-Path $first)) { throw "same-version repair replaced or lost the prior build" }
@@ -139,7 +177,7 @@ jobs:
     # LanePulse.app for Apple-silicon Macs, with its own Python, packaged as a .dmg; then tried: offline check,
     # start from the app, stop, start again.
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -162,6 +200,38 @@ jobs:
         run: |
           packaging/mac/build_app.sh "$RUNNER_TEMP/python.tar.gz" dist-mac
           echo "version=$(cat dist-mac/LanePulse.app/Contents/Resources/version.txt)" >> "$GITHUB_OUTPUT"
+      - name: The previous build from main, to test updating over it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run="$(gh run list -R "${{ github.repository }}" --workflow bundle.yml --branch main --status success -L 1 --json databaseId -q '.[0].databaseId')"
+          test -n "$run" || { echo "No earlier successful build on main to update from."; exit 1; }
+          gh run download "$run" -R "${{ github.repository }}" -p "LanePulse-Mac-*" -D prev
+          ls -lR prev
+      - name: Update over the previous build while it runs, then check training is ready
+        env:
+          LANEPULSE_HOME: ${{ runner.temp }}/LanePulse
+          LANEPULSE_NO_BROWSER: "1"
+          PIP_NO_INDEX: "1"
+        run: |
+          set -x
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/old" "$(ls prev/*/*.dmg | head -1)"
+          cp -R "$RUNNER_TEMP/old/LanePulse.app" "$RUNNER_TEMP/LanePulse.app"
+          hdiutil detach "$RUNNER_TEMP/old"
+          "$RUNNER_TEMP/LanePulse.app/Contents/MacOS/LanePulse"
+          curl -fsS http://127.0.0.1:8765/api/health; echo
+          # As Finder does when you drag the new app over the old one.
+          rm -rf "$RUNNER_TEMP/LanePulse.app"
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/new" dist-mac/LanePulse-*.dmg
+          cp -R "$RUNNER_TEMP/new/LanePulse.app" "$RUNNER_TEMP/LanePulse.app"
+          hdiutil detach "$RUNNER_TEMP/new"
+          "$RUNNER_TEMP/LanePulse.app/Contents/MacOS/LanePulse"
+          v="$(curl -fsS http://127.0.0.1:8765/api/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
+          test "$v" = "${{ steps.mac.outputs.version }}" || { echo "the old server is still running ($v)"; exit 1; }
+          PY="$RUNNER_TEMP/LanePulse.app/Contents/Resources/python/bin/python3"
+          "$PY" -c "from trafficwb import training_env as t; s = t.status(wait=True); print(s); assert s['state'] == 'ready' and s['coco_weights'], s"
+          "$LANEPULSE_HOME/Stop LanePulse.command"
+          rm -rf "$RUNNER_TEMP/LanePulse.app" "$LANEPULSE_HOME"
       - name: Try the app from the .dmg (offline check, start, stop, start)
         env:
           LANEPULSE_HOME: ${{ runner.temp }}/LanePulse
@@ -200,8 +270,12 @@ jobs:
     # tried on a clean Ubuntu runner (no GPU, so it runs on the CPU): install, reach it over the network, restart,
     # repair, roll back, uninstall keeping the data, install again.
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 70
     steps:
+      - name: Make room (PyTorch with CUDA is several GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -226,9 +300,25 @@ jobs:
           rm -rf "dist-server/$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           df -h .
-      - name: Try it (install, network, restart, repair, rollback, uninstall, install again)
+      - name: The previous build from main, to test updating over it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run="$(gh run list -R "${{ github.repository }}" --workflow bundle.yml --branch main --status success -L 1 --json databaseId -q '.[0].databaseId')"
+          test -n "$run" || { echo "No earlier successful build on main to update from."; exit 1; }
+          gh run download "$run" -R "${{ github.repository }}" -p "lanepulse-server-*" -D "$RUNNER_TEMP/prev"
+          ls -lR "$RUNNER_TEMP/prev"
+      - name: Try it (install the previous build, update over it, network, restart, repair, rollback, uninstall, install again)
         run: |
           set -x
+          IP="$(hostname -I | awk '{print $1}')"
+          up() { for i in $(seq 90); do curl -fsS -m 2 "http://$IP:8765/api/health" && return 0; sleep 1; done; sudo tail -40 /opt/lanepulse/logs/server.log; return 1; }
+          mkdir -p "$RUNNER_TEMP/old" && tar -xzf "$(ls "$RUNNER_TEMP"/prev/*/*.tar.gz | head -1)" -C "$RUNNER_TEMP/old"
+          rm -rf "$RUNNER_TEMP/prev"
+          sudo "$(ls -d "$RUNNER_TEMP"/old/*/ | head -1)install-server.sh" --allow-from any --skip-check
+          up
+          rm -rf "$RUNNER_TEMP/old"
+          sudo mkdir -p /srv/lanepulse/data/keep-me
           mkdir -p "$RUNNER_TEMP/pkg" && tar -xzf "dist-server/${{ steps.srv.outputs.name }}.tar.gz" -C "$RUNNER_TEMP/pkg"
           P="$RUNNER_TEMP/pkg/${{ steps.srv.outputs.name }}"
           cat "$P/server.json"
@@ -236,6 +326,11 @@ jobs:
           up() { for i in $(seq 90); do curl -fsS -m 2 "http://$IP:8765/api/health" && return 0; sleep 1; done; sudo tail -40 /opt/lanepulse/logs/server.log; return 1; }
           sudo "$P/install-server.sh" --allow-from any
           up
+          v="$(curl -fsS "http://$IP:8765/api/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
+          test "$v" = "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$P/server.json")"
+          test -d /srv/lanepulse/data/keep-me
+          sudo -u lanepulse /opt/lanepulse/current/python/bin/python3 -c "from trafficwb import training_env as t; s = t.status(wait=True); print(s); assert s['state'] == 'ready' and s['coco_weights'], s"
+          lanepulse setup-training
           curl -fsS "http://$IP:8765/" | grep -qi "<html"
           lanepulse status
           lanepulse models

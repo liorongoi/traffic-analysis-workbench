@@ -69,7 +69,7 @@ DEST="$BASE/lanepulse-$VER"
 if [ -e "$DEST" ]; then DEST="$BASE/lanepulse-$VER-repair-$(date +%Y%m%d-%H%M%S)"; echo "This version is installed already; repairing into $DEST."; fi
 mkdir -p "$DEST"
 cp -a "$PKG/runtime/python" "$DEST/python"
-cp -a "$PKG/server.json" "$PKG/wheels" "$PKG/INSTALL.txt" "$PKG/TRAINING.txt" "$PKG/offline_smoke.py" "$DEST/"
+cp -a "$PKG/server.json" "$PKG/INSTALL.txt" "$PKG/TRAINING.txt" "$PKG/offline_smoke.py" "$DEST/"
 chmod -R a+rX "$DEST"
 for card in "$PKG"/models/*/*/model.json; do
   d="$(dirname "$card")"; rel="${d#"$PKG/models/"}"

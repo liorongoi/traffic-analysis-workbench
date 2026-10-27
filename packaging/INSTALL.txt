@@ -5,12 +5,16 @@ This folder contains everything the workstation needs. Nothing is downloaded dur
 
 Easiest: the setup wizard (Windows)
 - Run the single LanePulse-Setup-<version>.exe and choose the install, data and backup folders.
-  No administrator rights are needed, Python is included, nothing is downloaded. No account or sign-in is needed.
+  No administrator rights are needed, nothing is downloaded, and no account or sign-in is needed. LanePulse brings
+  its own Python (in <install folder>\python-<version>) and PyTorch for training; it never uses or changes another
+  Python on the computer.
 - It runs the same install.ps1 as below, so the checks, the backup before an update and the automatic start
   are the same. The installer's own output is in <install folder>\logs\install.log.
 - Open LanePulse with the LanePulse icon on the desktop or in the Start menu. It starts the server if it is not
   running and opens http://127.0.0.1:8765 in the browser.
-- Running Setup again repairs the install (same version, the previous build is kept) or updates it; the data is kept.
+- Running Setup again repairs the install (same version, the previous build is kept) or updates it; the data and
+  models are kept. A LanePulse server still running the previous version is stopped and the new one started.
+- Training the vehicle detector: a mission's Learning tab, "Train a new vehicle detector here" (see TRAINING.txt).
 - Uninstall from Windows Settings > Apps. That removes the program and the Python it installed; the data and
   backup folders are kept, so installing again picks up the same missions.
 

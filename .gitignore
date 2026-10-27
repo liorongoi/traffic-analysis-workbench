@@ -11,3 +11,4 @@ dist/
 
 # built UI (scripts/build_ui.py)
 /src/trafficwb/web/static/
+/training_weights/

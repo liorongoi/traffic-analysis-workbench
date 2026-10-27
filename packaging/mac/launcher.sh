@@ -6,6 +6,7 @@ APP="$(cd "$(dirname "$0")/../.." && pwd)"
 RES="$APP/Contents/Resources"
 PY="$RES/python/bin/python3"
 VER="$(cat "$RES/version.txt")"
+BUILD="$(cat "$RES/build.txt" 2>/dev/null || echo "$VER")"
 HOME_DIR="${LANEPULSE_HOME:-$HOME/LanePulse}"
 DATA="$HOME_DIR/data"; MODELS="$HOME_DIR/models"; BACKUPS="$HOME_DIR/backups"; LOGS="$HOME_DIR/logs"
 PORT="${LANEPULSE_PORT:-8765}"
@@ -27,7 +28,7 @@ done
 echo "$APP" > "$HOME_DIR/.app-path"
 
 # After an update, stop the older version this app started, so the new one runs.
-if up && [ -f "$HOME_DIR/.server.pid" ] && [ "$(cat "$HOME_DIR/.server-version" 2>/dev/null)" != "$VER" ]; then
+if up && [ -f "$HOME_DIR/.server.pid" ] && [ "$(cat "$HOME_DIR/.server-version" 2>/dev/null)" != "$BUILD" ]; then
   kill "$(cat "$HOME_DIR/.server.pid")" 2>/dev/null || true
   for _ in $(seq 30); do up || break; sleep 1; done
 fi
@@ -41,7 +42,7 @@ if ! up; then
     serve --data "$DATA" --port "$PORT" --backup-dir "$BACKUPS" >>"$LOGS/server.log" 2>&1 < /dev/null &
   echo $! > "$HOME_DIR/.server.pid"
   disown 2>/dev/null || true
-  echo "$VER" > "$HOME_DIR/.server-version"
+  echo "$BUILD" > "$HOME_DIR/.server-version"
   for _ in $(seq 90); do up && break; sleep 1; done
   up || fail "LanePulse did not start. Details are in $LOGS/server.log"
 fi

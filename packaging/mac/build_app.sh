@@ -11,7 +11,11 @@ APP="$OUT/LanePulse.app"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 tar -xzf "$PYTGZ" -C "$APP/Contents/Resources"
 PY="$APP/Contents/Resources/python/bin/python3"
-"$PY" -m pip install --quiet --no-cache-dir --disable-pip-version-check "$ROOT[probe,cpu]"
+# PyTorch for training on the learning page (the macOS build uses the Apple GPU through Metal).
+"$PY" -m pip install --quiet --no-cache-dir --disable-pip-version-check "$ROOT[probe,cpu,train]"
+test -f "$ROOT/training_weights/yolox_s.pth" || { echo "The training starting weights are missing: run scripts/fetch_models.py first." >&2; exit 1; }
+mkdir -p "$APP/Contents/Resources/python/share/lanepulse"
+cp "$ROOT/training_weights/yolox_s.pth" "$APP/Contents/Resources/python/share/lanepulse/"
 test -f "$("$PY" -c 'import trafficwb.web, pathlib; print(pathlib.Path(trafficwb.web.__file__).parent / "static" / "index.html")')" \
   || { echo "The web screens are missing: run scripts/build_ui.py first." >&2; exit 1; }
 for card in "$ROOT"/models/*/*/model.json; do
@@ -20,6 +24,8 @@ for card in "$ROOT"/models/*/*/model.json; do
   cp -R "$d" "$APP/Contents/Resources/models/$rel"
 done
 echo "$VER" > "$APP/Contents/Resources/version.txt"
+# Tells this build from an older one of the same version, so opening it replaces an older server still running.
+echo "$VER-$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA:-local}" | cut -c1-48 > "$APP/Contents/Resources/build.txt"
 cp "$ROOT/packaging/mac/launcher.sh" "$APP/Contents/MacOS/LanePulse"
 chmod +x "$APP/Contents/MacOS/LanePulse"
 cp "$ROOT/packaging/mac/lanepulse.icns" "$APP/Contents/Resources/lanepulse.icns"

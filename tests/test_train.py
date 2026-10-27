@@ -133,3 +133,108 @@ def test_import_refuses_damaged_or_conflicting_packs(tmp_path):
                   seed=5, log=lambda *_: None)
     with pytest.raises(ModelPackError, match="different weights"):
         import_pack(z2, root)
+
+
+def test_train_on_the_learning_page(tmp_path, monkeypatch):
+    """Train button: export, train on this computer, add the new model, evaluate it; nothing is promoted."""
+    import os
+    import time
+    from datetime import datetime, timedelta, timezone
+
+    import cv2
+    from fastapi.testclient import TestClient
+
+    from test_web_api import H1, Fake, direct_access, mission, scene, wait_job
+    from trafficwb import training_env
+    from trafficwb.web.app import create_app
+
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    old = datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp()
+    for k in range(6):                               # one image a day: six groups, so every split gets some
+        t = (datetime(2026, 10, 10, 9, tzinfo=timezone.utc) + timedelta(days=k)).strftime("%Y%m%dT%H%M%SZ")
+        p = src / f"CAM7_{t}.jpg"
+        cv2.imwrite(str(p), scene(k), [cv2.IMWRITE_JPEG_QUALITY, 97])
+        os.utime(p, (old, old))
+    # Stand-in starting weights (random YOLOX-s), installed next to Python as the installers do.
+    share = tmp_path / "share"
+    share.mkdir()
+    torch.manual_seed(0)
+    torch.save({"model": YOLOX("s", 80).state_dict()}, share / "yolox_s.pth")
+    monkeypatch.setenv("LANEPULSE_CACHE", str(share))
+    monkeypatch.setitem(tr.COCO_WEIGHTS, "sha256", tr._sha256(share / "yolox_s.pth"))
+    models_root = tmp_path / "models"
+    models_root.mkdir()
+    monkeypatch.setenv("TWB_MODELS", str(models_root))
+    training_env.reset()
+
+    app = create_app(tmp_path / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
+                     start_monitoring=False, stability_seconds=0)
+    c = direct_access(TestClient(app))
+    mid = mission(c, src, out)
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    wait_job(c, mid)
+    for r in c.post(f"/api/missions/{mid}/results", json={}, headers=H1).json()["rows"]:
+        c.post(f"/api/missions/{mid}/items/{r['source_version_id']}/decision/approve", headers=H1)
+    ds = c.post(f"/api/missions/{mid}/learning/datasets", json={"name": "v1", "ratios": [0.5, 0.17, 0.33]},
+                headers=H1).json()
+    sp = ds["stats"]["splits"]
+    assert sp["train"]["images"] and sp["test"]["images"], sp
+
+    for _ in range(300):                             # PyTorch is checked in the background
+        s = c.get(f"/api/missions/{mid}/learning").json()["training"]
+        if s["state"] != "checking":
+            break
+        time.sleep(0.1)
+    assert s["state"] == "ready" and s["coco_weights"] and s["device_type"] in ("cpu", "cuda", "mps"), s
+
+    bad = c.post(f"/api/missions/{mid}/learning/train", json={"dataset_id": ds["id"], "start_from": "nope/1"}, headers=H1)
+    assert bad.status_code == 400
+    j = c.post(f"/api/missions/{mid}/learning/train", json={"dataset_id": ds["id"], "epochs": 1, "start_from": "coco"},
+               headers=H1).json()
+    assert j["kind"] == "train"
+    # Training has its own slot: the mission can still process meanwhile.
+    assert c.get(f"/api/missions/{mid}").json()["job"]["kind"] != "train"
+    again = c.post(f"/api/missions/{mid}/learning/train", json={"dataset_id": ds["id"], "epochs": 1}, headers=H1)
+    assert again.status_code in (200, 409)
+    t0 = time.time()
+    while time.time() - t0 < 600:
+        job = c.get(f"/api/missions/{mid}/learning").json()["training"]["job"]
+        if job["state"] not in ("running", "paused"):
+            break
+        time.sleep(0.5)
+    assert job["state"] == "finished", job
+    res = job["result"]
+    assert res["model"]["name"] == "yolox-s-tuned" and res["history"] and res["device"]
+    assert "evaluation" in res, res
+    s = c.get(f"/api/missions/{mid}/learning").json()
+    new = [md for md in s["models"] if md["name"] == "yolox-s-tuned"]
+    assert len(new) == 1 and new[0]["trainable"] and new[0]["trained_on"] == "v1"
+    assert s["production"] is None                   # added and evaluated, never promoted by itself
+    ev = c.get(f"/api/missions/{mid}/learning/evaluations/{res['evaluation']}").json()
+    assert ev["state"] == "completed" and ev["model"]["model"]["version"] == res["model"]["version"]
+    assert not (out / ".training").exists() or not any((out / ".training").iterdir())   # temporary copy removed
+
+
+def test_training_can_be_stopped(tmp_path):
+    from trafficwb.process import RunControl
+    ds = _dataset(tmp_path, n=4)
+    ctl = RunControl()
+    steps = []
+
+    def progress(step, total):
+        steps.append(step)
+        ctl.cancel()
+
+    with pytest.raises(tr.TrainCancelled):
+        tr.train(ds, tmp_path / "out", init="none", epochs=3, batch=2, workers=0, device="cpu", size="nano",
+                 version="t1", log=lambda *_: None, progress=progress, control=ctl)
+    assert steps == [1] and not (tmp_path / "out" / "yolox-s-tuned-t1.zip").exists()
+
+
+def test_no_download_when_offline(tmp_path, monkeypatch):
+    monkeypatch.setenv("LANEPULSE_CACHE", str(tmp_path))
+    monkeypatch.setattr(tr, "shipped_weights_dirs", lambda: [tmp_path])
+    with pytest.raises(tr.TrainError, match="not installed"):
+        tr.coco_weights(download=False)

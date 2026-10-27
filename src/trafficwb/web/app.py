@@ -213,6 +213,12 @@ class EvaluateBody(BaseModel):
     iou: float = Field(0.5, ge=0.1, le=0.95)
 
 
+class TrainBody(BaseModel):
+    dataset_id: int
+    epochs: int = Field(20, ge=1, le=300)
+    start_from: str | None = None     # "coco" (the released YOLOX-s) or "<name>/<version>" of a trained model
+
+
 class PromoteBody(BaseModel):
     task: str = "vehicle_detection"
     name: str
@@ -308,7 +314,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     # A neutral health probe keeps installers and supervisors independent of any user or session API.
     @app.get("/api/health")
     def health():
-        return {"status": "ok"}
+        import sys
+        # The installed build this server runs from (its environment folder), so a launcher can tell an old one.
+        return {"status": "ok", "version": __version__, "install": Path(sys.prefix).name}
 
     @app.post("/api/time-preview")
     def time_preview(body: TimePreviewBody):
@@ -951,9 +959,13 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         default = [x for x in models.installed("vehicle_detection") if x["name"] == "yolox-s"]
         in_use = ({"name": prod["name"], "version": prod["version"]} if prod else
                   ({"name": "yolox-s", "version": default[-1]["version"]} if default else None))
+        from .. import training_env
+        tj = jobs.training_busy()
         return {"in_use": in_use, "eligibility": ls.eligibility(), "datasets": ls.datasets(), "evaluations": ls.evaluations(),
                 "adapters": ADAPTERS, "models": models.installed("vehicle_detection"),
-                "production": prod, "history": reg.history("vehicle_detection")[:20]}
+                "production": prod, "history": reg.history("vehicle_detection")[:20],
+                "training": {**training_env.status(), "busy_mission": tj.mission_id if tj else None,
+                             "job": (lambda j: j.snapshot() if j else None)(jobs.training_job(m.id))}}
 
     @app.post("/api/missions/{mission_id}/learning/datasets")
     def dataset_create(body: DatasetBody, m: Mission = Depends(mission), u: User = Depends(user)):
@@ -984,6 +996,62 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "model", "Give both the model name and version, or neither for the model in use.")
         return jobs.start(m.id, kind="evaluate", dataset_id=body.dataset_id, split=body.split, name=body.name,
                           version=body.version, iou=body.iou, author=u.username).snapshot()
+
+    @app.post("/api/missions/{mission_id}/learning/train")
+    def train_start(body: TrainBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Fine-tune the vehicle detector here, on this computer's GPU or CPU. The new model is added, not promoted."""
+        from .. import models, training_env
+        ls = _learn(m)
+        ds = _learn_call(lambda: ls.dataset(body.dataset_id))
+        if ds["leakage"]:
+            raise ApiError(400, "learning", "This dataset version has leakage problems; it cannot be used for training.")
+        if not ((ds.get("stats") or {}).get("splits") or {}).get("train", {}).get("images"):
+            raise ApiError(400, "learning", "This dataset version has no training images.")
+        env = training_env.status(wait=True)
+        if env["state"] != "ready":
+            raise ApiError(400, "no_training", env.get("reason") or "Training is not available here.")
+        start = body.start_from or "coco"
+        if start == "coco":
+            if not env.get("coco_weights"):
+                raise ApiError(400, "no_weights", "The YOLOX-s starting weights are not installed here. Install the current "
+                               "LanePulse version, or start from a model trained earlier.")
+            init = "coco"
+        else:
+            name, _, version = start.partition("/")
+            try:
+                pack = models.find(name, version or None)
+            except models.ModelPackError as exc:
+                raise ApiError(400, "model", str(exc)) from None
+            if not (pack.card.get("torch_weights") and (pack.path / pack.card["torch_weights"]).is_file()):
+                raise ApiError(400, "model", f"{name} {pack.version} cannot be trained further (no PyTorch weights). "
+                               "Start from the released YOLOX-s instead.")
+            init = str(pack.path)
+        other = jobs.training_busy()
+        if other:
+            raise ApiError(409, "training_busy", "A model is already training on this computer"
+                           + ("" if other.mission_id == m.id else " (for another mission)") + ". Wait for it to finish.")
+        work = Path(m.config().output_dir) / ".training"
+        try:
+            work.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            work = None
+        return jobs.start(m.id, kind="train", dataset_id=body.dataset_id, epochs=body.epochs, init=init,
+                          start_from=start, author=u.username, work_dir=str(work) if work else None).snapshot()
+
+    @app.post("/api/missions/{mission_id}/learning/train/{action}")
+    def train_control(action: str, m: Mission = Depends(mission)):
+        job = jobs.training_job(m.id)
+        if job is None or job.state not in ("running", "paused"):
+            raise ApiError(409, "no_job", "Nothing is training for this mission.")
+        if action == "pause":
+            job.control.pause()
+        elif action == "resume":
+            job.control.resume()
+        elif action == "cancel":
+            job.control.cancel()
+        else:
+            raise ApiError(400, "bad_action", "Use pause, resume or cancel.")
+        return job.snapshot()
 
     @app.get("/api/missions/{mission_id}/learning/evaluations/{evaluation_id}")
     def evaluation_get(evaluation_id: int, m: Mission = Depends(mission)):

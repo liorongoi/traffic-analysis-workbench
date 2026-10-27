@@ -67,7 +67,7 @@ def client(tmp_path, delay=0.0):
 
 
 def direct_access(c):
-    assert c.get("/api/health").json() == {"status": "ok"}
+    assert c.get("/api/health").json()["status"] == "ok"
     return c
 
 

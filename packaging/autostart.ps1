@@ -140,9 +140,33 @@ function Stop-Server {
 }
 
 if ($Mode -eq "status") { Show-Status; exit 0 }
+function Get-RunningInstall([int]$p) {
+  # Which installed build the running server comes from ("" for a version from before this was reported).
+  try {
+    $wc = New-Object System.Net.WebClient
+    $wc.Proxy = $null
+    $h = $wc.DownloadString("http://127.0.0.1:$p/api/health") | ConvertFrom-Json
+    if ($h.install) { return [string]$h.install } else { return "" }
+  } catch { return $null }
+}
+
 if ($Mode -eq "open") {
   $p = Get-Port
   $url = "http://127.0.0.1:$p"
+  # After an update, a server still running the previous version is replaced by the installed one.
+  $cur = Join-Path $Target "current.txt"
+  if ((Test-Server $p) -and (Test-Path $cur)) {
+    $want = Split-Path -Leaf ((Get-Content $cur -Raw).Trim())
+    $have = Get-RunningInstall $p
+    if ($null -ne $have -and $have -ne $want) {
+      Stop-Server
+      for ($i = 0; $i -lt 30 -and (Test-Server $p); $i++) { Start-Sleep -Seconds 1 }
+      if ((Test-Path $Link) -or (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
+        # The automatic start brings it back by itself within about 10 s, with the installed version.
+        for ($i = 0; $i -lt 60 -and -not (Test-Server $p); $i++) { Start-Sleep -Seconds 1 }
+      }
+    }
+  }
   if (-not (Test-Server $p)) {
     # Not running: start it the way it is set up to start, otherwise with start.cmd, and wait for it.
     if (Test-Path $Link) { Start-Process -FilePath $Link -WindowStyle Minimized }
