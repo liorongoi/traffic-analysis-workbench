@@ -153,8 +153,10 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
 
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Training</h2>
-        <p className="muted">No algorithm trains in this version. Export a dataset version and train on a GPU machine; bring the new model
-          back as a model pack, evaluate it here and promote it if it is better. Planned adapters:</p>
+        <p className="muted">Training runs on another computer, never here: an NVIDIA GPU or an Apple-silicon Mac. Export a dataset
+          version, train it there with <code>trafficwb-train</code>, copy the .zip it writes back and drag it onto
+          import-model.cmd in the install folder. Then evaluate the new model here and promote it if it is better.
+          Instructions: TRAINING.txt in the install folder.</p>
         <table className="t"><tbody>{s.adapters.map((a: any) => <tr key={a.algorithm}><td>{a.algorithm}</td><td>{a.adapter}</td><td>{a.status.replace("_", " ")}</td></tr>)}</tbody></table>
       </div>
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}

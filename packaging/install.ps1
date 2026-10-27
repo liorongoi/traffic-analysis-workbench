@@ -182,6 +182,18 @@ pause
 "@ | Set-Content -Encoding ASCII (Join-Path $Target "speed-check.cmd")
 @"
 @echo off
+rem Adds a trained model (.zip from trafficwb-train) to this installation. Drag the .zip onto this file.
+rem It does not change the model in use: evaluate it on the learning page and promote it there.
+set PACK=%~1
+if "%PACK%"=="" set /p PACK=Model .zip file: 
+set TWB_MODELS=$Models
+"$Venv\Scripts\trafficwb-models.exe" import "%PACK%"
+pause
+"@ | Set-Content -Encoding ASCII (Join-Path $Target "import-model.cmd")
+$training = Join-Path $Bundle "TRAINING.txt"
+if (Test-Path $training) { Copy-Item $training (Join-Path $Target "TRAINING.txt") -Force }
+@"
+@echo off
 rem Lists the Lanemark accounts and sets a new password for one of them. Works only on this computer.
 "$Venv\Scripts\trafficwb-admin.exe" reset-password --data "$Data"
 pause

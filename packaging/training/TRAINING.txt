@@ -1,0 +1,43 @@
+LanePulse: training the vehicle detector on your own images
+===========================================================
+
+Training runs on a separate computer, never on the workstation: an Apple-silicon Mac (M1 to M5) or a computer with
+an NVIDIA GPU. It produces one .zip file (a "model pack"). You copy it to any LanePulse installation, test it there,
+and switch to it only if it is better. The model in use never changes by itself.
+
+How many images
+- About 200 to 500 well-reviewed images is a good first round. Each image usually holds many vehicles.
+- Variety matters more than count: every camera view, day and dusk, rain, busy and quiet times.
+- Fully reviewed images teach the most: the model also learns where there is no vehicle. In partly reviewed images
+  only the boxes you corrected are used, and areas nobody checked are never treated as "no vehicle".
+
+1. Export a dataset (on the workstation)
+- On the learning page, create a dataset version and press Export. It writes a folder under the mission's output
+  folder, datasets\<name>. Copy that folder to the training computer (USB or share).
+
+2. Set up the training computer (once, needs the internet there)
+- Get the training kit (LanePulse-training-kit-<version>.zip, next to the setup wizard in the GitHub build) and unzip it.
+- Mac: open Terminal in the kit folder and run   bash setup-training-mac.sh
+  It installs Python (if needed), PyTorch with Apple GPU support and LanePulse training into ~/LanePulse-training.
+- Windows with NVIDIA: in the kit folder run
+     powershell -ExecutionPolicy Bypass -File setup-training-windows.ps1
+  It installs into %USERPROFILE%\LanePulse-training. The NVIDIA driver must be version 570 or later.
+- No administrator rights are needed on either. The last line says which processor training will use.
+
+3. Train
+- Mac: double-click "Train LanePulse.command" in ~/LanePulse-training and drag the dataset folder into the window.
+- Windows: drag the dataset folder onto train.cmd in %USERPROFILE%\LanePulse-training.
+- The first run fetches the released YOLOX-s starting weights (about 70 MB, checked against their published
+  checksum). Each round ("epoch") prints a training and a validation loss; the round with the lowest validation
+  loss is kept. On an M5 Mac expect very roughly a minute or two per round for 500 images.
+- The result is LanePulse-training\models\yolox-s-tuned-<date>-<time>.zip.
+- By hand: trafficwb-train run --dataset <folder> --out <folder> [--epochs 40] [--init coco | <earlier .zip>]
+  --init with an earlier .zip continues training from that model with more images.
+
+4. Use the model on any installation
+- Copy the .zip to the LanePulse computer and drag it onto import-model.cmd in the install folder
+  (By hand: <install folder>\app-<version>\Scripts\trafficwb-models.exe import <file.zip>)
+  The pack is checked file by file; an installed version is never replaced.
+- On the learning page, evaluate the new model on the dataset's test images, compare it with the model in use,
+  and promote it if it is better. Roll back there at any time.
+- The same .zip can be imported on every installation; each one evaluates and promotes it separately.

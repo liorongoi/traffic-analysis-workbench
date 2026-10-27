@@ -108,6 +108,7 @@ def main(argv=None) -> int:
     for f in ("install.ps1", "autostart.ps1", "install.sh", "INSTALL.txt"):
         shutil.copy2(ROOT / "packaging" / f, tmp / f)
     shutil.copy2(ROOT / "scripts" / "offline_smoke.py", tmp / "offline_smoke.py")
+    shutil.copy2(ROOT / "packaging" / "training" / "TRAINING.txt", tmp / "TRAINING.txt")
     # The CUDA libraries shipped decide the oldest NVIDIA driver that can run them (Windows minimums from NVIDIA).
     cuda_major = next((int(p.name.split("-")[1].split(".")[0]) for p in wh.glob("nvidia_cuda_runtime*-*.whl")), None)
     cuda_min_driver = {11: "452.39", 12: "528.33", 13: "580.0"}.get(cuda_major) if cuda_major else None

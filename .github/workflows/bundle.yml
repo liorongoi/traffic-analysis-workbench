@@ -67,6 +67,10 @@ jobs:
             if (-not (Test-Path $link)) { throw "$what did not set up the sign-in start" }
             if (-not (Test-Path $menu)) { throw "$what did not add the Start menu entry" }
             if (-not (Test-Path "$dir\reset-password.cmd")) { throw "$what did not write reset-password.cmd" }
+            if (-not (Test-Path "$dir\import-model.cmd")) { throw "$what did not write import-model.cmd" }
+            $env:TWB_MODELS = "$dir\models"
+            & "$((Get-Content "$dir\current.txt" -Raw).Trim())\Scripts\trafficwb-models.exe" list
+            if ($LASTEXITCODE -ne 0) { throw "$($what): trafficwb-models does not run" }
             if (-not (Test-Path "$dir\python312\python.exe")) { throw "$what did not use the bundled Python" }
             & "$((Get-Content "$dir\current.txt" -Raw).Trim())\Scripts\trafficwb-admin.exe" accounts --data "$env:USERPROFILE\TrafficData"
             Write-Host "$what OK: server answering, shortcuts and bundled Python in place."
@@ -98,4 +102,36 @@ jobs:
           name: Lanemark-Setup-${{ steps.py.outputs.version }}
           path: setup/*.exe
           compression-level: 0
+          retention-days: 90
+
+  training-kit:
+    # The kit for training the vehicle detector on an Apple-silicon Mac or an NVIDIA computer: the LanePulse wheel,
+    # the two setup scripts and TRAINING.txt. Tried here on an Apple-silicon runner (its GPU is not available to
+    # virtual machines, so training runs on the CPU in this check).
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Make the kit
+        id: kit
+        run: |
+          python -m pip wheel . --no-deps -w kit
+          cp packaging/training/TRAINING.txt packaging/training/setup-training-mac.sh packaging/training/setup-training-windows.ps1 kit/
+          echo "version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')" >> "$GITHUB_OUTPUT"
+          ls -l kit
+      - name: Set up training from the kit, as on a Mac
+        env:
+          LANEPULSE_TRAINING: ${{ runner.temp }}/LanePulse-training
+        run: |
+          bash kit/setup-training-mac.sh
+          test -x "$LANEPULSE_TRAINING/Train LanePulse.command"
+          "$LANEPULSE_TRAINING/venv/bin/python" -m pip install --quiet pytest
+          "$LANEPULSE_TRAINING/venv/bin/python" -m pytest -q tests/test_train.py -p no:cacheprovider
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LanePulse-training-kit-${{ steps.kit.outputs.version }}
+          path: kit
           retention-days: 90

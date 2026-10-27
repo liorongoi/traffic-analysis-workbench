@@ -83,6 +83,7 @@ Type: files; Name: "{app}\*.cmd"
 Type: files; Name: "{app}\current.txt"
 Type: files; Name: "{app}\previous.txt"
 Type: files; Name: "{app}\autostart.ps1"
+Type: files; Name: "{app}\TRAINING.txt"
 Type: files; Name: "{app}\python-installer.exe"
 Type: dirifempty; Name: "{app}"
 
