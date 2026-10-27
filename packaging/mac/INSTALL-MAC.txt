@@ -1,0 +1,36 @@
+LanePulse for Mac (Apple silicon: M1 to M5)
+==========================================
+
+Install
+1. Drag LanePulse onto the Applications folder in this window.
+2. Open Applications and double-click LanePulse. It opens in your browser at http://127.0.0.1:8765.
+   No administrator rights are needed, Python is included, and nothing is downloaded.
+
+The first time, macOS may say it cannot check LanePulse for malicious software, because the app is not signed with
+an Apple developer account. To allow it, once:
+- Open System Settings > Privacy & Security, scroll down to "LanePulse was blocked" and press Open Anyway.
+- Or, in Terminal:   xattr -dr com.apple.quarantine /Applications/LanePulse.app
+
+Where things are
+- Everything LanePulse keeps is in the LanePulse folder in your home folder:
+    data      missions, results and evidence
+    backups   the nightly backup (02:00)
+    models    the detector models, including trained ones you import
+    logs      server.log
+- Your source images and videos are only read, never moved.
+
+Use
+- Opening LanePulse starts it if it is not running, then opens the browser. It keeps running in the background
+  after you close the browser tab; open LanePulse again to get back to it.
+- To stop it: double-click "Stop LanePulse.command" in the LanePulse folder. Processing stops at once and continues
+  from where it stopped the next time.
+- To add a trained model: double-click "Import Model.command" in the LanePulse folder and drag the .zip into the
+  window. Then evaluate it on the learning page and promote it if it is better.
+
+Update
+- Drag the new LanePulse onto Applications and replace the old one, then open it. Your data is kept; an older
+  version that is still running is stopped and the new one starts.
+
+Remove
+- Stop LanePulse, then drag it from Applications to the Bin. The LanePulse folder with your data stays until you
+  delete it yourself.
