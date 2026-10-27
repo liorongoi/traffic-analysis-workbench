@@ -43,7 +43,7 @@ Write-Host "Installing PyTorch ($(if ($hasNvidia) { 'NVIDIA CUDA' } else { 'CPU 
 & $VPy -m pip install --quiet torch --index-url $index
 if ($LASTEXITCODE -ne 0) { throw "PyTorch could not be installed." }
 $Whl = Get-ChildItem $Kit -Filter "trafficwb-*.whl" | Sort-Object Name | Select-Object -Last 1
-& $VPy -m pip install --quiet --upgrade "$($Whl.FullName)[train]"
+& $VPy -m pip install --quiet --upgrade "$($Whl.FullName)[train,cpu]"
 if ($LASTEXITCODE -ne 0) { throw "LanePulse training could not be installed." }
 $ErrorActionPreference = "Stop"
 

@@ -43,7 +43,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: python -m pip install -e ".[dev,train]"
+      - run: python -m pip install -e ".[dev,train,cpu]"
       - run: python -m pytest -v tests/test_train.py
 
   offline-bundle:

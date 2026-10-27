@@ -4,7 +4,8 @@ LanePulse for Mac (Apple silicon: M1 to M5)
 Install
 1. Drag LanePulse onto the Applications folder in this window.
 2. Open Applications and double-click LanePulse. It opens in your browser at http://127.0.0.1:8765.
-   No administrator rights are needed, Python is included, and nothing is downloaded.
+   No administrator rights are needed. Python and PyTorch are included inside the app, nothing is downloaded, and no
+   other Python on the Mac is used or changed.
 
 The first time, macOS may say it cannot check LanePulse for malicious software, because the app is not signed with
 an Apple developer account. To allow it, once:
@@ -24,12 +25,14 @@ Use
   after you close the browser tab; open LanePulse again to get back to it.
 - To stop it: double-click "Stop LanePulse.command" in the LanePulse folder. Processing stops at once and continues
   from where it stopped the next time.
-- To add a trained model: double-click "Import Model.command" in the LanePulse folder and drag the .zip into the
+- To train the vehicle detector on your own reviewed images: a mission's Learning tab, "Train a new vehicle detector
+  here". It uses the Mac's GPU. Details: TRAINING.txt in the LanePulse source, or the learning page itself.
+- To add a model trained elsewhere: double-click "Import Model.command" in the LanePulse folder and drag the .zip into the
   window. Then evaluate it on the learning page and promote it if it is better.
 
 Update
-- Drag the new LanePulse onto Applications and replace the old one, then open it. Your data is kept; an older
-  version that is still running is stopped and the new one starts.
+- Drag the new LanePulse onto Applications and replace the old one, then open it. Your data and models are kept; an
+  older version that is still running is stopped and the new one starts. The .dmg can be deleted afterwards.
 
 Remove
 - Stop LanePulse, then drag it from Applications to the Bin. The LanePulse folder with your data stays until you

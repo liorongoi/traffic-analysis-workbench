@@ -50,6 +50,12 @@ def main(argv=None) -> int:
                     help="ONNX Runtime build: cpu, cuda (NVIDIA, about 1.2 GB more), directml (Windows GPUs), or auto "
                          "(both CUDA and DirectML; the installer picks CUDA when the NVIDIA driver is new enough)")
     ap.add_argument("--python-installer", help="official python-3.x.y-amd64.exe to ship for workstations without Python")
+    ap.add_argument("--python-runtime", help="an unpacked python-build-standalone 'python' folder for the target: shipped as "
+                    "python-runtime and used by install.ps1 instead of any Python on the workstation")
+    ap.add_argument("--python-runtime-version", default="3.12.10", help="the exact version of --python-runtime")
+    ap.add_argument("--with-training", action="store_true",
+                    help="also ship PyTorch (CPU build on Windows) and the YOLOX-s starting weights, so the learning page "
+                         "can train the vehicle detector on the workstation itself")
     ap.add_argument("--zip", action="store_true", help="also write a .zip of the bundle")
     ap.add_argument("--app-only", action="store_true",
                     help="small update: only the application wheel, for a workstation that already has the runtime and models")
@@ -81,6 +87,8 @@ def main(argv=None) -> int:
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     extras = meta["optional-dependencies"]
     reqs = meta["dependencies"] + extras["probe"] + (extras["cuda"] + extras["directml"] if a.ort == "auto" else extras[a.ort])
+    if a.with_training:
+        reqs += extras["train"]
     if (a.platform or sys.platform).startswith("win"):
         reqs.append("colorama")       # pulled in on Windows only, which pip cannot see when downloading from elsewhere
     if not a.app_only:
@@ -103,6 +111,23 @@ def main(argv=None) -> int:
         print("No vehicle detector pack found: run scripts/fetch_models.py first.", file=sys.stderr)
         return 1
 
+    if a.with_training and not a.app_only:
+        w = ROOT / "training_weights" / "yolox_s.pth"
+        if not w.is_file():
+            print("The training starting weights are missing: run scripts/fetch_models.py first.", file=sys.stderr)
+            return 1
+        (tmp / "training").mkdir()
+        shutil.copy2(w, tmp / "training" / w.name)
+    runtime_version = None
+    if a.python_runtime and not a.app_only:
+        src = Path(a.python_runtime)
+        exe = src / ("python.exe" if (a.platform or sys.platform).startswith("win") else "bin/python3")
+        if not exe.is_file():
+            print(f"{src} is not an unpacked python-build-standalone 'python' folder.", file=sys.stderr)
+            return 1
+        # debug symbols are not needed and are a third of the size
+        shutil.copytree(src, tmp / "python-runtime", ignore=shutil.ignore_patterns("*.pdb", "__pycache__"))
+        runtime_version = a.python_runtime_version
     if a.python_installer:
         shutil.copy2(a.python_installer, tmp / Path(a.python_installer).name)
     for f in ("install.ps1", "autostart.ps1", "install.sh", "INSTALL.txt"):
@@ -112,7 +137,7 @@ def main(argv=None) -> int:
     # The CUDA libraries shipped decide the oldest NVIDIA driver that can run them (Windows minimums from NVIDIA).
     cuda_major = next((int(p.name.split("-")[1].split(".")[0]) for p in wh.glob("nvidia_cuda_runtime*-*.whl")), None)
     cuda_min_driver = {11: "452.39", 12: "528.33", 13: "580.0"}.get(cuda_major) if cuda_major else None
-    manifest = {"cuda_major": cuda_major, "cuda_min_driver": cuda_min_driver, "version": __version__, "python": pyver, "platform": plat, "ort": a.ort, "app_only": a.app_only, "models": packs,
+    manifest = {"training": a.with_training, "python_runtime": runtime_version, "cuda_major": cuda_major, "cuda_min_driver": cuda_min_driver, "version": __version__, "python": pyver, "platform": plat, "ort": a.ort, "app_only": a.app_only, "models": packs,
                 "requirements": reqs, "wheels": sorted(p.name for p in wh.iterdir())}
     (tmp / "bundle.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     lines = [f"{sha(p)}  {p.relative_to(tmp).as_posix()}" for p in sorted(tmp.rglob("*"))

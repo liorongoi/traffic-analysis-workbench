@@ -5,7 +5,8 @@ The full guide, with every step from a new server to daily use, is the PDF "Lane
 This is the short version.
 
 Needs: Ubuntu Server 22.04 or 24.04, an NVIDIA GPU with its driver (see server.json for the oldest driver
-version), and sudo rights. Nothing is downloaded during install.
+version), and sudo rights. Nothing is downloaded during install. LanePulse brings its own Python and never uses or
+changes the system Python.
 
 Install or update
     tar -xzf lanepulse-server-<version>-linux-x86_64.tar.gz
@@ -20,6 +21,8 @@ Open it from other computers:  http://<server address>:8765
   There is no password. Anyone who can reach the port can see and change every mission, so keep the server on a
   trusted network and turn the firewall on: sudo lanepulse firewall
 
+Training:   on a mission's Learning tab, "Train a new vehicle detector here". It runs on the GPU; PyTorch is
+            included, so nothing needs setting up or downloading.
 Daily use:  lanepulse help    (status, logs, restart, import-model, backup, speed-check, rollback, train)
 Settings:   /etc/lanepulse/lanepulse.conf, then sudo lanepulse restart
 Remove:     sudo /opt/lanepulse/uninstall-server.sh   (data, backups and models are kept)

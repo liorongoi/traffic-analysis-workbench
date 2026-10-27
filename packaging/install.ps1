@@ -35,13 +35,34 @@ Get-Content (Join-Path $Bundle "SHA256SUMS") | ForEach-Object {
 }
 Write-Host "Bundle checksums verified."
 
-# 2. Python: given, the py launcher, or the installer shipped in the bundle.
+# 2. Python. A bundle with its own Python (python-runtime: a complete, unregistered copy) always uses that one,
+#    copied into the install folder once per Python version, so no other Python on this computer is used or
+#    changed, and an update never alters the Python the previous version runs on. Older bundles: the given Python,
+#    the py launcher, or the installer shipped in the bundle.
 # A Python found must really be there: after an uninstall Windows can still list one whose folder is gone.
 $pyDir = Join-Path $Target "python$($Info.python -replace '\.','')"
 function Test-Python([string]$exe) {
   if (-not $exe -or -not (Test-Path $exe)) { return $false }
   try { $v = (& $exe -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')" 2>$null).Trim() } catch { return $false }
   return $v -eq $Info.python
+}
+$Runtime = Join-Path $Bundle "python-runtime"
+if (-not $Python -and $Info.python_runtime -and (Test-Path (Join-Path $Runtime "python.exe"))) {
+  $own = Join-Path $Target "python-$($Info.python_runtime)"
+  if (-not (Test-Path (Join-Path $own "python.exe"))) {
+    Write-Host "Copying LanePulse's own Python $($Info.python_runtime) into $own..."
+    New-Item -ItemType Directory -Force -Path $Target | Out-Null
+    $part = "$own.partial"
+    if (Test-Path $part) { Remove-Item -Recurse -Force $part }
+    Copy-Item -Recurse $Runtime $part
+    Rename-Item $part (Split-Path $own -Leaf)
+  }
+  $Python = Join-Path $own "python.exe"
+  if (-not (Test-Python $Python)) {
+    # E.g. blocked by a program policy on this computer: fall back to the Python installer below.
+    Write-Host "LanePulse's own Python in $own does not start here; using the Python installer instead."
+    $Python = ""
+  }
 }
 if (-not $Python -and (Test-Python (Join-Path $pyDir "python.exe"))) { $Python = Join-Path $pyDir "python.exe" }
 if (-not $Python) {
@@ -102,7 +123,8 @@ $Wheels = Join-Path $Target "wheelhouse"
 New-Item -ItemType Directory -Force -Path $Wheels | Out-Null
 Get-ChildItem (Join-Path $Bundle "wheelhouse") -Filter *.whl | ForEach-Object {
   $dest = Join-Path $Wheels $_.Name
-  if (-not (Test-Path $dest)) { Copy-Item $_.FullName $dest }
+  # The application wheel can be rebuilt under the same version number: always take the bundle's own.
+  if (-not (Test-Path $dest) -or $_.Name -like "trafficwb-*") { Copy-Item $_.FullName $dest -Force }
 }
 
 # 4. Model packs: add the bundle's versions; existing versions are kept.
@@ -141,8 +163,25 @@ function Install-Env([string]$build) {
   & $Python -m venv $Venv | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "Creating the Python environment failed." }
   $script:VPy = Join-Path $Venv "Scripts\python.exe"
-  & $script:VPy -m pip install --no-index --find-links $Wheels "trafficwb[probe,$build]==$($Info.version)" | Out-Host
+  # Training on this computer (PyTorch) when the bundle carries it; --no-cache-dir so a rebuilt application wheel
+  # of the same version is never taken from pip's cache.
+  $extras = "probe,$build"
+  if ($Info.training) { $extras += ",train" }
+  & $script:VPy -m pip install --no-index --no-cache-dir --find-links $Wheels "trafficwb[$extras]==$($Info.version)" | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "pip install failed." }
+  # Starting weights for training: kept in <install>\training (so a small update finds them too) and put next to
+  # this environment's Python, where trafficwb.train looks.
+  $kept = Join-Path $Target "training"
+  $weights = Join-Path $Bundle "training\yolox_s.pth"
+  if (Test-Path $weights) {
+    New-Item -ItemType Directory -Force -Path $kept | Out-Null
+    Copy-Item $weights $kept -Force
+  }
+  if (Test-Path (Join-Path $kept "yolox_s.pth")) {
+    $share = Join-Path $Venv "share\lanepulse"
+    New-Item -ItemType Directory -Force -Path $share | Out-Null
+    Copy-Item (Join-Path $kept "yolox_s.pth") $share -Force
+  }
   if ($SkipCheck) { return "unchecked" }
   $work = Join-Path $env:TEMP ("twb-check-" + [guid]::NewGuid())
   $lines = & $script:VPy (Join-Path $Bundle "offline_smoke.py") --work $work --models $Models
@@ -211,8 +250,17 @@ Write-Host "Installed $($Info.version)."
 $auto = Join-Path $Target "autostart.ps1"
 $hasLink = Test-Path (Join-Path ([Environment]::GetFolderPath("Startup")) "Traffic Analysis Workbench.lnk")
 $hasTask = [bool](Get-ScheduledTask -TaskName "Traffic Analysis Workbench" -ErrorAction SilentlyContinue)
+$wc = New-Object System.Net.WebClient; $wc.Proxy = $null
+$running = $false
+try { $null = $wc.DownloadString("http://127.0.0.1:$Port/api/health"); $running = $true } catch { }
 if ($hasLink -or $hasTask) {
   & $auto -Mode restart -Target $Target -Port $Port
+} elseif ($running) {
+  # Started by hand or from the LanePulse icon: stop the old version and start this one in its place, so the icon
+  # never opens the previous version after an update.
+  Write-Host "Restarting the running server with $($Info.version)."
+  & $auto -Mode restart -Target $Target -Port $Port
+  Start-Process -FilePath (Join-Path $Target "start.cmd") -WorkingDirectory $Target -WindowStyle Minimized
 } elseif ($AutoStart -ne "none") {
   & $auto -Mode $AutoStart -Target $Target -Port $Port
   if ($LASTEXITCODE -eq 2) { & $auto -Mode signin -Target $Target -Port $Port }

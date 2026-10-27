@@ -1,9 +1,23 @@
 LanePulse: training the vehicle detector on your own images
 ===========================================================
 
-Training runs on a separate computer, never on the workstation: an Apple-silicon Mac (M1 to M5) or a computer with
-an NVIDIA GPU. It produces one .zip file (a "model pack"). You copy it to any LanePulse installation, test it there,
-and switch to it only if it is better. The model in use never changes by itself.
+Train on the learning page (the usual way)
+- LanePulse trains on the computer it runs on. PyTorch and the starting weights are part of the installation, so
+  nothing is downloaded and nothing else needs installing.
+- On a mission's Learning tab: freeze a dataset version, then under "Train a new vehicle detector here" pick it and
+  press Train. The page shows what it trains on (an NVIDIA GPU, the Apple GPU on a Mac, or the processor), the round
+  it is on and the time left. You can close the browser; Pause and Stop are on the same card.
+- Rough time for a few hundred images: one to two hours on a GPU; a night on the processor alone. Processing new
+  images continues meanwhile (more slowly on the processor). One training runs at a time on a computer.
+- When it ends, the new model is added and evaluated on the dataset's test images. Compare it with the model in use
+  in the evaluation table and press Promote only if it is better. Roll back at any time. Nothing changes by itself.
+- "Start from" picks the starting point: the original detector, or a model trained earlier (to improve it with more
+  images).
+
+Training on another computer (optional)
+Use this only to train on a faster computer than the one LanePulse runs on, for example a Mac or an NVIDIA computer
+next to a workstation without a GPU. It produces one .zip file (a "model pack"). You copy it to any LanePulse
+installation, test it there, and switch to it only if it is better.
 
 How many images
 - About 200 to 500 well-reviewed images is a good first round. Each image usually holds many vehicles.
@@ -12,7 +26,7 @@ How many images
   only the boxes you corrected are used, and areas nobody checked are never treated as "no vehicle".
 
 1. Export a dataset (on the workstation)
-- On the learning page, create a dataset version and press Export. It writes a folder under the mission's output
+- On the learning page, create a dataset version and press Export on its row. It writes a folder under the mission's output
   folder, datasets\<name>. Copy that folder to the training computer (USB or share).
 
 2. Set up the training computer (once, needs the internet there)

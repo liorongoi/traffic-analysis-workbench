@@ -35,7 +35,7 @@ echo "Python: $PY"
 "$DIR/venv/bin/python" -m pip install --quiet --upgrade pip
 WHL="$(ls "$KIT"/trafficwb-*.whl | sort | tail -1)"
 echo "Installing LanePulse training and PyTorch (a few minutes)..."
-"$DIR/venv/bin/python" -m pip install --quiet --upgrade "${WHL}[train]"
+"$DIR/venv/bin/python" -m pip install --quiet --upgrade "${WHL}[train,cpu]"
 
 cp "$KIT/TRAINING.txt" "$DIR/TRAINING.txt" 2>/dev/null || true
 cat > "$DIR/Train LanePulse.command" <<'CMD'

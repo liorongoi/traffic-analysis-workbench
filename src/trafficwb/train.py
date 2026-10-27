@@ -11,13 +11,16 @@ Then evaluate it on the learning page and promote it if it is better. Nothing he
     trafficwb-train run --dataset <exported dataset folder> --out <folder>
     trafficwb-train device              which accelerator would be used
 
-Starting weights: --init coco (the released YOLOX-s weights, fetched once and checked against their
-SHA-256, then kept in ~/.cache/lanepulse), a .pth file, or an earlier trained pack (folder or .zip) to
-continue from it.
+Starting weights: --init coco (the released YOLOX-s weights; the installers ship them next to their own Python,
+in <prefix>/share/lanepulse, otherwise fetched once into ~/.cache/lanepulse and checked against their SHA-256),
+a .pth file, or an earlier trained pack (folder or .zip) to continue from it.
+
+The app runs the same training on its own computer from the learning page (web/jobs.py, kind "train").
 """
 from __future__ import annotations
 
 import os
+import sys
 
 # Apple GPUs: run the few operations Metal lacks on the CPU instead of failing. Read when torch loads.
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -59,6 +62,10 @@ Fine-tuning used the mission's own reviewed images, exported from LanePulse.
 
 
 class TrainError(RuntimeError):
+    pass
+
+
+class TrainCancelled(TrainError):
     pass
 
 
@@ -216,10 +223,32 @@ def _cache_dir() -> Path:
     return Path(os.environ.get("LANEPULSE_CACHE", Path.home() / ".cache" / "lanepulse"))
 
 
-def coco_weights(log=print) -> Path:
+def shipped_weights_dirs() -> list[Path]:
+    """Where an installation keeps the starting weights: LANEPULSE_CACHE, then next to its own Python."""
+    dirs = []
+    if os.environ.get("LANEPULSE_CACHE"):
+        dirs.append(Path(os.environ["LANEPULSE_CACHE"]))
+    dirs.append(Path(sys.prefix) / "share" / "lanepulse")
+    dirs.append(Path.home() / ".cache" / "lanepulse")
+    return dirs
+
+
+def find_coco_weights() -> Path | None:
+    for d in shipped_weights_dirs():
+        p = d / "yolox_s.pth"
+        if p.is_file() and _sha256(p) == COCO_WEIGHTS["sha256"]:
+            return p
+    return None
+
+
+def coco_weights(log=print, download: bool = True) -> Path:
+    found = find_coco_weights()
+    if found:
+        return found
+    if not download:
+        raise TrainError("The YOLOX-s starting weights are not installed here (yolox_s.pth in "
+                         f"{Path(sys.prefix) / 'share' / 'lanepulse'}). Reinstall LanePulse, or continue from a trained model.")
     path = _cache_dir() / "yolox_s.pth"
-    if path.is_file() and _sha256(path) == COCO_WEIGHTS["sha256"]:
-        return path
     path.parent.mkdir(parents=True, exist_ok=True)
     log(f"Fetching the YOLOX-s starting weights (about 70 MB) into {path.parent} ...")
     tmp = path.with_suffix(".part")
@@ -245,12 +274,12 @@ def _open_pack(src: Path, work: Path) -> Path:
     return hits[0]
 
 
-def load_init(model: YOLOX, init: str, work: Path, log=print) -> dict:
+def load_init(model: YOLOX, init: str, work: Path, log=print, download: bool = True) -> dict:
     """Load starting weights; returns what they were, for the model card."""
     if init == "none":                                     # random weights: only for tests
         return {"file": None}
     if init == "coco":
-        p = coco_weights(log)
+        p = coco_weights(log, download)
         missing = load_checkpoint(model, str(p))
         src = {"name": COCO_WEIGHTS["name"], "version": COCO_WEIGHTS["version"], "file": "yolox_s.pth",
                "sha256": COCO_WEIGHTS["sha256"]}
@@ -334,8 +363,21 @@ def validate(model, loader, dev, amp) -> float | None:
 def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, batch: int | None = None,
           lr: float | None = None, device: str = "auto", workers: int | None = None, name: str = "yolox-s-tuned",
           version: str | None = None, seed: int = 0, freeze_bn: bool | None = None, size: str = "s",
-          log=print) -> Path:
-    """Train and write the model pack; returns the .zip path."""
+          log=print, progress=None, control=None, download: bool = True, on_epoch=None,
+          mp_context: str | None = None) -> Path:
+    """Train and write the model pack; returns the .zip path.
+
+    progress(step, steps) after every training step; control (process.RunControl) pauses or stops between steps
+    (raises TrainCancelled); on_epoch(epoch, epochs, history_row) after every epoch; download=False never goes online.
+    """
+    def check():
+        if control is not None:
+            from .process import RunCancelled
+            try:
+                control.checkpoint()                     # waits while paused
+            except RunCancelled:
+                raise TrainCancelled("Training was stopped; no model was written.") from None
+
     dataset, out = Path(dataset), Path(out)
     manifest_f = dataset / "manifest.json"
     if not manifest_f.is_file():
@@ -359,13 +401,15 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, bat
     nbox = sum(len(b) for _, b in tr.items)
     log(f"Training images: {len(tr)} ({nbox} vehicles), validation images: {len(va)}")
     dl_kw = dict(num_workers=workers, collate_fn=collate, persistent_workers=workers > 0)
+    if workers > 0 and mp_context:                   # inside the app server: never fork a multi-threaded process
+        dl_kw["multiprocessing_context"] = mp_context
     tl = torch.utils.data.DataLoader(tr, batch_size=batch, shuffle=True, drop_last=len(tr) >= batch, **dl_kw)
     vl = torch.utils.data.DataLoader(va, batch_size=batch, shuffle=False, **dl_kw) if len(va) else None
 
     work = Path(tempfile.mkdtemp(prefix="lanepulse-train-"))
     try:
         model = YOLOX(size, 80)
-        init_src = load_init(model, init, work, log)
+        init_src = load_init(model, init, work, log, download)
         model.to(dev)
         ema = EMA(model)
         opt = torch.optim.SGD(_param_groups(model, 5e-4), lr=lr, momentum=0.9, nesterov=True)
@@ -385,6 +429,7 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, bat
                         mod.eval()
             run, parts = 0.0, {"iou": 0.0, "obj": 0.0, "cls": 0.0}
             for x, masks, targets in tl:
+                check()
                 f = step / warm if step < warm else 0.05 + 0.95 * 0.5 * (1 + math.cos(math.pi * (step - warm) / max(steps - warm, 1)))
                 for g in opt.param_groups:
                     g["lr"] = lr * f
@@ -397,6 +442,8 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, bat
                 scaler.update()
                 ema.update(model)
                 step += 1
+                if progress:
+                    progress(step, steps)
                 run += float(loss.detach())
                 for k in parts:
                     parts[k] += p[k]
@@ -406,6 +453,8 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, bat
             log(f"Epoch {ep}/{epochs}: training loss {run / n:.3f} (box {parts['iou'] / n:.3f}, object {parts['obj'] / n:.3f}, "
                 f"class {parts['cls'] / n:.3f})" + ("" if v is None else f", validation loss {v:.3f}")
                 + f", {(time.time() - t0) / ep:.0f} s per epoch")
+            if on_epoch:
+                on_epoch(ep, epochs, hist[-1])
             score = v if v is not None else -ep
             if score < best:
                 best, best_epoch = score, ep

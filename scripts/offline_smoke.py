@@ -115,7 +115,7 @@ def main(argv=None) -> int:
     b = admin.backup(data, bk, "smoke")
     assert admin.verify(b) == []
     page, health = web_check(data)
-    assert '<div id="root">' in page and health == {"status": "ok"}
+    assert '<div id="root">' in page and health.get("status") == "ok"
     from trafficwb.models import find
     from trafficwb.runtime import make_session
     _, info = make_session(find("yolox-s").weights)
