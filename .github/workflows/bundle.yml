@@ -165,7 +165,7 @@ jobs:
         run: |
           bash kit/setup-training-mac.sh
           test -x "$LANEPULSE_TRAINING/Train LanePulse.command"
-          "$LANEPULSE_TRAINING/venv/bin/python" -m pip install --quiet pytest
+          "$LANEPULSE_TRAINING/venv/bin/python" -m pip install --quiet pytest httpx
           "$LANEPULSE_TRAINING/venv/bin/python" -m pytest -q tests/test_train.py -p no:cacheprovider
       - uses: actions/upload-artifact@v4
         with:
