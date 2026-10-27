@@ -1,0 +1,92 @@
+#!/bin/bash
+# Day-to-day control of the LanePulse server.   lanepulse help
+set -euo pipefail
+CONF=/etc/lanepulse/lanepulse.conf
+BASE=/opt/lanepulse
+[ -f "$CONF" ] || { echo "LanePulse is not installed (no $CONF)."; exit 1; }
+# shellcheck disable=SC1090
+. "$CONF"
+PY="$BASE/current/python/bin/python3"
+need_root() { [ "$(id -u)" = 0 ] || { echo "Run with sudo: sudo lanepulse $*"; exit 1; }; }
+as_service() { if [ "$(id -u)" = 0 ]; then runuser -u lanepulse -- "$@"; else "$@"; fi; }
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  status)
+    systemctl --no-pager --lines=0 status lanepulse.service || true
+    echo
+    if curl -fsS -m 3 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
+      echo "Answering at http://$(hostname -I | awk '{print $1}'):$PORT  (version $(basename "$(readlink -f "$BASE/current")" | sed 's/^lanepulse-//'))"
+    else
+      echo "Not answering on port $PORT."
+    fi
+    command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total --format=csv || true
+    echo "Data: $DATA   Backups: $BACKUPS   Models: $MODELS   Allowed from: ${ALLOW:-any}";;
+  start|stop|restart) need_root "$cmd"; systemctl "$cmd" lanepulse.service; echo "LanePulse: $cmd done.";;
+  logs) tail -n "${1:-100}" -f "$BASE/logs/server.log";;
+  import-model)
+    need_root import-model
+    [ -n "${1:-}" ] || { echo "Usage: sudo lanepulse import-model <model .zip>"; exit 2; }
+    Z="$(readlink -f "$1")"; T="$(mktemp -d)"; cp "$Z" "$T/"; chown -R lanepulse "$T"
+    runuser -u lanepulse -- "$PY" -c 'import sys; from trafficwb.model_import import main; sys.exit(main(sys.argv[1:]))' \
+      --models "$MODELS" import "$T/$(basename "$Z")"
+    rm -rf "$T";;
+  models) "$PY" -c 'import sys; from trafficwb.model_import import main; sys.exit(main(sys.argv[1:]))' --models "$MODELS" list;;
+  backup)
+    need_root backup
+    runuser -u lanepulse -- "$PY" -c 'import sys; from trafficwb.admin import main; sys.exit(main(sys.argv[1:]))' \
+      backup --data "$DATA" --to "$BACKUPS" "$@";;
+  speed-check)
+    need_root speed-check
+    runuser -u lanepulse -- env TWB_MODELS="$MODELS" TWB_ACCELERATOR="${TWB_ACCELERATOR:-auto}" \
+      "$PY" -c 'import sys; from trafficwb.speedcheck import main; sys.exit(main(sys.argv[1:]))' --out "$BASE/logs/speed-check.txt" "$@";;
+  firewall)
+    need_root firewall
+    command -v ufw >/dev/null 2>&1 || { echo "ufw is not installed: sudo apt install ufw"; exit 1; }
+    ufw allow OpenSSH >/dev/null
+    if [ "${ALLOW:-any}" = any ]; then ufw allow "$PORT/tcp" >/dev/null; else ufw allow from "$ALLOW" to any port "$PORT" proto tcp >/dev/null; fi
+    ufw --force enable >/dev/null
+    ufw status;;
+  rollback)
+    need_root rollback
+    [ -L "$BASE/previous" ] || { echo "No previous version to go back to."; exit 1; }
+    cur="$(readlink "$BASE/current")"; prev="$(readlink "$BASE/previous")"
+    ln -sfn "$prev" "$BASE/current"; ln -sfn "$cur" "$BASE/previous"
+    systemctl restart lanepulse.service
+    echo "Now running $(basename "$prev"). If the update changed the database format, restore the backup taken before it"
+    echo "(see INSTALL.txt, Roll back).";;
+  setup-training)
+    need_root setup-training
+    T="$BASE/training"
+    echo "Setting up training with PyTorch for NVIDIA GPUs (needs the internet, a few GB)..."
+    "$PY" -m venv "$T"
+    "$T/bin/python" -m pip install --quiet --upgrade pip
+    "$T/bin/python" -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cu128
+    "$T/bin/python" -m pip install --quiet "$(ls "$BASE"/current/wheels/trafficwb-*.whl | tail -1)[train]"
+    "$T/bin/trafficwb-train" device
+    echo "Ready: sudo lanepulse train <exported dataset folder> [--epochs 40]";;
+  train)
+    need_root train
+    [ -x "$BASE/training/bin/trafficwb-train" ] || { echo "Set up training first: sudo lanepulse setup-training"; exit 1; }
+    [ -n "${1:-}" ] || { echo "Usage: sudo lanepulse train <exported dataset folder> [--epochs 40]"; exit 2; }
+    DS="$1"; shift
+    OUT="$(dirname "$MODELS")/trained"; mkdir -p "$OUT"
+    LANEPULSE_CACHE="$BASE/training/cache" "$BASE/training/bin/trafficwb-train" run --dataset "$DS" --out "$OUT" "$@"
+    echo "To use it: sudo lanepulse import-model $(ls -t "$OUT"/*.zip | head -1)";;
+  version) basename "$(readlink -f "$BASE/current")" | sed 's/^lanepulse-//';;
+  *)
+    cat <<HELP
+lanepulse status                 is it running, where, on which GPU
+sudo lanepulse start|stop|restart
+lanepulse logs [lines]           follow the server log (Ctrl+C to leave)
+sudo lanepulse import-model ZIP  add a trained model; then evaluate and promote it on the learning page
+lanepulse models                 installed models
+sudo lanepulse backup [--with-evidence]
+sudo lanepulse speed-check [--images FOLDER]
+sudo lanepulse firewall          allow only $ALLOW to port $PORT (and SSH), turn the firewall on
+sudo lanepulse rollback          go back to the previous version
+sudo lanepulse setup-training    install PyTorch to train the vehicle detector on this server's GPU (internet)
+sudo lanepulse train FOLDER      train on an exported dataset
+Settings: $CONF (then sudo lanepulse restart)
+HELP
+    ;;
+esac

@@ -1,0 +1,25 @@
+LanePulse server for Ubuntu (x86_64, NVIDIA GPU)
+================================================
+
+The full guide, with every step from a new server to daily use, is the PDF "LanePulse server installation guide".
+This is the short version.
+
+Needs: Ubuntu Server 22.04 or 24.04, an NVIDIA GPU with its driver (see server.json for the oldest driver
+version), and sudo rights. Nothing is downloaded during install.
+
+Install or update
+    tar -xzf lanepulse-server-<version>-linux-x86_64.tar.gz
+    cd lanepulse-server-<version>-linux-x86_64
+    sudo ./install-server.sh
+  Options: --data DIR (default /srv/lanepulse/data), --backups DIR, --models DIR, --port N (default 8765),
+           --allow-from CIDR (default: this server's local network; "any" for every address).
+  It checks every file, installs into /opt/lanepulse, runs a small offline check, backs up the data (on an
+  update), then starts the lanepulse service, which also starts whenever the server boots.
+
+Open it from other computers:  http://<server address>:8765
+  There is no password. Anyone who can reach the port can see and change every mission, so keep the server on a
+  trusted network and turn the firewall on: sudo lanepulse firewall
+
+Daily use:  lanepulse help    (status, logs, restart, import-model, backup, speed-check, rollback, train)
+Settings:   /etc/lanepulse/lanepulse.conf, then sudo lanepulse restart
+Remove:     sudo /opt/lanepulse/uninstall-server.sh   (data, backups and models are kept)

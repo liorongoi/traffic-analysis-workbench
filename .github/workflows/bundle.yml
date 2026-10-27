@@ -194,3 +194,65 @@ jobs:
           path: dist-mac/*.dmg
           compression-level: 0
           retention-days: 90
+
+  linux-server:
+    # The LanePulse server package for Ubuntu with NVIDIA GPUs (own Python, CUDA libraries for ONNX Runtime), then
+    # tried on a clean Ubuntu runner (no GPU, so it runs on the CPU): install, reach it over the network, restart,
+    # repair, roll back, uninstall keeping the data, install again.
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: python scripts/build_ui.py
+      - run: python -m pip install -e .
+      - run: python scripts/fetch_models.py
+      - name: Python for the server (python-build-standalone, checked against its SHA-256)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/python.tar.gz" "https://github.com/astral-sh/python-build-standalone/releases/download/20250409/cpython-3.12.10+20250409-x86_64-unknown-linux-gnu-install_only.tar.gz"
+          echo "e9cf6f7da499a4400ba30ae1da8f7ef25ce97827bd8c1084717aa05438035186  $RUNNER_TEMP/python.tar.gz" | sha256sum -c
+      - name: Build the server package
+        id: srv
+        run: |
+          packaging/server/build_server.sh "$RUNNER_TEMP/python.tar.gz" dist-server
+          name="$(basename dist-server/*.tar.gz .tar.gz)"
+          rm -rf "dist-server/$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          df -h .
+      - name: Try it (install, network, restart, repair, rollback, uninstall, install again)
+        run: |
+          set -x
+          mkdir -p "$RUNNER_TEMP/pkg" && tar -xzf "dist-server/${{ steps.srv.outputs.name }}.tar.gz" -C "$RUNNER_TEMP/pkg"
+          P="$RUNNER_TEMP/pkg/${{ steps.srv.outputs.name }}"
+          cat "$P/server.json"
+          IP="$(hostname -I | awk '{print $1}')"
+          up() { for i in $(seq 90); do curl -fsS -m 2 "http://$IP:8765/api/health" && return 0; sleep 1; done; sudo tail -40 /opt/lanepulse/logs/server.log; return 1; }
+          sudo "$P/install-server.sh" --allow-from any
+          up
+          curl -fsS "http://$IP:8765/" | grep -qi "<html"
+          lanepulse status
+          lanepulse models
+          sudo lanepulse restart && up
+          sudo "$P/install-server.sh" --skip-check            # repair: same version again, settings kept
+          up
+          grep -q 'ALLOW="any"' /etc/lanepulse/lanepulse.conf
+          sudo lanepulse rollback && up
+          sudo /opt/lanepulse/uninstall-server.sh
+          if curl -fsS -m 2 "http://$IP:8765/api/health"; then echo "still running after uninstall"; exit 1; fi
+          test -d /srv/lanepulse/data && test -d /srv/lanepulse/models && test ! -e /opt/lanepulse
+          sudo "$P/install-server.sh" --allow-from any --skip-check
+          up
+          sudo /opt/lanepulse/uninstall-server.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.srv.outputs.name }}
+          path: dist-server/*.tar.gz
+          compression-level: 0
+          retention-days: 90
