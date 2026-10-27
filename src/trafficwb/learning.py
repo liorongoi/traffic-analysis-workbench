@@ -45,7 +45,9 @@ class LearningError(ValueError):
 
 # LRN-02: every algorithm declares its learning adapter. "planned" means designed, not implemented.
 ADAPTERS = [
-    {"algorithm": "Vehicle detector", "adapter": "fine-tune (GPU profile); thresholds per view", "status": "planned"},
+    {"algorithm": "Vehicle detector", "adapter": "fine-tune on an NVIDIA GPU or Apple-silicon Mac (trafficwb-train)",
+     "status": "available"},
+    {"algorithm": "Vehicle detector thresholds", "adapter": "thresholds per view", "status": "planned"},
     {"algorithm": "Colour reader", "adapter": "small classifier trained on corrected colours", "status": "planned"},
     {"algorithm": "Night light grouping", "adapter": "pair classifier on reviewed groups", "status": "planned"},
     {"algorithm": "Persistent-light background", "adapter": "background refit", "status": "planned"},

@@ -30,6 +30,22 @@ jobs:
       - name: Hardware probe report (runner hardware, not the target workstation)
         run: python -m trafficwb.probe
 
+  training:
+    # Training the vehicle detector, on the CPU build of PyTorch (the Apple-silicon check is in windows-installer).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: python -m pip install -e ".[dev,train]"
+      - run: python -m pytest -v tests/test_train.py
+
   offline-bundle:
     # ENV-04: build the Windows offline bundle, then install it and run the install-to-export check
     # with package downloads turned off and web traffic sent to a dead proxy. "auto" carries both GPU
