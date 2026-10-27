@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS auth_event (
   id INTEGER PRIMARY KEY,
   at TEXT NOT NULL,
   username TEXT,
-  kind TEXT NOT NULL,                         -- login | login_failed | logout | takeover | expired | account_created
+  kind TEXT NOT NULL,                         -- login | login_failed | logout | takeover | expired | account_created | password_reset
   client TEXT,
   detail TEXT
 );
@@ -115,6 +115,24 @@ class Auth:
             raise AuthError("exists", f"An account named {username} already exists.") from None
         self._event("account_created", username)
         return User(cur.lastrowid, username, display_name.strip() or username, role)
+
+    def accounts(self) -> list[dict]:
+        return [dict(r) for r in self.con.execute(
+            "SELECT username, display_name, role, disabled, created_at FROM account ORDER BY id")]
+
+    def reset_password(self, username: str, password: str, by: str | None = None) -> User:
+        """Set a new password (done on the workstation by whoever can open the data folder). The account is
+        enabled again and its sessions are ended."""
+        row = self.con.execute("SELECT * FROM account WHERE username=?", (username.strip(),)).fetchone()
+        if row is None:
+            raise AuthError("no_account", f"There is no account named {username.strip()}.")
+        if len(password) < 8:
+            raise AuthError("weak_password", "The password needs at least 8 characters.")
+        self.con.execute("UPDATE account SET password_hash=?, disabled=0 WHERE id=?", (hash_password(password), row["id"]))
+        self.con.execute("UPDATE session SET ended_at=?, end_reason='password_reset' WHERE account_id=? AND ended_at IS NULL",
+                         (utcnow(), row["id"]))
+        self._event("password_reset", row["username"], None, f"by {by}" if by else None)
+        return User(row["id"], row["username"], row["display_name"], row["role"])
 
     def _active_sessions(self):
         cutoff = (_now() - timedelta(minutes=IDLE_MINUTES)).isoformat(timespec="seconds").replace("+00:00", "Z")

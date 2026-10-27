@@ -206,6 +206,52 @@ def delete_mission(data_root: Path | str, mission_id: str, author: str, confirm_
     return detail
 
 
+def _accounts_cmd(args, who: str) -> int:
+    """List the accounts, and for reset-password ask for the account and a new password (typed twice)."""
+    import getpass
+
+    from .store import connect
+    from .web.auth import Auth, AuthError
+    db = Path(args.data) / "control.db"
+    if not db.exists():
+        print(f"No Lanemark data in {args.data} (control.db not found).")
+        return 2
+    con = connect(db)
+    try:
+        auth = Auth(con)
+        accts = auth.accounts()
+        if not accts:
+            print("There are no accounts yet. Open Lanemark in the browser to create the first one.")
+            return 0
+        print("Accounts:")
+        for a in accts:
+            print(f"  {a['username']:<20} {a['display_name']:<24} {a['role']}{'  (disabled)' if a['disabled'] else ''}")
+        if args.cmd == "accounts":
+            return 0
+        user = args.user or input("\nUser name to reset: ").strip()
+        if not any(a["username"].lower() == user.lower() for a in accts):
+            print(f"There is no account named {user}.")
+            return 2
+        for _ in range(3):
+            p1 = getpass.getpass("New password (at least 8 characters): ")
+            if p1 != getpass.getpass("Type it again: "):
+                print("The two passwords differ; try again.")
+                continue
+            try:
+                u = auth.reset_password(user, p1, by=who)
+            except AuthError as exc:
+                print(exc.message)
+                if exc.code == "no_account":
+                    return 2
+                continue
+            audit(DataRoot(args.data), who, "password_reset", username=u.username)
+            print(f"Password changed for {u.username}. Sign in with it in the browser.")
+            return 0
+        return 2
+    finally:
+        con.close()
+
+
 def main(argv=None) -> int:
     from trafficwb import safe_console
     safe_console()
@@ -228,6 +274,11 @@ def main(argv=None) -> int:
     d.add_argument("--mission", required=True)
     a = sub.add_parser("audit", help="show the audit log")
     a.add_argument("--data", required=True)
+    ac = sub.add_parser("accounts", help="list the sign-in accounts")
+    ac.add_argument("--data", required=True)
+    rp = sub.add_parser("reset-password", help="set a new password for an account (lists the accounts first)")
+    rp.add_argument("--data", required=True)
+    rp.add_argument("--user", help="the account's user name; asked for when left out")
     args = ap.parse_args(argv)
     who = getpass.getuser()
     try:
@@ -244,6 +295,8 @@ def main(argv=None) -> int:
         elif args.cmd == "delete-mission":
             name = input("Type the mission's name to delete it: ")
             print(json.dumps(delete_mission(args.data, args.mission, who, name), indent=2, ensure_ascii=False))
+        elif args.cmd in ("accounts", "reset-password"):
+            return _accounts_cmd(args, who)
         elif args.cmd == "audit":
             for e in audit_log(DataRoot(args.data)):
                 print(e["at"], e["author"], e["action"], json.dumps(e["detail"], ensure_ascii=False))

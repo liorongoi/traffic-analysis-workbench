@@ -15,6 +15,7 @@
 #ifndef OutDir
   #define OutDir "dist"
 #endif
+#define OpenArgs '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\autostart.ps1"" -Mode open'
 
 [Setup]
 AppId={{6C1E3F0A-7A51-4E0B-9C8E-1F2B7D9A4E21}
@@ -41,26 +42,35 @@ SetupLogging=yes
 
 [Tasks]
 Name: "autostart"; Description: "Start Lanemark when I sign in to Windows (recommended)"
+Name: "desktopicon"; Description: "Put a Lanemark icon on the desktop"
 
 [Files]
 ; Unpacked to the temporary folder, which Setup removes when it ends.
 Source: "{#BundleDir}\*"; DestDir: "{tmp}\bundle"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "lanemark.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
+; Lanemark opens without a user name or password now, so the reset entry is not needed in the Start menu.
+Type: files; Name: "{autoprograms}\Lanemark - reset password.lnk"
 ; Start menu entries from before the app was called Lanemark.
 Type: files; Name: "{autoprograms}\Traffic Analysis Workbench.url"
 Type: files; Name: "{autoprograms}\Traffic Analysis Workbench - speed check.lnk"
+; The first Lanemark shortcut opened only the address and failed when the server was not running.
+Type: files; Name: "{autoprograms}\Lanemark.url"
 
 [Icons]
-Name: "{autoprograms}\Lanemark"; Filename: "http://127.0.0.1:8765"; Comment: "Open Lanemark in the browser"
+; "Lanemark" starts the server when it is not running, then opens it in the browser.
+Name: "{autoprograms}\Lanemark"; Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; WorkingDir: "{app}"; IconFilename: "{app}\lanemark.ico"; Comment: "Open Lanemark"; Flags: runminimized
+Name: "{autodesktop}\Lanemark"; Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; WorkingDir: "{app}"; IconFilename: "{app}\lanemark.ico"; Comment: "Open Lanemark"; Flags: runminimized; Tasks: desktopicon
 Name: "{autoprograms}\Lanemark - speed check"; Filename: "{app}\speed-check.cmd"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Description: "Start Lanemark now"; Flags: postinstall nowait runminimized skipifsilent; Tasks: not autostart; Check: InstallOK
-Filename: "http://127.0.0.1:8765"; Description: "Open Lanemark now"; Flags: postinstall shellexec nowait skipifsilent; Check: InstallOK
+Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; Description: "Open Lanemark now"; Flags: postinstall nowait runhidden skipifsilent; Check: InstallOK
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\autostart.ps1"" -Mode remove -Target ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveAutostart"
+; The Python this installer put in the install folder, so Windows does not keep listing it after its files are gone.
+Filename: "{app}\python-installer.exe"; Parameters: "/quiet /uninstall"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "RemovePython"
 
 [UninstallDelete]
 ; Only the program. The data and backup folders are never removed.
@@ -73,6 +83,7 @@ Type: files; Name: "{app}\*.cmd"
 Type: files; Name: "{app}\current.txt"
 Type: files; Name: "{app}\previous.txt"
 Type: files; Name: "{app}\autostart.ps1"
+Type: files; Name: "{app}\python-installer.exe"
 Type: dirifempty; Name: "{app}"
 
 [Code]
@@ -114,12 +125,6 @@ begin
     if Trim(FoldersPage.Values[0]) = '' then
     begin
       SuppressibleMsgBox('Please choose a data folder.', mbError, MB_OK, IDOK);
-      Result := False;
-    end
-    else if DirExists(ExpandConstant('{app}\app-{#AppVersion}')) then
-    begin
-      SuppressibleMsgBox('Version {#AppVersion} is already installed in ' + ExpandConstant('{app}') + '.' + #13#10 +
-             'Open Lanemark from the Start menu, or install a newer version.', mbInformation, MB_OK, IDOK);
       Result := False;
     end;
   end;
@@ -180,8 +185,15 @@ end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
-  if (CurPageID = wpFinished) and Failed then
-    WizardForm.FinishedLabel.Caption := 'The installation did not finish. Details are in ' + LogPath + '.';
+  if CurPageID = wpFinished then
+  begin
+    if Failed then
+      WizardForm.FinishedLabel.Caption := 'The installation did not finish. Details are in ' + LogPath + '.'
+    else
+      WizardForm.FinishedLabel.Caption := 'Lanemark is installed.' + #13#10 + #13#10 +
+        'To open it later, use the Lanemark icon on the desktop or in the Start menu. It opens in your browser at ' +
+        'http://127.0.0.1:8765.';
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
