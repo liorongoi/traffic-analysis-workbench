@@ -39,56 +39,59 @@ jobs:
           & $iscc "/DBundleDir=$PWD\dist\${{ steps.py.outputs.folder }}" "/DAppVersion=${{ steps.py.outputs.version }}" "/DOutDir=$PWD\setup" packaging\setup.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           Get-ChildItem setup | Format-Table Name, Length
-      - name: Try the wizard (silent install, server answers, uninstall)
+      - name: Try the wizard (install, repair, uninstall, install again, uninstall) with the bundled Python
         shell: pwsh
         env:
           PIP_NO_INDEX: "1"
           HTTPS_PROXY: http://127.0.0.1:9
           HTTP_PROXY: http://127.0.0.1:9
         run: |
+          # As on a workstation without Python: hide the runner's Python so the wizard installs the bundled one.
+          $env:PATH = ($env:PATH -split ";" | Where-Object { $_ -notmatch "Python" }) -join ";"
+          foreach ($f in "py.exe", "pyw.exe") { if (Test-Path "C:\Windows\$f") { Rename-Item "C:\Windows\$f" "$f.hidden" } }
           $exe = (Get-ChildItem setup -Filter *.exe | Select-Object -First 1).FullName
           $dir = "$env:LOCALAPPDATA\TrafficWorkbench"
-          # Keep a bounded wait so a slow install fails with diagnostics instead of hanging the job.
-          $p = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup.log"
-          $done = $p.WaitForExit(15 * 60 * 1000)
-          Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 25
-          if (-not $done) { Get-Content "$env:RUNNER_TEMP\setup.log" | Select-Object -Last 40; throw "setup did not finish in 15 minutes" }
-          if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\setup.log" | Select-Object -Last 40; throw "setup exit code $($p.ExitCode)" }
-          if (-not (Test-Path "$dir\current.txt")) { throw "the wizard did not install the app" }
-          $firstBuild = (Get-Content "$dir\current.txt" -Raw).Trim()
+          $menu = Join-Path ([Environment]::GetFolderPath("Programs")) "LanePulse.lnk"
           $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
-          # The wizard is configured for manual start; exercise the installed start command explicitly.
-          Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$dir\start.cmd`"" -WorkingDirectory $dir -WindowStyle Hidden
-          $ready = $false
-          for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
-            try { $null = $wc.DownloadString("http://127.0.0.1:8765/api/health"); $ready = $true }
-            catch { Start-Sleep -Seconds 2 }
+          function Wait-Server([string]$what) {
+            for ($i = 0; $i -lt 60; $i++) { try { $null = $wc.DownloadString("http://127.0.0.1:8765/api/health"); return } catch { Start-Sleep -Seconds 2 } }
+            Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40
+            throw "$($what): the installed server did not answer"
           }
-          if (-not $ready) { Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40; throw "installed server did not answer after manual start" }
-          Write-Host "Installed server answers after manual start."
-          # A second run of the same installer must repair in place without deleting the old build/data.
-          & "$dir\autostart.ps1" -Mode remove
-          $again = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup-reinstall.log"
-          if (-not $again.WaitForExit(15 * 60 * 1000)) { throw "same-version reinstall did not finish" }
-          if ($again.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\setup-reinstall.log" | Select-Object -Last 40; throw "same-version reinstall exit code $($again.ExitCode)" }
-          $secondBuild = (Get-Content "$dir\current.txt" -Raw).Trim()
-          if ($secondBuild -eq $firstBuild -or -not (Test-Path $firstBuild)) { throw "same-version repair replaced or lost the prior build" }
-          if (-not (Test-Path "$env:USERPROFILE\TrafficData")) { throw "same-version repair removed mission data" }
-          Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$dir\start.cmd`"" -WorkingDirectory $dir -WindowStyle Hidden
-          $ready = $false
-          for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
-            try { $null = $wc.DownloadString("http://127.0.0.1:8765/api/health"); $ready = $true }
-            catch { Start-Sleep -Seconds 2 }
+          function Install-Wizard([string]$what) {
+            # Not Start-Process -Wait: PowerShell 7 would also wait for a server left running.
+            $p = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup-$what.log"
+            $done = $p.WaitForExit(15 * 60 * 1000)
+            Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 25
+            if (-not $done) { Get-Content "$env:RUNNER_TEMP\setup-$what.log" | Select-Object -Last 40; throw "$what did not finish in 15 minutes" }
+            if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\setup-$what.log" | Select-Object -Last 40; throw "$what exit code $($p.ExitCode)" }
+            if (-not (Test-Path "$dir\current.txt")) { throw "$what did not install the app" }
+            if (-not (Test-Path $menu)) { throw "$what did not add the Start menu entry" }
+            if (-not (Test-Path "$dir\python312\python.exe")) { throw "$what did not use the bundled Python" }
+            # Manual start, as the Start menu entry does it.
+            Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$dir\start.cmd`"" -WorkingDirectory $dir -WindowStyle Hidden
+            Wait-Server $what
+            Write-Host "$what OK: server answering, Start menu entry and bundled Python in place."
+            return (Get-Content "$dir\current.txt" -Raw).Trim()
           }
-          if (-not $ready) { Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40; throw "reinstalled server did not answer after manual start" }
-          Write-Host "Same-version repair kept the prior build and data; the new server answers."
-          # The uninstaller hands over to a copy of itself in TEMP and exits; wait for that copy too.
-          $u = Start-Process -PassThru "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
-          $null = $u.WaitForExit(5 * 60 * 1000)
-          for ($i = 0; $i -lt 60 -and (Test-Path "$dir\current.txt"); $i++) { Start-Sleep -Seconds 2 }
-          if (Test-Path "$dir\current.txt") { throw "uninstall left the program" }
-          if (-not (Test-Path "$env:USERPROFILE\TrafficData")) { throw "uninstall removed the data folder" }
-          Write-Host "Uninstall removed the program and kept the data."
+          function Uninstall-Wizard {
+            # The uninstaller hands over to a copy of itself in TEMP and exits; wait for the files to go.
+            $u = Start-Process -PassThru "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
+            $null = $u.WaitForExit(5 * 60 * 1000)
+            for ($i = 0; $i -lt 90 -and ((Test-Path "$dir\current.txt") -or (Test-Path "$dir\python312")); $i++) { Start-Sleep -Seconds 2 }
+            if (Test-Path "$dir\current.txt") { throw "uninstall left the program" }
+            if (Test-Path "$dir\python312") { throw "uninstall left the bundled Python" }
+            if (Get-ChildItem "$dir\app-*" -ErrorAction SilentlyContinue) { throw "uninstall left an app folder" }
+            if (-not (Test-Path "$env:USERPROFILE\TrafficData")) { throw "uninstall removed the data folder" }
+            Write-Host "Uninstall removed the program and kept the data."
+          }
+          $first = Install-Wizard "install"
+          & "$dir\autostart.ps1" -Mode remove      # stop the server before running Setup again
+          $second = Install-Wizard "repair"         # the same version again: a fresh folder, the old one kept
+          if ($second -eq $first -or -not (Test-Path $first)) { throw "same-version repair replaced or lost the prior build" }
+          Uninstall-Wizard
+          $null = Install-Wizard "reinstall"        # after an uninstall, with the data kept
+          Uninstall-Wizard
       - uses: actions/upload-artifact@v4
         with:
           name: LanePulse-Setup-${{ steps.py.outputs.version }}

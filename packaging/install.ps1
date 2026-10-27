@@ -36,14 +36,21 @@ Get-Content (Join-Path $Bundle "SHA256SUMS") | ForEach-Object {
 Write-Host "Bundle checksums verified."
 
 # 2. Python: given, the py launcher, or the installer shipped in the bundle.
+# A Python found must really be there: after an uninstall Windows can still list one whose folder is gone.
+$pyDir = Join-Path $Target "python$($Info.python -replace '\.','')"
+function Test-Python([string]$exe) {
+  if (-not $exe -or -not (Test-Path $exe)) { return $false }
+  try { $v = (& $exe -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')" 2>$null).Trim() } catch { return $false }
+  return $v -eq $Info.python
+}
+if (-not $Python -and (Test-Python (Join-Path $pyDir "python.exe"))) { $Python = Join-Path $pyDir "python.exe" }
 if (-not $Python) {
-  try { $Python = (& py "-$($Info.python)" -c "import sys; print(sys.executable)").Trim() } catch { $Python = "" }
+  try { $Python = (& py "-$($Info.python)" -c "import sys; print(sys.executable)" 2>$null).Trim() } catch { $Python = "" }
+  if (-not (Test-Python $Python)) { $Python = "" }
 }
 if (-not $Python) {
-  try {
-    $v = (& python -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')").Trim()
-    if ($v -eq $Info.python) { $Python = (& python -c "import sys; print(sys.executable)").Trim() }
-  } catch { }
+  try { $Python = (& python -c "import sys; print(sys.executable)" 2>$null).Trim() } catch { $Python = "" }
+  if (-not (Test-Python $Python)) { $Python = "" }
 }
 if ($Python) {
   try {
@@ -63,19 +70,20 @@ if (-not $Python) {
 if (-not $Python) {
   $installer = Get-ChildItem $Bundle -Filter "python-*.exe" | Sort-Object Name | Select-Object -First 1
   if (-not $installer) { throw "Python $($Info.python) is not installed and no python-*.exe is in the bundle." }
-  $pyDir = Join-Path $Target "python$($Info.python -replace '\.','')"
-  if (Test-Path -LiteralPath (Join-Path $pyDir "python.exe")) {
-    $pyDir = Join-Path $Target "python$($Info.python -replace '\.','')-repair-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+  # Quoted so a TargetDir with spaces stays one argument; Start-Process -Wait waits for the GUI installer.
+  $pyArgs = @("/quiet", "InstallAllUsers=0", "PrependPath=0", "Include_test=0", "Include_launcher=0", "Shortcuts=0", "TargetDir=`"$pyDir`"")
+  Write-Host "Installing Python $($Info.python) for this user into $pyDir..."
+  Start-Process -Wait -FilePath $installer.FullName -ArgumentList $pyArgs
+  if (-not (Test-Python (Join-Path $pyDir "python.exe"))) {
+    # Windows still thinks this Python is installed (its folder was deleted): remove that entry and try again.
+    Write-Host "Python was registered but its files are missing; repairing the registration and installing again."
+    Start-Process -Wait -FilePath $installer.FullName -ArgumentList "/quiet", "/uninstall"
+    Start-Process -Wait -FilePath $installer.FullName -ArgumentList $pyArgs
   }
-  New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
-  # Invoke directly so PowerShell passes TargetDir as one argument even when the chosen folder has spaces.
-  & $installer.FullName "/quiet" "InstallAllUsers=0" "PrependPath=0" "Include_test=0" "TargetDir=$pyDir"
-  $pythonInstallerExit = $LASTEXITCODE
-  if ($pythonInstallerExit -ne 0) { throw "The bundled Python installer failed with exit code $pythonInstallerExit." }
   $Python = Join-Path $pyDir "python.exe"
-  if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
-    throw "The bundled Python installer completed but did not create $Python. Check the Python installer log and retry."
-  }
+  if (-not (Test-Python $Python)) { throw "Python $($Info.python) could not be installed into $pyDir. Check the Python installer log and retry." }
+  # Kept so the uninstaller can remove this Python cleanly.
+  Copy-Item $installer.FullName (Join-Path $Target "python-installer.exe") -Force
 }
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) { throw "Python was not found at '$Python'. Install Python $($Info.python) or repair the bundled runtime." }
 Write-Host "Python: $Python"

@@ -292,3 +292,4 @@ def test_system_backup_and_delete_mission(env):
     assert c.get(f"/api/missions/{mid}").status_code == 404
     assert c.get("/api/system").json()["audit"][0]["action"] == "mission_deleted"
     assert len(list(src.glob("*.jpg"))) == 7
+

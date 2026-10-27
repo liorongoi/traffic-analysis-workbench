@@ -135,3 +135,4 @@ def test_speed_check_reports_each_backend(tmp_path, capsys):
     (b,) = r["backends"]
     assert b["backend"] == "cpu" and b["runs_on"] == "cpu" and b["s_per_image_median"] > 0
     assert r["fastest"] == "cpu" and "images per hour" in out.read_text()
+

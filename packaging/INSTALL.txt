@@ -8,8 +8,11 @@ Easiest: the setup wizard (Windows)
   No administrator rights are needed, Python is included, nothing is downloaded. No account or sign-in is needed.
 - It runs the same install.ps1 as below, so the checks, the backup before an update and the automatic start
   are the same. The installer's own output is in <install folder>\logs\install.log.
-- Uninstall from Windows Settings > Apps. That removes the program and the automatic start; the data and
-  backup folders are kept.
+- Open LanePulse with the LanePulse icon on the desktop or in the Start menu. It starts the server if it is not
+  running and opens http://127.0.0.1:8765 in the browser.
+- Running Setup again repairs the install (same version, the previous build is kept) or updates it; the data is kept.
+- Uninstall from Windows Settings > Apps. That removes the program and the Python it installed; the data and
+  backup folders are kept, so installing again picks up the same missions.
 
 Install or update by hand (Windows)
 1. Copy this whole folder to the workstation (USB or internal share).
