@@ -53,6 +53,9 @@ def main(argv=None) -> int:
     ap.add_argument("--python-runtime", help="an unpacked python-build-standalone 'python' folder for the target: shipped as "
                     "python-runtime and used by install.ps1 instead of any Python on the workstation")
     ap.add_argument("--python-runtime-version", default="3.12.10", help="the exact version of --python-runtime")
+    ap.add_argument("--vc-runtime", help="Windows: a Microsoft.VC14x.CRT redistributable folder (msvcp140.dll and the rest). "
+                    "Shipped as vc-runtime and put next to LanePulse's Python, so ONNX Runtime and PyTorch never depend on "
+                    "an old copy in System32, which no one without administrator rights can update")
     ap.add_argument("--with-training", action="store_true",
                     help="also ship PyTorch (CPU build on Windows) and the YOLOX-s starting weights, so the learning page "
                          "can train the vehicle detector on the workstation itself")
@@ -128,16 +131,27 @@ def main(argv=None) -> int:
         # debug symbols are not needed and are a third of the size
         shutil.copytree(src, tmp / "python-runtime", ignore=shutil.ignore_patterns("*.pdb", "__pycache__"))
         runtime_version = a.python_runtime_version
+    vc_runtime = None
+    if a.vc_runtime and not a.app_only:
+        dlls = sorted(Path(a.vc_runtime).glob("*.dll"))
+        if not any(d.name.lower() == "msvcp140.dll" for d in dlls):
+            print(f"{a.vc_runtime} has no msvcp140.dll: pass the Microsoft.VC14x.CRT folder.", file=sys.stderr)
+            return 1
+        (tmp / "vc-runtime").mkdir()
+        for d in dlls:
+            shutil.copy2(d, tmp / "vc-runtime" / d.name)
+        vc_runtime = [d.name for d in dlls]
     if a.python_installer:
         shutil.copy2(a.python_installer, tmp / Path(a.python_installer).name)
     for f in ("install.ps1", "autostart.ps1", "install.sh", "INSTALL.txt"):
         shutil.copy2(ROOT / "packaging" / f, tmp / f)
     shutil.copy2(ROOT / "scripts" / "offline_smoke.py", tmp / "offline_smoke.py")
+    shutil.copy2(ROOT / "scripts" / "pc_check.py", tmp / "pc_check.py")
     shutil.copy2(ROOT / "packaging" / "training" / "TRAINING.txt", tmp / "TRAINING.txt")
     # The CUDA libraries shipped decide the oldest NVIDIA driver that can run them (Windows minimums from NVIDIA).
     cuda_major = next((int(p.name.split("-")[1].split(".")[0]) for p in wh.glob("nvidia_cuda_runtime*-*.whl")), None)
     cuda_min_driver = {11: "452.39", 12: "528.33", 13: "580.0"}.get(cuda_major) if cuda_major else None
-    manifest = {"training": a.with_training, "python_runtime": runtime_version, "cuda_major": cuda_major, "cuda_min_driver": cuda_min_driver, "version": __version__, "python": pyver, "platform": plat, "ort": a.ort, "app_only": a.app_only, "models": packs,
+    manifest = {"vc_runtime": vc_runtime, "training": a.with_training, "python_runtime": runtime_version, "cuda_major": cuda_major, "cuda_min_driver": cuda_min_driver, "version": __version__, "python": pyver, "platform": plat, "ort": a.ort, "app_only": a.app_only, "models": packs,
                 "requirements": reqs, "wheels": sorted(p.name for p in wh.iterdir())}
     (tmp / "bundle.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     lines = [f"{sha(p)}  {p.relative_to(tmp).as_posix()}" for p in sorted(tmp.rglob("*"))
