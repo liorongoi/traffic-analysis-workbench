@@ -15,7 +15,7 @@ function Test-Uninstall([string]$Dir, [string]$Data, [string]$KeepModel = "") {
   if (Test-Path $Dir) {
     $left = @(Get-ChildItem $Dir -Recurse -Force | ForEach-Object { $_.FullName.Substring($Dir.Length + 1) })
     $allowed = @()
-    if ($KeepModel) { $allowed = @("models", (Split-Path $KeepModel -Parent), $KeepModel) + @(Get-ChildItem (Join-Path $Dir $KeepModel) -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($Dir.Length + 1) }) }
+    if ($KeepModel) { $allowed = @(($KeepModel -split "\\")[0], (Split-Path $KeepModel -Parent), $KeepModel) + @(Get-ChildItem (Join-Path $Dir $KeepModel) -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($Dir.Length + 1) }) }
     $extra = @($left | Where-Object { $allowed -notcontains $_ })
     if ($extra) { $problems += "files left in ${Dir}: $($extra -join ', ')" }
   }
@@ -50,10 +50,10 @@ function Test-Uninstall([string]$Dir, [string]$Data, [string]$KeepModel = "") {
 }
 
 # A stand-in for a model trained on this computer: its card records the training.
+# Returns where the uninstaller is expected to keep it.
 function New-TrainedModel([string]$Dir) {
-  $rel = "models\vehicle-trained-test\1"
-  $d = Join-Path $Dir $rel
+  $d = Join-Path $Dir "models\vehicle-trained-test\1"
   New-Item -ItemType Directory -Force -Path $d | Out-Null
   '{"name": "vehicle-trained-test", "version": "1", "training": {"dataset": {"name": "test"}}}' | Set-Content (Join-Path $d "model.json")
-  return $rel
+  return "trained-models\vehicle-trained-test\1"
 }

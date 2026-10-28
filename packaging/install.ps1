@@ -178,6 +178,16 @@ Get-ChildItem (Join-Path $Bundle "wheelhouse") -Filter *.whl | ForEach-Object {
 
 # 4. Model packs: add the bundle's versions; existing versions are kept.
 $Models = Join-Path $Target "models"
+# Models trained on this computer that an uninstall set aside: back into the models folder.
+$Kept = Join-Path $Target "trained-models"
+if (Test-Path $Kept) {
+  foreach ($pack in @(Get-ChildItem $Kept -Directory | ForEach-Object { Get-ChildItem $_.FullName -Directory })) {
+    $dest = Join-Path $Models (Join-Path $pack.Parent.Name $pack.Name)
+    if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null; Move-Item $pack.FullName $dest }
+  }
+  if (-not (Get-ChildItem $Kept -Recurse -File)) { Remove-Item -Recurse -Force $Kept }
+  else { Write-Host "Some trained models in $Kept have the same name as installed ones and were left there." }
+}
 $BundleModels = Join-Path $Bundle "models"
 if (Test-Path $BundleModels) { Get-ChildItem $BundleModels -Directory | ForEach-Object {
   Get-ChildItem $_.FullName -Directory | ForEach-Object {

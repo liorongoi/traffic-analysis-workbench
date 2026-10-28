@@ -56,7 +56,7 @@ $model = New-TrainedModel $dir
 Test-Uninstall -Dir $dir -Data $data -KeepModel $model
 
 # Install again over what was kept, check it, and uninstall once more.
-Remove-Item -Recurse -Force (Join-Path $dir "models")
+Remove-Item -Recurse -Force (Join-Path $dir "trained-models")
 $p = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/LOG=C:\setup2.log"
 if (-not $p.WaitForExit(40 * 60 * 1000)) { throw "The second install did not finish in 40 minutes" }
 if (Test-Path (Join-Path $dir "logs\install-problem.txt")) { throw "The second install stopped: $(Get-Content (Join-Path $dir 'logs\install-problem.txt') -Raw)" }
