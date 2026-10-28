@@ -25,7 +25,7 @@ export default function App() {
           <span className="brand-wordmark"><strong>LanePulse</strong><small>Offline traffic analysis</small></span>
         </a>
         <nav className="top-nav" aria-label="Main navigation">
-          <a href="#/" aria-current={section !== "new" ? "page" : undefined}>Missions</a>
+          <a href="#/" aria-current={section === "m" ? "true" : section !== "new" ? "page" : undefined}>Missions</a>
           <a href="#/new" aria-current={section === "new" ? "page" : undefined}>New mission</a>
         </nav>
       </header>

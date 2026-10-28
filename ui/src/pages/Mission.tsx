@@ -113,12 +113,13 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
     await api(`/missions/${m.id}/monitoring`, { method: "PUT", body: { enabled: !m.config.monitoring_enabled } });
     reload();
   };
-  const stats: [string, number][] = [["Files", s.source_files], ["Processed", pc.done ?? 0], ["Queued", (pc.queued ?? 0) + (pc.running ?? 0)],
-    ["Failed", pc.failed ?? 0], ["Waiting to finish copying", s.pending_stability], ["Missing from source", s.missing], ["Names not readable", s.malformed], ["Damaged files", s.corrupt]];
+  // The third field marks figures that show red when they are not zero.
+  const stats: [string, number, boolean?][] = [["Files", s.source_files], ["Processed", pc.done ?? 0], ["Queued", (pc.queued ?? 0) + (pc.running ?? 0)],
+    ["Failed", pc.failed ?? 0, true], ["Waiting to finish copying", s.pending_stability], ["Missing from source", s.missing], ["Names not readable", s.malformed], ["Damaged files", s.corrupt, true]];
   return (
     <div className="grid" style={{ gap: 14 }}>
       <div className="grid cols-4">
-        {stats.map(([l, n]) => <div key={l} className={`card stat${n ? (l === "Failed" || l === "Damaged files" ? " alert" : "") : " zero"}`}><div className="n">{n}</div><div className="l">{l}</div></div>)}
+        {stats.map(([l, n, alert]) => <div key={l} className={`card stat${!n ? " zero" : alert ? " alert" : ""}`}><div className="n">{n}</div><div className="l">{l}</div></div>)}
       </div>
       <div className="grid cols-2">
         <JobCard job={m.job} mid={m.id} reload={reload} unit={m.config.input_type === "video" ? "recordings" : "images"} />
