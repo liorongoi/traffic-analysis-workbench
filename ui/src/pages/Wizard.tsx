@@ -90,11 +90,11 @@ export default function Wizard() {
   return (
     <div className="page" style={{ maxWidth: 820 }}>
       <h1>New mission</h1>
-      <div className="row" style={{ marginBottom: 12 }}>
+      <ol className="steps" aria-label="Steps">
         {STEPS.map((s, i) => (
-          <span key={s} className="badge" style={i === step ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}>{i + 1}. {s}</span>
+          <li key={s} className={i === step ? "on" : i < step ? "done" : ""} aria-current={i === step ? "step" : undefined}><b>{i + 1}</b><span>{s}</span></li>
         ))}
-      </div>
+      </ol>
       <div className="card">
         {step === 0 && (
           <>
