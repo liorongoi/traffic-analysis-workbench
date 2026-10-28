@@ -156,19 +156,24 @@ end;
 
 procedure RunInstaller;
 var
-  Log, Cmd: String;
+  Log, Cmd, Problem: String;
+  Reason: AnsiString;
   Code: Integer;
 begin
   ForceDirectories(ExpandConstant('{app}\logs'));
   Log := ExpandConstant('{app}\logs\install.log');
   LogPath := Log;
+  // The reason, in plain words, when the install stops (what install.ps1 threw).
+  Problem := ExpandConstant('{app}\logs\install-problem.txt');
+  DeleteFile(Problem);
   // Windows PowerShell's own module path, in case Setup was started from PowerShell 7, whose path would load
   // the wrong modules. The log is written as UTF-8 so it reads anywhere.
   Cmd := '$env:PSModulePath=[Environment]::GetEnvironmentVariable(''PSModulePath'',''Machine''); ' +
     '$ErrorActionPreference=''Stop''; try { & ' + Quote(ExpandConstant('{tmp}\bundle\install.ps1')) +
     ' -Target ' + Quote(ExpandConstant('{app}')) + ' -Data ' + Quote(FoldersPage.Values[0]) +
     ' -BackupDir ' + Quote(FoldersPage.Values[1]) + ' -AutoStart none' +
-    ' *>&1 | Out-File -Encoding utf8 ' + Quote(Log) + '; exit 0 } catch { $_ | Out-File -Append -Encoding utf8 ' + Quote(Log) + '; exit 1 }';
+    ' *>&1 | Out-File -Encoding utf8 ' + Quote(Log) + '; exit 0 } catch { $_ | Out-File -Append -Encoding utf8 ' + Quote(Log) +
+    '; [IO.File]::WriteAllText(' + Quote(Problem) + ', $_.Exception.Message); exit 1 }';
   WizardForm.StatusLabel.Caption := 'Checking this computer and the files, setting up LanePulse (it brings its own Python) and testing the install. This takes a few minutes...';
   WizardForm.ProgressGauge.Style := npbstMarquee;
   try
@@ -180,7 +185,11 @@ begin
   end;
   if Code <> 0 then
   begin
-    SuppressibleMsgBox('The installation did not finish (code ' + IntToStr(Code) + ').' + #13#10 + #13#10 +
+    if LoadStringFromFile(Problem, Reason) and (Trim(String(Reason)) <> '') then
+      Reason := #13#10 + #13#10 + 'Reason: ' + Reason
+    else
+      Reason := '';
+    SuppressibleMsgBox('The installation did not finish (code ' + IntToStr(Code) + ').' + String(Reason) + #13#10 + #13#10 +
            'Details are in:' + #13#10 + Log + #13#10 + #13#10 +
            'Your data and previous version have been kept. Close LanePulse and retry the installer. If it fails again, share install.log.', mbError, MB_OK, IDOK);
     Failed := True;

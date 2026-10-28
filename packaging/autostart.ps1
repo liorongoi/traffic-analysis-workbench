@@ -31,7 +31,11 @@ $TaskName = "Traffic Analysis Workbench"
 $Start = Join-Path $Target "start.cmd"
 $Runner = Join-Path $Target "run-server.cmd"
 $Logs = Join-Path $Target "logs"
-$Link = Join-Path ([Environment]::GetFolderPath("Startup")) "Traffic Analysis Workbench.lnk"
+# Windows can report no Startup folder (a profile without one, some managed computers): use the usual place then.
+$StartupDir = [Environment]::GetFolderPath("Startup")
+if (-not $StartupDir -and $env:APPDATA) { $StartupDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup" }
+if (-not $StartupDir) { $StartupDir = Join-Path $Target "startup" }
+$Link = Join-Path $StartupDir "Traffic Analysis Workbench.lnk"
 
 function Test-Admin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -190,6 +194,7 @@ if ($Mode -eq "signin") {
     throw "The power-on task is already set up; the server must not be started twice. Run -Mode remove first."
   }
   Write-Runner
+  New-Item -ItemType Directory -Force -Path $StartupDir | Out-Null
   $sh = New-Object -ComObject WScript.Shell
   $lnk = $sh.CreateShortcut($Link)
   $lnk.TargetPath = $Runner

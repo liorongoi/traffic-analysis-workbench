@@ -35,6 +35,11 @@ Get-Content (Join-Path $Bundle "SHA256SUMS") | ForEach-Object {
 }
 Write-Host "Bundle checksums verified."
 
+# This computer: 64-bit Windows 10 or 11 (Setup itself refuses 32-bit Windows).
+$os = [Environment]::OSVersion.Version
+if ($os.Major -lt 10) { throw "LanePulse needs Windows 10 or 11; this computer runs Windows $os." }
+Write-Host "Windows $os, 64-bit: $([Environment]::Is64BitOperatingSystem)"
+
 # Room for the new version (its Python environment, with PyTorch when training is included) next to the previous one.
 $needGB = if ($Info.app_only) { 1 } elseif ($Info.training) { 8 } else { 4 }
 $root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Target))
@@ -64,7 +69,14 @@ function Install-VcRuntime([string]$dir) {
     $dest = Join-Path $dir $dll.Name
     if ((Test-Path $dest) -and ((Get-FileVer $dest) -ge (Get-FileVer $dll.FullName))) { continue }
     # A running LanePulse holds its copy open; it is the same version, and the restart below picks up any newer one.
-    try { Copy-Item $dll.FullName $dest -Force } catch { Write-Host "Could not replace $dest (in use); keeping the copy there." }
+    try { Copy-Item $dll.FullName $dest -Force }
+    catch {
+      # In use by a LanePulse server still running from this Python: a loaded DLL can be renamed, not overwritten.
+      try {
+        Rename-Item -LiteralPath $dest "$($dll.Name).old-$(Get-Date -Format yyyyMMddHHmmss)"
+        Copy-Item $dll.FullName $dest -Force
+      } catch { Write-Host "Could not replace $dest (in use); keeping the copy there." }
+    }
   }
 }
 
@@ -302,8 +314,13 @@ Write-Host "Installed $($Info.version)."
 # 7. Existing automatic start. The task and shortcut keep their old names so existing installs are found.
 # New installs start manually; an existing automatic start is preserved across updates.
 $auto = Join-Path $Target "autostart.ps1"
-$hasLink = Test-Path (Join-Path ([Environment]::GetFolderPath("Startup")) "Traffic Analysis Workbench.lnk")
-$hasTask = [bool](Get-ScheduledTask -TaskName "Traffic Analysis Workbench" -ErrorAction SilentlyContinue)
+# Windows can report no Startup folder (a profile without one, some managed computers).
+$startupDir = [Environment]::GetFolderPath("Startup")
+if (-not $startupDir -and $env:APPDATA) { $startupDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup" }
+$hasLink = [bool]$startupDir -and (Test-Path (Join-Path $startupDir "Traffic Analysis Workbench.lnk"))
+# Get-ScheduledTask can itself be missing or blocked on a locked-down computer: then there is no task to keep.
+$hasTask = $false
+try { $hasTask = [bool](Get-ScheduledTask -TaskName "Traffic Analysis Workbench" -ErrorAction SilentlyContinue) } catch { }
 $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
 $running = $false
 try { $null = $wc.DownloadString("http://127.0.0.1:$Port/api/health"); $running = $true } catch { }
