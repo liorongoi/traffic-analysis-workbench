@@ -6,7 +6,6 @@
   color-scheme: dark;
   --bg: #14181d;
   --surface: #1a1f25;
-  --panel: #1a1f25;
   --panel-2: #222830;
   --field: #11151a;
   --text: #e4e9ee;
@@ -14,6 +13,8 @@
   --muted: #8d99a6;
   --line: #2c343e;
   --line-strong: #3a4450;
+  --hover-bg: #2a313a;
+  --hover-line: #4a5562;
   --accent: #45c9b0;
   --accent-hover: #5ad4bd;
   --accent-text: #05211b;
@@ -73,13 +74,12 @@ hr { border: 0; border-top: 1px solid var(--line); }
 .top-nav { display: flex; align-items: stretch; align-self: stretch; gap: 4px; }
 .top-nav a { display: flex; align-items: center; padding: 0 12px; color: var(--muted); font-weight: 600; position: relative; }
 .top-nav a:hover { color: var(--text); text-decoration: none; }
-.top-nav a[aria-current="page"] { color: var(--text); }
-.top-nav a[aria-current="page"]::after, .tabs a.on::after {
-  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px;
+.top-nav a[aria-current] { color: var(--text); }
+/* Lane-marking dash under the current place. */
+.top-nav a[aria-current]::after, .tabs a.on::after, .steps li.on::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
   background: repeating-linear-gradient(90deg, var(--lane) 0 12px, transparent 12px 18px);
 }
-.brand-lockup { display: flex; align-items: center; gap: 12px; font-size: 24px; font-weight: 700; margin-bottom: 16px; }
-.top .spacer { flex: 1; }
 
 /* ---- Page frame ---- */
 .page { padding: 24px 28px 48px; max-width: 1440px; margin: 0 auto; }
@@ -93,25 +93,25 @@ hr { border: 0; border-top: 1px solid var(--line); }
 .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .meta span { padding: 2px 8px; border-radius: var(--radius-sm); background: var(--panel-2); color: var(--text-2); font-size: 12.5px; }
 
-.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 20px; overflow-x: auto; }
+.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 20px; overflow-x: auto; overflow-y: hidden; }
 .tabs a { position: relative; padding: 10px 2px 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
 .tabs a:hover { color: var(--text); text-decoration: none; }
 .tabs a.on { color: var(--text); }
 
 /* ---- Surfaces ---- */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
-.card > h2:first-child { margin-top: 0; }
 .grid { display: grid; gap: 16px; }
 .cols-4 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
 .cols-2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
 
-/* Figures read as one instrument strip rather than a pile of boxes. */
+/* Figures read as one instrument strip rather than a pile of boxes.
+   Cell outlines draw the dividers, so empty cells in a short last row stay blank. */
 .stat .n { font-size: 24px; line-height: 1.15; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .stat .l { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
 .grid:has(> .card.stat) {
-  gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+  gap: 1px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
 }
-.grid > .card.stat { border: 0; border-radius: 0; padding: 14px 18px; }
+.grid > .card.stat { border: 0; border-radius: 0; padding: 14px 18px; outline: 1px solid var(--line); }
 .card .grid:has(> .card.stat) { margin-bottom: 14px; }
 .card .grid > .card.stat { background: var(--panel-2); }
 .stat.zero .n { color: var(--muted); }
@@ -123,7 +123,7 @@ button, .btn {
   border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text); cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap;
 }
-button:hover:not(:disabled), .btn:hover { background: #2a313a; border-color: #4a5562; text-decoration: none; }
+button:hover:not(:disabled), .btn:hover { background: var(--hover-bg); border-color: var(--hover-line); text-decoration: none; }
 button.primary, .btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 650; }
 button.primary:hover:not(:disabled), .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 button.danger { color: var(--bad); border-color: rgba(255, 125, 122, .35); background: transparent; }
@@ -133,6 +133,7 @@ input, select, textarea {
   font: inherit; min-height: 34px; padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong);
   background: var(--field); color: var(--text); min-width: 0;
 }
+textarea { padding: 8px 10px; }
 input[type="checkbox"], input[type="radio"] { min-height: 0; accent-color: var(--accent); }
 input::placeholder, textarea::placeholder { color: #6b7684; }
 label.field { display: grid; gap: 6px; margin-bottom: 14px; }
@@ -158,7 +159,7 @@ span.msg { display: inline-block; margin: 0; padding: 5px 10px; }
 /* ---- Tables ---- */
 table.t { width: 100%; border-collapse: collapse; background: var(--surface); font-variant-numeric: tabular-nums; }
 table.t th, table.t td { padding: 9px 12px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
-table.t th { position: sticky; top: 0; background: #1f252c; font-size: 12px; color: var(--muted); font-weight: 600; cursor: pointer; user-select: none; }
+table.t th { position: sticky; top: 56px; background: #1f252c; font-size: 12px; color: var(--muted); font-weight: 600; cursor: pointer; user-select: none; }
 table.t th:hover { color: var(--text); }
 table.t tbody tr:last-child td { border-bottom: 0; }
 table.t tbody tr:hover td { background: #1e242b; }
@@ -166,8 +167,10 @@ table.t tr.click:hover td { background: var(--panel-2); cursor: pointer; }
 table.t td a b { font-weight: 600; }
 td.num, th.num, table.t .num { text-align: right; }
 .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+/* Inside a wrapper the wrapper is the scroll box, so stick to its top, not below the app bar. */
+.tablewrap table.t th { top: 0; }
 .card table.t { background: transparent; }
-.card table.t th { background: transparent; }
+.card table.t th { background: var(--surface); }
 
 /* ---- Status marks ---- */
 .badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 550; line-height: 1.6; background: var(--panel-2); color: var(--text-2); border: 1px solid transparent; }
@@ -193,10 +196,9 @@ td.num, th.num, table.t .num { text-align: right; }
 .steps li.done b { color: var(--accent); }
 .steps li.on { color: var(--text); background: var(--panel-2); font-weight: 600; }
 .steps li.on b { color: var(--lane); }
-.steps li.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: repeating-linear-gradient(90deg, var(--lane) 0 12px, transparent 12px 18px); }
 
 /* ---- Investigation screen ---- */
-.inv { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; height: calc(100vh - 130px); }
+.inv { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; height: calc(100vh - 170px); }
 .stage { position: relative; background: #000; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); }
 .stage img, .stage svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .stage img { object-fit: contain; }
@@ -223,7 +225,6 @@ button.primary kbd { background: transparent; color: inherit; border-color: curr
 /* ---- Object search ---- */
 button.chip { min-height: 28px; padding: 2px 10px; border-radius: 14px; font-size: 12.5px; }
 button.chip.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-textarea { font: inherit; padding: 8px 10px; }
 details.spec > summary { margin: 8px 0; }
 .hits { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
 .hit { padding: 10px; display: grid; gap: 6px; align-content: start; }
@@ -266,6 +267,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .skip-link:focus { transform: translateY(0); }
 @media (max-width: 760px) {
   .brand-wordmark small { display: none; }
+}
+@media (max-width: 380px) {
+  .brand-wordmark { display: none; }
 }
 @media (max-width: 640px) {
   .top { padding: 0 14px; gap: 16px; }
