@@ -8,6 +8,10 @@ Easiest: the setup wizard (Windows)
   No administrator rights are needed, nothing is downloaded, and no account or sign-in is needed. LanePulse brings
   its own Python (in <install folder>\python-<version>) and PyTorch for training; it never uses or changes another
   Python on the computer.
+- Before installing it checks the computer: 64-bit Windows 10 or 11, enough free disk space, and the Microsoft
+  Visual C++ runtime that the AI engine (ONNX Runtime) needs. When the runtime in Windows is old or missing,
+  LanePulse puts its own copy next to its Python (no administrator rights needed). The redistributable is also
+  kept as <install folder>\vc_redist.x64.exe. A problem it can name is shown in plain words in the wizard.
 - It runs the same install.ps1 as below, so the checks, the backup before an update and the automatic start
   are the same. The installer's own output is in <install folder>\logs\install.log.
 - Open LanePulse with the LanePulse icon on the desktop or in the Start menu. It starts the server if it is not

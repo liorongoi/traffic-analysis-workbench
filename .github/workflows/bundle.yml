@@ -34,7 +34,17 @@ jobs:
           if ($h -ne "5ac66ae49a2104efeba985c1dc1cb40987757ee81cc6c7f218d10b801f3276ed") { throw "python-build-standalone checksum mismatch: $h" }
           New-Item -ItemType Directory "$env:RUNNER_TEMP\pbs" | Out-Null
           tar -xzf "$env:RUNNER_TEMP\pbs.tar.gz" -C "$env:RUNNER_TEMP\pbs"
-      - run: python scripts/make_bundle.py --platform win_amd64 --python 3.12 --ort auto --out dist --with-training --python-runtime "${{ runner.temp }}\pbs\python"
+      - name: Microsoft Visual C++ runtime (the DLLs from this up-to-date machine, and the redistributable, signed by Microsoft)
+        shell: pwsh
+        run: |
+          # aka.ms always serves the current release, so its hash cannot be pinned: require Microsoft's signature.
+          Invoke-WebRequest "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "$env:RUNNER_TEMP\vc_redist.x64.exe"
+          $sig = Get-AuthenticodeSignature "$env:RUNNER_TEMP\vc_redist.x64.exe"
+          if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "O=Microsoft Corporation") { throw "vc_redist.x64.exe is not signed by Microsoft: $($sig.Status) $($sig.SignerCertificate.Subject)" }
+          $redist = [Diagnostics.FileVersionInfo]::GetVersionInfo("$env:RUNNER_TEMP\vc_redist.x64.exe").ProductVersion
+          $dll = [Diagnostics.FileVersionInfo]::GetVersionInfo("$env:SystemRoot\System32\msvcp140.dll").FileVersion
+          Write-Host "vc_redist.x64.exe $redist; msvcp140.dll on this machine $dll"
+      - run: python scripts/make_bundle.py --platform win_amd64 --python 3.12 --ort auto --out dist --with-training --python-runtime "${{ runner.temp }}\pbs\python" --vc-runtime "C:\Windows\System32" --vc-redist "${{ runner.temp }}\vc_redist.x64.exe"
       - name: Add the Python installer (per-user install, no administrator rights)
         id: py
         shell: pwsh
@@ -64,6 +74,8 @@ jobs:
         shell: pwsh
         env:
           PIP_NO_INDEX: "1"
+          # Treat this machine's Visual C++ runtime as too old, as on a workstation that never had it updated.
+          TWB_TEST_OLD_VCRUNTIME: "1"
           HTTPS_PROXY: http://127.0.0.1:9
           HTTP_PROXY: http://127.0.0.1:9
         run: |
@@ -95,6 +107,8 @@ jobs:
             $venv = (Get-Content "$dir\current.txt" -Raw).Trim()
             if (-not (Select-String -Path "$venv\pyvenv.cfg" -Pattern "python-3\.12\.10" -Quiet)) { Get-Content "$venv\pyvenv.cfg"; throw "$what did not use LanePulse's own Python" }
             if (-not (Test-Path "$venv\share\lanepulse\yolox_s.pth")) { throw "$what did not install the training starting weights" }
+            if (-not (Test-Path "$dir\python-3.12.10\msvcp140.dll")) { throw "$what did not put the Visual C++ runtime next to LanePulse's Python" }
+            if (-not (Test-Path "$dir\vc_redist.x64.exe")) { throw "$what did not keep vc_redist.x64.exe in the install folder" }
             & "$venv\Scripts\python.exe" -c "from trafficwb import training_env as t; s = t.status(wait=True); print(s); assert s['state'] == 'ready' and s['coco_weights'], s"
             if ($LASTEXITCODE -ne 0) { throw "$($what): training is not ready" }
             # Manual start, as the Start menu entry does it.

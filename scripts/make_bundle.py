@@ -27,6 +27,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 
+# The Microsoft Visual C++ 2015-2022 runtime, as one set (its DLLs must be the same version).
+VC_RUNTIME_DLLS = ("msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll",
+                   "msvcp140_codecvt_ids.dll", "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll", "vcomp140.dll")
+
+
 def sha(p: Path) -> str:
     h = hashlib.sha256()
     with open(p, "rb") as f:
@@ -53,6 +58,11 @@ def main(argv=None) -> int:
     ap.add_argument("--python-runtime", help="an unpacked python-build-standalone 'python' folder for the target: shipped as "
                     "python-runtime and used by install.ps1 instead of any Python on the workstation")
     ap.add_argument("--python-runtime-version", default="3.12.10", help="the exact version of --python-runtime")
+    ap.add_argument("--vc-runtime", help="Windows: a folder holding the current Microsoft Visual C++ runtime DLLs (e.g. "
+                    "C:\\Windows\\System32 on an up-to-date build machine). Shipped as vc-runtime: install.ps1 puts them "
+                    "next to LanePulse's own Python when the computer's runtime is older, which ONNX Runtime needs")
+    ap.add_argument("--vc-redist", help="Windows: Microsoft's vc_redist.x64.exe, run by install.ps1 when the runtime is old "
+                    "and a Python outside the install folder is used")
     ap.add_argument("--with-training", action="store_true",
                     help="also ship PyTorch (CPU build on Windows) and the YOLOX-s starting weights, so the learning page "
                          "can train the vehicle detector on the workstation itself")
@@ -128,6 +138,16 @@ def main(argv=None) -> int:
         # debug symbols are not needed and are a third of the size
         shutil.copytree(src, tmp / "python-runtime", ignore=shutil.ignore_patterns("*.pdb", "__pycache__"))
         runtime_version = a.python_runtime_version
+    if a.vc_runtime and not a.app_only:
+        (tmp / "vc-runtime").mkdir()
+        for dll in VC_RUNTIME_DLLS:
+            src = Path(a.vc_runtime) / dll
+            if not src.is_file():
+                print(f"{src} is missing: --vc-runtime must hold the whole Visual C++ runtime.", file=sys.stderr)
+                return 1
+            shutil.copy2(src, tmp / "vc-runtime" / dll)
+    if a.vc_redist and not a.app_only:
+        shutil.copy2(a.vc_redist, tmp / "vc_redist.x64.exe")
     if a.python_installer:
         shutil.copy2(a.python_installer, tmp / Path(a.python_installer).name)
     for f in ("install.ps1", "autostart.ps1", "install.sh", "INSTALL.txt"):

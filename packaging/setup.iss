@@ -87,6 +87,7 @@ Type: files; Name: "{app}\previous.txt"
 Type: files; Name: "{app}\autostart.ps1"
 Type: files; Name: "{app}\TRAINING.txt"
 Type: files; Name: "{app}\python-installer.exe"
+Type: files; Name: "{app}\vc_redist.x64.exe"
 Type: dirifempty; Name: "{app}"
 
 [Code]
@@ -154,12 +155,16 @@ end;
 
 procedure RunInstaller;
 var
-  Log, Cmd: String;
+  Log, Cmd, Problem: String;
+  Reason: AnsiString;
   Code: Integer;
 begin
   ForceDirectories(ExpandConstant('{app}\logs'));
   Log := ExpandConstant('{app}\logs\install.log');
   LogPath := Log;
+  // install.ps1 writes the reason for a failure the user can act on here, in plain words.
+  Problem := ExpandConstant('{app}\logs\install-problem.txt');
+  DeleteFile(Problem);
   // Windows PowerShell's own module path, in case Setup was started from PowerShell 7, whose path would load
   // the wrong modules. The log is written as UTF-8 so it reads anywhere.
   Cmd := '$env:PSModulePath=[Environment]::GetEnvironmentVariable(''PSModulePath'',''Machine''); ' +
@@ -167,7 +172,7 @@ begin
     ' -Target ' + Quote(ExpandConstant('{app}')) + ' -Data ' + Quote(FoldersPage.Values[0]) +
     ' -BackupDir ' + Quote(FoldersPage.Values[1]) + ' -AutoStart none' +
     ' *>&1 | Out-File -Encoding utf8 ' + Quote(Log) + '; exit 0 } catch { $_ | Out-File -Append -Encoding utf8 ' + Quote(Log) + '; exit 1 }';
-  WizardForm.StatusLabel.Caption := 'Checking the files, installing Python and the models, and testing the install. This takes a few minutes...';
+  WizardForm.StatusLabel.Caption := 'Checking this computer and the files, installing LanePulse''s own Python and the models, and testing the install. This takes a few minutes...';
   WizardForm.ProgressGauge.Style := npbstMarquee;
   try
     if not Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "' + Cmd + '"', '',
@@ -178,6 +183,10 @@ begin
   end;
   if Code <> 0 then
   begin
+    if LoadStringFromFile(Problem, Reason) and (Trim(UTF8Decode(Reason)) <> '') then
+      SuppressibleMsgBox('The installation did not finish.' + #13#10 + #13#10 + Trim(UTF8Decode(Reason)) + #13#10 + #13#10 +
+             'Your data and previous version have been kept. Details are in:' + #13#10 + Log, mbError, MB_OK, IDOK)
+    else
     SuppressibleMsgBox('The installation did not finish (code ' + IntToStr(Code) + ').' + #13#10 + #13#10 +
            'Details are in:' + #13#10 + Log + #13#10 + #13#10 +
            'Your data and previous version have been kept. Close LanePulse and retry the installer. If it fails again, share install.log.', mbError, MB_OK, IDOK);

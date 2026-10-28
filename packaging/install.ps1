@@ -18,6 +18,57 @@ $Bundle = $PSScriptRoot
 $Info = Get-Content (Join-Path $Bundle "bundle.json") -Raw | ConvertFrom-Json
 Write-Host "LanePulse $($Info.version) for Python $($Info.python)"
 
+# A failure the user can act on is also written, in plain words, to logs\install-problem.txt; the setup wizard
+# shows that file instead of pointing at the log.
+$Logs = Join-Path $Target "logs"
+$Problem = Join-Path $Logs "install-problem.txt"
+New-Item -ItemType Directory -Force -Path $Logs | Out-Null
+Remove-Item -Force $Problem -ErrorAction SilentlyContinue
+function Fail([string]$msg) {
+  [IO.File]::WriteAllText($Problem, $msg)   # UTF-8 without a byte-order mark, as the wizard reads it
+  throw $msg
+}
+
+# 0. Check this computer before installing anything.
+Write-Host "Checking this computer..."
+if (-not [Environment]::Is64BitOperatingSystem) { Fail "LanePulse needs 64-bit Windows; this computer runs 32-bit Windows." }
+$os = [Environment]::OSVersion.Version
+if ($os.Major -lt 10) { Fail "LanePulse needs Windows 10 or 11; this computer runs Windows $os." }
+Write-Host "  Windows $os, 64-bit"
+try {
+  $drive = New-Object IO.DriveInfo ([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Target)))
+  $bundleBytes = (Get-ChildItem -Recurse -File $Bundle | Measure-Object -Sum Length).Sum
+  $needGB = [math]::Ceiling(($bundleBytes * 2 + 1GB) / 1GB)
+  $freeGB = [math]::Floor($drive.AvailableFreeSpace / 1GB)
+  Write-Host "  Free space on $($drive.Name): $freeGB GB (needs about $needGB GB)"
+  if ($freeGB -lt $needGB) { Fail "There is not enough free space on drive $($drive.Name): $freeGB GB free, about $needGB GB needed. Free some space and run Setup again." }
+} catch [System.ArgumentException] { Write-Host "  Free space: not checked for $Target" }
+
+# The Microsoft Visual C++ runtime (msvcp140.dll and friends). ONNX Runtime and PyTorch need a recent one; an older
+# copy in Windows makes them fail to load ("DLL initialization routine failed"). The bundle carries the current
+# DLLs (vc-runtime) and Microsoft's redistributable (vc_redist.x64.exe).
+$VcDir = Join-Path $Bundle "vc-runtime"
+$VcRedist = Join-Path $Bundle "vc_redist.x64.exe"
+$Sys = Join-Path $env:SystemRoot "System32"
+if (Test-Path (Join-Path $env:SystemRoot "Sysnative")) { $Sys = Join-Path $env:SystemRoot "Sysnative" }   # a 32-bit host
+function Get-DllVersion([string]$path) {
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+  $i = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
+  return New-Object Version $i.FileMajorPart, $i.FileMinorPart, $i.FileBuildPart, $i.FilePrivatePart
+}
+$VcNeed = Get-DllVersion (Join-Path $VcDir "msvcp140.dll")
+$VcSystem = Get-DllVersion (Join-Path $Sys "msvcp140.dll")
+# For the CI: pretend Windows has an old runtime, to exercise the private copy.
+if ($env:TWB_TEST_OLD_VCRUNTIME) { $VcSystem = New-Object Version 14, 0, 0, 0 }
+if ($VcSystem) { Write-Host "  Visual C++ runtime in Windows: $VcSystem" } else { Write-Host "  Visual C++ runtime in Windows: not installed" }
+if ($VcNeed) { Write-Host "  Visual C++ runtime in this bundle: $VcNeed" }
+# Kept in the install folder, so it can be run by hand on a computer with no internet.
+if (Test-Path $VcRedist) {
+  New-Item -ItemType Directory -Force -Path $Target | Out-Null
+  Copy-Item -Force $VcRedist (Join-Path $Target "vc_redist.x64.exe")
+}
+$VcHint = "Install it with $(Join-Path $Target 'vc_redist.x64.exe') (or from https://aka.ms/vs/17/release/vc_redist.x64.exe), then run Setup again."
+
 # 1. Check every file against SHA256SUMS. .NET directly, not Get-FileHash, which is missing when this runs
 #    under Windows PowerShell started from PowerShell 7 (its module path points at the wrong modules).
 function Get-Sha256([string]$path) {
@@ -109,6 +160,42 @@ if (-not $Python) {
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) { throw "Python was not found at '$Python'. Install Python $($Info.python) or repair the bundled runtime." }
 Write-Host "Python: $Python"
 
+# 2b. Visual C++ runtime, when the one in Windows is older than the bundle's (or missing).
+#     A Python in the install folder (LanePulse's own) gets a private copy of the DLLs next to python.exe, which
+#     Windows loads before the ones in System32: no administrator rights needed, and nothing else changes.
+#     Any other Python: Microsoft's redistributable is installed (Windows asks for administrator approval).
+function Copy-VcRuntime([string]$dest) {
+  $stamp = Get-Date -Format "yyyyMMddHHmmss"
+  foreach ($dll in Get-ChildItem $VcDir -Filter *.dll) {
+    $to = Join-Path $dest $dll.Name
+    try { Copy-Item -Force $dll.FullName $to }
+    catch {
+      # In use by a LanePulse server still running from this Python: a loaded DLL can be renamed, not overwritten.
+      Rename-Item -LiteralPath $to "$($dll.Name).old-$stamp"
+      Copy-Item -Force $dll.FullName $to
+    }
+  }
+}
+if ($VcNeed -and (-not $VcSystem -or $VcSystem -lt $VcNeed)) {
+  $pyHome = Split-Path -Parent $Python
+  $ours = $pyHome.StartsWith([IO.Path]::GetFullPath($Target).TrimEnd("\") + "\", [StringComparison]::OrdinalIgnoreCase)
+  $private = Get-DllVersion (Join-Path $pyHome "msvcp140.dll")
+  if ($ours) {
+    if (-not $private -or $private -lt $VcNeed) {
+      Write-Host "The Visual C++ runtime in Windows is older than LanePulse needs; putting a private copy next to its Python."
+      Copy-VcRuntime $pyHome
+    } else { Write-Host "LanePulse's Python already has its own Visual C++ runtime ($private)." }
+  } elseif (Test-Path $VcRedist) {
+    Write-Host "Installing the Microsoft Visual C++ runtime (Windows asks for administrator approval)..."
+    try { $p = Start-Process -FilePath $VcRedist -ArgumentList "/install", "/quiet", "/norestart" -Verb RunAs -Wait -PassThru }
+    catch { Fail "LanePulse needs the Microsoft Visual C++ runtime, and installing it was not approved (it needs an administrator). $VcHint" }
+    # 3010: installed, restart pending; 1638: a newer version is already there.
+    if ($p.ExitCode -notin 0, 1638, 3010) { Fail "Installing the Microsoft Visual C++ runtime failed (code $($p.ExitCode)). $VcHint" }
+  } else {
+    Write-Host "Warning: the Visual C++ runtime in Windows may be too old, and this bundle does not carry one."
+  }
+}
+
 # 3. Wheels collect in one local wheelhouse, so a small update bundle (application only) finds the runtime there.
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
 $Venv = Join-Path $Target "app-$($Info.version)"
@@ -182,16 +269,36 @@ function Install-Env([string]$build) {
     New-Item -ItemType Directory -Force -Path $share | Out-Null
     Copy-Item (Join-Path $kept "yolox_s.pth") $share -Force
   }
+  # A quick load of the AI engine first, so a computer that cannot run it gets a clear answer, not a traceback.
+  $probe = & $script:VPy -c "import onnxruntime; print(onnxruntime.__version__, onnxruntime.get_device())" 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    $probe | ForEach-Object { Write-Host $_ }
+    if ("$probe" -match "DLL load failed") {
+      Fail ("The AI engine (ONNX Runtime, $build build) could not load on this computer. This is almost always an " +
+        "old or missing Microsoft Visual C++ runtime. $VcHint The previous version stays in use.")
+    }
+    Fail "The AI engine (ONNX Runtime, $build build) could not load on this computer. Details are in the install log. The previous version stays in use."
+  }
+  Write-Host "ONNX Runtime $probe"
   if ($SkipCheck) { return "unchecked" }
   $work = Join-Path $env:TEMP ("twb-check-" + [guid]::NewGuid())
   $lines = & $script:VPy (Join-Path $Bundle "offline_smoke.py") --work $work --models $Models
   $code = $LASTEXITCODE
   $lines | ForEach-Object { Write-Host $_ }
-  if ($code -ne 0) { throw "The install check failed; the previous version stays in use." }
+  if ($code -ne 0) { Fail "The final install check failed; the previous version stays in use. Details are in the install log." }
   $result = ($lines | Select-Object -Last 1) | ConvertFrom-Json
   return $result.accelerator.accelerator
 }
-$used = Install-Env $Choice
+$hasDml = [bool]($Info.wheels | Where-Object { $_ -like "onnxruntime_directml-*" })
+try { $used = Install-Env $Choice }
+catch {
+  if ($Choice -ne "cuda" -or -not $hasDml) { throw }
+  Write-Host "The CUDA build did not install here ($_); installing the DirectML build instead."
+  Remove-Item -Force $Problem -ErrorAction SilentlyContinue
+  if (Test-Path $Venv) { Remove-Item -Recurse -Force $Venv }
+  $Choice = "directml"
+  $used = Install-Env $Choice
+}
 if ($Choice -eq "cuda" -and $used -ne "cuda" -and -not $SkipCheck -and ($Info.wheels | Where-Object { $_ -like "onnxruntime_directml-*" })) {
   Write-Host "CUDA did not start on this machine (models ran on $used); installing the DirectML build instead."
   Remove-Item -Recurse -Force $Venv
