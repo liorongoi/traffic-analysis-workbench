@@ -163,6 +163,28 @@ jobs:
           compression-level: 0
           retention-days: 90
 
+  bare-windows:
+    # The setup wizard on a bare Windows (a Server Core container: no Visual C++ runtime, no Python, no GPU, nothing
+    # added), as on a freshly set-up PC. The build machine has all of those, so it cannot show what a PC lacks.
+    needs: bundle
+    runs-on: windows-2022
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: LanePulse-Setup-*
+          path: setup
+          merge-multiple: true
+      - name: Install and run LanePulse on bare Windows
+        shell: pwsh
+        run: |
+          docker pull mcr.microsoft.com/windows/servercore:ltsc2022
+          docker run --rm --isolation process -v "${PWD}\setup:C:\setup" -v "${PWD}\.github\scripts:C:\check" `
+            mcr.microsoft.com/windows/servercore:ltsc2022 `
+            powershell -NoProfile -ExecutionPolicy Bypass -File C:\check\bare_windows_check.ps1
+          if ($LASTEXITCODE -ne 0) { throw "LanePulse did not install or run on bare Windows" }
+
   training-kit:
     # The kit for training the vehicle detector on an Apple-silicon Mac or an NVIDIA computer: the LanePulse wheel,
     # the two setup scripts and TRAINING.txt. Tried here on an Apple-silicon runner (its GPU is not available to
