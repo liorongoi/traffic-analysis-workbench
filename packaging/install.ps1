@@ -314,8 +314,13 @@ Write-Host "Installed $($Info.version)."
 # 7. Existing automatic start. The task and shortcut keep their old names so existing installs are found.
 # New installs start manually; an existing automatic start is preserved across updates.
 $auto = Join-Path $Target "autostart.ps1"
-$hasLink = Test-Path (Join-Path ([Environment]::GetFolderPath("Startup")) "Traffic Analysis Workbench.lnk")
-$hasTask = [bool](Get-ScheduledTask -TaskName "Traffic Analysis Workbench" -ErrorAction SilentlyContinue)
+# Windows can report no Startup folder (a profile without one, some managed computers).
+$startupDir = [Environment]::GetFolderPath("Startup")
+if (-not $startupDir -and $env:APPDATA) { $startupDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup" }
+$hasLink = [bool]$startupDir -and (Test-Path (Join-Path $startupDir "Traffic Analysis Workbench.lnk"))
+# Get-ScheduledTask can itself be missing or blocked on a locked-down computer: then there is no task to keep.
+$hasTask = $false
+try { $hasTask = [bool](Get-ScheduledTask -TaskName "Traffic Analysis Workbench" -ErrorAction SilentlyContinue) } catch { }
 $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
 $running = $false
 try { $null = $wc.DownloadString("http://127.0.0.1:$Port/api/health"); $running = $true } catch { }
