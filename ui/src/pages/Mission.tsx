@@ -36,9 +36,17 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
     ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"], ["learning", "Learning"]])];
   return (
     <div className="page">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h1 className="bidi">{m.config.name}</h1>
-        <span className="muted">{m.config.input_type}, {m.config.mode.replace(/_/g, " ")}, {m.config.iana_zone}</span>
+      <div className="page-head">
+        <div>
+          <nav className="crumbs" aria-label="Breadcrumb"><a href="#/">Missions</a><span aria-hidden="true">/</span><span className="bidi">{m.config.name}</span></nav>
+          <h1 className="bidi">{m.config.name}</h1>
+          <div className="meta">
+            <span>{isVideo ? "Video" : "Still images"}</span>
+            <span>{cap(m.config.mode.replace(/_/g, " "))}</span>
+            <span>{m.config.iana_zone}</span>
+            <span>{m.config.processing === "continuous" ? `Continuous, monitoring ${m.config.monitoring_enabled ? "on" : "off"}` : "One-time"}</span>
+          </div>
+        </div>
       </div>
       <nav className="tabs">
         {tabs.map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""}>{l}</a>)}
@@ -54,6 +62,8 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
     </div>
   );
 }
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function JobCard({ job, mid, reload, unit }: { job: Job | null; mid: string; reload: () => void; unit: string }) {
   const [err, setErr] = useState<string | null>(null);
@@ -108,7 +118,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
   return (
     <div className="grid" style={{ gap: 14 }}>
       <div className="grid cols-4">
-        {stats.map(([l, n]) => <div key={l} className="card stat"><div className="n">{n}</div><div className="l">{l}</div></div>)}
+        {stats.map(([l, n]) => <div key={l} className={`card stat${n ? (l === "Failed" || l === "Damaged files" ? " alert" : "") : " zero"}`}><div className="n">{n}</div><div className="l">{l}</div></div>)}
       </div>
       <div className="grid cols-2">
         <JobCard job={m.job} mid={m.id} reload={reload} unit={m.config.input_type === "video" ? "recordings" : "images"} />

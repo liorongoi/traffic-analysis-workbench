@@ -29,9 +29,12 @@ export default function Missions() {
   useEffect(() => { loadMissions(); }, []);
   return (
     <div className="page">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h1>Missions</h1>
-        <a className="btn primary" href="#/new">+ New mission</a>
+      <div className="page-head">
+        <div>
+          <h1>Missions</h1>
+          <p>Each mission watches one source folder and keeps its own results, reviews and exports.</p>
+        </div>
+        <a className="btn primary" href="#/new">New mission</a>
       </div>
       {list === null && <p className="muted" role="status" aria-live="polite">Loading missions…</p>}
       {loadError && <div className="card msg err" role="alert"><b>Could not load missions.</b><p>{loadError}</p><button onClick={loadMissions}>Try again</button></div>}
@@ -73,8 +76,8 @@ const ACCEL: Record<string, string> = { cuda: "NVIDIA GPU (CUDA)", directml: "GP
 function System({ sys, msg, backupNow }: { sys: any; msg: any; backupNow: () => void }) {
   const b = sys.backup;
   return (
-    <div className="card" style={{ marginTop: 14 }}>
-      <h2 style={{ marginTop: 0 }}>System</h2>
+    <div className="card" style={{ marginTop: 20 }}>
+      <h2>This workstation</h2>
       <p style={{ margin: "4px 0" }}>Version {sys.version}. Models run on: {sys.runtime ? <>{ACCEL[sys.runtime.accelerator]}{sys.runtime.notes.length > 0 && <span className="muted"> ({sys.runtime.notes.join("; ")})</span>}</> : <span className="muted">decided when the first job loads the detector</span>}.</p>
       <p style={{ margin: "4px 0" }}>
         {b.folder ? <>Nightly database backup at {b.at} to <span className="mono">{b.folder}</span>. </> : <>No backup folder is set: start the server with <span className="mono">--backup-dir</span>. </>}

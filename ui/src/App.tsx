@@ -22,10 +22,12 @@ export default function App() {
       <header className="top">
         <a className="brand" href="#/" aria-label="LanePulse home">
           <Logo />
-          <span className="brand-wordmark"><strong>LanePulse</strong><small>OFFLINE TRAFFIC INTELLIGENCE</small></span>
+          <span className="brand-wordmark"><strong>LanePulse</strong><small>Offline traffic analysis</small></span>
         </a>
-        <span className="spacer" />
-        <nav className="top-nav" aria-label="Main navigation"><a href="#/">Missions</a></nav>
+        <nav className="top-nav" aria-label="Main navigation">
+          <a href="#/" aria-current={section !== "new" ? "page" : undefined}>Missions</a>
+          <a href="#/new" aria-current={section === "new" ? "page" : undefined}>New mission</a>
+        </nav>
       </header>
       <main id="main-content">{body}</main>
     </>
