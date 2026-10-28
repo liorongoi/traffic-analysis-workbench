@@ -35,6 +35,39 @@ Get-Content (Join-Path $Bundle "SHA256SUMS") | ForEach-Object {
 }
 Write-Host "Bundle checksums verified."
 
+# Room for the new version (its Python environment, with PyTorch when training is included) next to the previous one.
+$needGB = if ($Info.app_only) { 1 } elseif ($Info.training) { 8 } else { 4 }
+$root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Target))
+try {
+  $freeGB = [math]::Floor((New-Object IO.DriveInfo $root).AvailableFreeSpace / 1GB)
+  if ($freeGB -lt $needGB) { throw "Not enough free space on $root for LanePulse: $freeGB GB free, about $needGB GB needed. Free some space and run Setup again." }
+  Write-Host "Free space on ${root}: $freeGB GB (about $needGB GB needed)."
+} catch [System.ArgumentException] { }
+
+# Microsoft C++ runtime (msvcp140.dll and the rest). ONNX Runtime and PyTorch need a recent one, and the copy in
+# C:\Windows\System32 is often older on computers where it was never updated (updating it needs an administrator).
+# The bundle carries its own; it is kept in <install>\vc-runtime, so a small update finds it too, and put next to
+# LanePulse's Python and next to the libraries that use it, where Windows looks before System32.
+$KeptVc = Join-Path $Target "vc-runtime"
+$BundleVc = Join-Path $Bundle "vc-runtime"
+if (Test-Path $BundleVc) {
+  New-Item -ItemType Directory -Force -Path $KeptVc | Out-Null
+  Copy-Item (Join-Path $BundleVc "*.dll") $KeptVc -Force
+}
+function Get-FileVer([string]$p) {
+  $i = [Diagnostics.FileVersionInfo]::GetVersionInfo($p)
+  return [version]"$($i.FileMajorPart).$($i.FileMinorPart).$($i.FileBuildPart).$($i.FilePrivatePart)"
+}
+function Install-VcRuntime([string]$dir) {
+  if (-not (Test-Path $KeptVc) -or -not (Test-Path $dir)) { return }
+  foreach ($dll in Get-ChildItem $KeptVc -Filter *.dll) {
+    $dest = Join-Path $dir $dll.Name
+    if ((Test-Path $dest) -and ((Get-FileVer $dest) -ge (Get-FileVer $dll.FullName))) { continue }
+    # A running LanePulse holds its copy open; it is the same version, and the restart below picks up any newer one.
+    try { Copy-Item $dll.FullName $dest -Force } catch { Write-Host "Could not replace $dest (in use); keeping the copy there." }
+  }
+}
+
 # 2. Python. A bundle with its own Python (python-runtime: a complete, unregistered copy) always uses that one,
 #    copied into the install folder once per Python version, so no other Python on this computer is used or
 #    changed, and an update never alters the Python the previous version runs on. Older bundles: the given Python,
@@ -108,6 +141,10 @@ if (-not $Python) {
 }
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) { throw "Python was not found at '$Python'. Install Python $($Info.python) or repair the bundled runtime." }
 Write-Host "Python: $Python"
+# Only LanePulse's own Python folder is changed, never a Python that belongs to something else.
+if ([IO.Path]::GetFullPath($Python).StartsWith([IO.Path]::GetFullPath($Target), [StringComparison]::OrdinalIgnoreCase)) {
+  Install-VcRuntime (Split-Path $Python)
+}
 
 # 3. Wheels collect in one local wheelhouse, so a small update bundle (application only) finds the runtime there.
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
@@ -182,7 +219,23 @@ function Install-Env([string]$build) {
     New-Item -ItemType Directory -Force -Path $share | Out-Null
     Copy-Item (Join-Path $kept "yolox_s.pth") $share -Force
   }
+  $site = Join-Path $Venv "Lib\site-packages"
+  Install-VcRuntime (Join-Path $site "onnxruntime\capi")
+  Install-VcRuntime (Join-Path $site "torch\lib")
   if ($SkipCheck) { return "unchecked" }
+  # First check that every compiled part loads on this computer, and say in plain words which one does not and why.
+  $pcCheck = Join-Path $Bundle "pc_check.py"
+  if (Test-Path $pcCheck) {
+    $checkArgs = @($pcCheck)
+    if ($Info.training) { $checkArgs += "--training" }
+    $lines = & $script:VPy @checkArgs 2>&1 | ForEach-Object { "$_" }
+    $code = $LASTEXITCODE
+    $lines | ForEach-Object { Write-Host $_ }
+    if ($code -ne 0) {
+      $why = ($lines | Where-Object { $_ -like "This computer could not load*" -or $_ -like "The Microsoft C++ runtime in use*" }) -join " "
+      throw "$why The install check failed; the previous version stays in use."
+    }
+  }
   $work = Join-Path $env:TEMP ("twb-check-" + [guid]::NewGuid())
   $lines = & $script:VPy (Join-Path $Bundle "offline_smoke.py") --work $work --models $Models
   $code = $LASTEXITCODE
@@ -223,6 +276,7 @@ set TWB_MODELS=$Models
 if (Test-Path (Join-Path $Target "current.txt")) { Copy-Item (Join-Path $Target "current.txt") (Join-Path $Target "previous.txt") -Force }
 Set-Content -Path (Join-Path $Target "current.txt") -Value $Venv
 Copy-Item (Join-Path $Bundle "autostart.ps1") (Join-Path $Target "autostart.ps1") -Force
+if (Test-Path (Join-Path $Bundle "pc_check.py")) { Copy-Item (Join-Path $Bundle "pc_check.py") (Join-Path $Target "pc_check.py") -Force }
 @"
 @echo off
 rem Measures how fast the models run on this computer (GPU and CPU). Takes a minute or two; changes nothing.

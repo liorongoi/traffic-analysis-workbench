@@ -80,11 +80,13 @@ Type: filesandordirs; Name: "{app}\python*"
 Type: filesandordirs; Name: "{app}\wheelhouse"
 Type: filesandordirs; Name: "{app}\models"
 Type: filesandordirs; Name: "{app}\training"
+Type: filesandordirs; Name: "{app}\vc-runtime"
 Type: filesandordirs; Name: "{app}\logs"
 Type: files; Name: "{app}\*.cmd"
 Type: files; Name: "{app}\current.txt"
 Type: files; Name: "{app}\previous.txt"
 Type: files; Name: "{app}\autostart.ps1"
+Type: files; Name: "{app}\pc_check.py"
 Type: files; Name: "{app}\TRAINING.txt"
 Type: files; Name: "{app}\python-installer.exe"
 Type: dirifempty; Name: "{app}"
@@ -167,7 +169,7 @@ begin
     ' -Target ' + Quote(ExpandConstant('{app}')) + ' -Data ' + Quote(FoldersPage.Values[0]) +
     ' -BackupDir ' + Quote(FoldersPage.Values[1]) + ' -AutoStart none' +
     ' *>&1 | Out-File -Encoding utf8 ' + Quote(Log) + '; exit 0 } catch { $_ | Out-File -Append -Encoding utf8 ' + Quote(Log) + '; exit 1 }';
-  WizardForm.StatusLabel.Caption := 'Checking the files, installing Python and the models, and testing the install. This takes a few minutes...';
+  WizardForm.StatusLabel.Caption := 'Checking this computer and the files, setting up LanePulse (it brings its own Python) and testing the install. This takes a few minutes...';
   WizardForm.ProgressGauge.Style := npbstMarquee;
   try
     if not Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "' + Cmd + '"', '',

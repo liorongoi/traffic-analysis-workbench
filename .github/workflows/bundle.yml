@@ -34,7 +34,19 @@ jobs:
           if ($h -ne "5ac66ae49a2104efeba985c1dc1cb40987757ee81cc6c7f218d10b801f3276ed") { throw "python-build-standalone checksum mismatch: $h" }
           New-Item -ItemType Directory "$env:RUNNER_TEMP\pbs" | Out-Null
           tar -xzf "$env:RUNNER_TEMP\pbs.tar.gz" -C "$env:RUNNER_TEMP\pbs"
-      - run: python scripts/make_bundle.py --platform win_amd64 --python 3.12 --ort auto --out dist --with-training --python-runtime "${{ runner.temp }}\pbs\python"
+      - name: Microsoft C++ runtime to ship (the newest redistributable on the build machine)
+        id: vc
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" -Directory |
+            Sort-Object { [version]($_.Parent.Parent.Name -replace '[^0-9.]', '') } | Select-Object -Last 1
+          if (-not $crt) { throw "No Microsoft.VC14x.CRT redistributable found under $vs" }
+          $v = [Diagnostics.FileVersionInfo]::GetVersionInfo("$($crt.FullName)\msvcp140.dll").FileVersion
+          Write-Host "Shipping $($crt.FullName) (msvcp140.dll $v)"
+          Get-ChildItem $crt.FullName | Format-Table Name, Length
+          "dir=$($crt.FullName)" >> $env:GITHUB_OUTPUT
+      - run: python scripts/make_bundle.py --platform win_amd64 --python 3.12 --ort auto --out dist --with-training --python-runtime "${{ runner.temp }}\pbs\python" --vc-runtime "${{ steps.vc.outputs.dir }}"
       - name: Add the Python installer (per-user install, no administrator rights)
         id: py
         shell: pwsh
@@ -97,6 +109,16 @@ jobs:
             if (-not (Test-Path "$venv\share\lanepulse\yolox_s.pth")) { throw "$what did not install the training starting weights" }
             & "$venv\Scripts\python.exe" -c "from trafficwb import training_env as t; s = t.status(wait=True); print(s); assert s['state'] == 'ready' and s['coco_weights'], s"
             if ($LASTEXITCODE -ne 0) { throw "$($what): training is not ready" }
+            # The Microsoft C++ runtime must be LanePulse's own copy, never C:\Windows\System32's, which is old on
+            # some workstations and makes ONNX Runtime fail with "A DLL initialization routine failed".
+            $chk = & "$venv\Scripts\python.exe" "$dir\pc_check.py" --training
+            $chk | Select-Object -SkipLast 1 | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "$($what): pc_check failed" }
+            $rt = ($chk | Select-Object -Last 1 | ConvertFrom-Json).cpp_runtime_loaded
+            foreach ($n in "msvcp140.dll", "vcruntime140.dll") {
+              $path = $rt.$n.path
+              if (-not $path -or -not $path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase)) { throw "$($what): $n was loaded from '$path', not from LanePulse's own copy" }
+            }
             # Manual start, as the Start menu entry does it.
             Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$dir\start.cmd`"" -WorkingDirectory $dir -WindowStyle Hidden
             Wait-Server $what
