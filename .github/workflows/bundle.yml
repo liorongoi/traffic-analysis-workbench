@@ -127,17 +127,9 @@ jobs:
             Write-Host "$what OK: server answering, Start menu entry and bundled Python in place."
             return (Get-Content "$dir\current.txt" -Raw).Trim()
           }
-          function Uninstall-Wizard {
-            # The uninstaller hands over to a copy of itself in TEMP and exits; wait for the files to go.
-            $u = Start-Process -PassThru "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
-            $null = $u.WaitForExit(5 * 60 * 1000)
-            for ($i = 0; $i -lt 90 -and ((Test-Path "$dir\current.txt") -or (Get-ChildItem "$dir\python*" -ErrorAction SilentlyContinue)); $i++) { Start-Sleep -Seconds 2 }
-            if (Test-Path "$dir\current.txt") { throw "uninstall left the program" }
-            if (Get-ChildItem "$dir\python*" -ErrorAction SilentlyContinue) { throw "uninstall left a bundled Python" }
-            if (Get-ChildItem "$dir\app-*" -ErrorAction SilentlyContinue) { throw "uninstall left an app folder" }
-            if (-not (Test-Path "$env:USERPROFILE\TrafficData")) { throw "uninstall removed the data folder" }
-            Write-Host "Uninstall removed the program and kept the data."
-          }
+          . "$PWD\.github\scripts\uninstall_check.ps1"
+          $data = "$env:USERPROFILE\TrafficData"
+          function Uninstall-Wizard([string]$keep = "") { Test-Uninstall -Dir $dir -Data $data -KeepModel $keep }
           # The previous build from main, started the way its icon starts it, then this build over it while it runs.
           $old = (Get-ChildItem prev -Recurse -Filter *.exe | Select-Object -First 1).FullName
           $p = Start-Process -PassThru $old -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup-previous.log"
@@ -153,9 +145,14 @@ jobs:
           & "$dir\autostart.ps1" -Mode remove      # stop the server before running Setup again
           $second = Install-Wizard "repair"         # the same version again: a fresh folder, the old one kept
           if ($second -eq $first -or -not (Test-Path $first)) { throw "same-version repair replaced or lost the prior build" }
-          Uninstall-Wizard
+          # Uninstall with the server running (Install-Wizard started it), set to start at sign-in, and a model trained here.
+          & "$dir\autostart.ps1" -Mode remove -Target $dir | Out-Host
+          & "$dir\autostart.ps1" -Mode signin -Target $dir | Out-Host   # starts it again through the restart loop
+          $model = New-TrainedModel $dir
+          Uninstall-Wizard $model
+          Remove-Item -Recurse -Force "$dir\models"
           $null = Install-Wizard "reinstall"        # after an uninstall, with the data kept
-          Uninstall-Wizard
+          Uninstall-Wizard                          # the server is running again here too
       - uses: actions/upload-artifact@v4
         with:
           name: LanePulse-Setup-${{ steps.py.outputs.version }}

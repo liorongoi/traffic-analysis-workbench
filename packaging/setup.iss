@@ -69,16 +69,17 @@ Name: "{autoprograms}\LanePulse - speed check"; Filename: "{app}\speed-check.cmd
 Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; Description: "Open LanePulse now"; Flags: postinstall nowait runhidden skipifsilent; Check: InstallOK
 
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\autostart.ps1"" -Mode remove -Target ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveAutostart"
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\autostart.ps1"" -Mode uninstall -Target ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveAutostart"
 ; The Python this installer put in the install folder, so Windows does not keep listing it after its files are gone.
 Filename: "{app}\python-installer.exe"; Parameters: "/quiet /uninstall"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "RemovePython"
 
 [UninstallDelete]
-; Only the program. The data and backup folders are never removed.
+; Only the program. The data and backup folders, and models trained on this computer, are never removed.
 Type: filesandordirs; Name: "{app}\app-*"
 Type: filesandordirs; Name: "{app}\python*"
 Type: filesandordirs; Name: "{app}\wheelhouse"
-Type: filesandordirs; Name: "{app}\models"
+; Model packs: the uninstall step above removes the ones that came with LanePulse and keeps models trained here.
+Type: filesandordirs; Name: "{app}\startup"
 Type: filesandordirs; Name: "{app}\training"
 Type: filesandordirs; Name: "{app}\vc-runtime"
 Type: filesandordirs; Name: "{app}\logs"
