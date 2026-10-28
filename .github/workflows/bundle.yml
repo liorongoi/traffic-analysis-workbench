@@ -266,11 +266,13 @@ jobs:
           retention-days: 90
 
   linux-server:
-    # The LanePulse server package for Ubuntu with NVIDIA GPUs (own Python, CUDA libraries for ONNX Runtime), then
+    # The LanePulse server package for Ubuntu and Red Hat with NVIDIA GPUs (own Python, PyTorch, CUDA libraries), then
     # tried on a clean Ubuntu runner (no GPU, so it runs on the CPU): install, reach it over the network, restart,
     # repair, roll back, uninstall keeping the data, install again.
     runs-on: ubuntu-latest
     timeout-minutes: 70
+    outputs:
+      name: ${{ steps.srv.outputs.name }}
     steps:
       - name: Make room (PyTorch with CUDA is several GB)
         run: |
@@ -351,3 +353,83 @@ jobs:
           path: dist-server/*.tar.gz
           compression-level: 0
           retention-days: 90
+
+  rhel-server:
+    # The same server package on a Red Hat Enterprise Linux 9 compatible system (AlmaLinux 9) in a virtual machine,
+    # with SELinux enforcing and firewalld on, as on a real RHEL server: install, reach it from another computer
+    # (this runner) through the firewall, restart, reboot, repair, roll back, firewall command, uninstall, install again.
+    needs: linux-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Make room
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.linux-server.outputs.name }}
+          path: pkg
+      - name: Start an AlmaLinux 9 virtual machine (SELinux enforcing, firewalld on)
+        run: |
+          set -x
+          sudo apt-get update -q && sudo apt-get install -yq qemu-system-x86 qemu-utils cloud-image-utils >/dev/null
+          sudo chmod 666 /dev/kvm
+          cd "$RUNNER_TEMP"
+          IMG=AlmaLinux-9-GenericCloud-latest.x86_64.qcow2
+          curl -fsSLO "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/$IMG"
+          curl -fsSL -o CHECKSUM https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/CHECKSUM
+          want="$(grep -F "$IMG" CHECKSUM | grep -oE '[0-9a-f]{64}' | head -1)"
+          test -n "$want" && echo "$want  $IMG" | sha256sum -c
+          qemu-img resize "$IMG" 60G
+          ssh-keygen -t ed25519 -N '' -f vmkey -q
+          cat > user-data <<EOF
+          #cloud-config
+          users:
+            - name: ci
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              ssh_authorized_keys: [$(cat vmkey.pub)]
+          packages: [firewalld, policycoreutils-python-utils, audit, tar]
+          runcmd:
+            - [systemctl, enable, --now, firewalld]
+          EOF
+          cloud-localds seed.iso user-data
+          qemu-system-x86_64 -enable-kvm -cpu host -m 8192 -smp 4 -daemonize -display none \
+            -drive file="$IMG",if=virtio -drive file=seed.iso,if=virtio,format=raw \
+            -netdev user,id=n0,hostfwd=tcp::2222-:22,hostfwd=tcp::8765-:8765 -device virtio-net-pci,netdev=n0
+          for i in $(seq 90); do ssh -i vmkey -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 ci@127.0.0.1 true 2>/dev/null && break; sleep 5; done
+          ssh -i vmkey -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ci@127.0.0.1 'cloud-init status --wait; cat /etc/redhat-release; getenforce; systemctl is-active firewalld; df -h /'
+      - name: Try it on Red Hat (install, network through the firewall, restart, reboot, repair, rollback, uninstall, install again)
+        run: |
+          set -x
+          cd "$RUNNER_TEMP"
+          vm() { ssh -i vmkey -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 ci@127.0.0.1 "$@"; }
+          up() { for i in $(seq 120); do curl -fsS -m 2 http://127.0.0.1:8765/api/health && return 0; sleep 1; done; vm 'sudo tail -40 /opt/lanepulse/logs/server.log; sudo journalctl -u lanepulse --no-pager | tail -20'; return 1; }
+          down() { for i in $(seq 30); do curl -fsS -m 2 http://127.0.0.1:8765/api/health || return 0; sleep 1; done; return 1; }
+          N="${{ needs.linux-server.outputs.name }}"
+          test "$(vm getenforce)" = Enforcing
+          scp -i vmkey -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$GITHUB_WORKSPACE/pkg/$N.tar.gz" ci@127.0.0.1:
+          vm "tar -xzf $N.tar.gz && rm $N.tar.gz"
+          vm "sudo ./$N/install-server.sh"          # default: open to the server's own network, through firewalld
+          up
+          vm 'sudo firewall-cmd --list-rich-rules' | grep 'port="8765"' >/dev/null
+          vm 'ls -Z /opt/lanepulse/current/python/bin/python3.12' | grep bin_t >/dev/null
+          vm 'lanepulse status'
+          vm 'sudo lanepulse models'
+          vm 'sudo lanepulse restart' && up
+          vm 'sudo systemctl reboot' || true
+          sleep 20
+          for i in $(seq 60); do vm true 2>/dev/null && break; sleep 5; done
+          up                                        # starts by itself at boot, under SELinux
+          vm "sudo ./$N/install-server.sh --skip-check"   # repair: same version again
+          up
+          vm 'sudo lanepulse rollback' && up
+          vm 'sudo lanepulse firewall' | grep 8765 >/dev/null
+          if vm 'sudo ausearch -m AVC -ts boot 2>/dev/null || true' | grep -iE 'lanepulse|python'; then echo "SELinux denied LanePulse something"; exit 1; fi
+          vm 'sudo /opt/lanepulse/uninstall-server.sh'
+          down
+          if vm 'sudo firewall-cmd --list-rich-rules' | grep 'port="8765"' >/dev/null; then echo "uninstall left the firewall rule"; exit 1; fi
+          vm 'test -d /srv/lanepulse/data && test -d /srv/lanepulse/models && test ! -e /opt/lanepulse && test ! -e /usr/bin/lanepulse'
+          vm "sudo ./$N/install-server.sh --allow-from any --skip-check"
+          up
+          vm 'sudo /opt/lanepulse/uninstall-server.sh'

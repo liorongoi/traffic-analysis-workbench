@@ -1,5 +1,6 @@
 #!/bin/bash
-# Installs or updates the LanePulse server on Ubuntu (22.04 or 24.04, x86_64). Run from the unpacked package:
+# Installs or updates the LanePulse server on Ubuntu (22.04, 24.04) or Red Hat Enterprise Linux 8 or 9 (and Rocky or
+# AlmaLinux), x86_64. Run from the unpacked package:
 #   sudo ./install-server.sh [--data DIR] [--backups DIR] [--models DIR] [--port N] [--allow-from CIDR|any]
 # Nothing is downloaded. The web screens are then open to other computers at http://<this server>:<port>,
 # with no password: keep the server on a trusted network (see INSTALL.txt).
@@ -24,17 +25,27 @@ while [ $# -gt 0 ]; do
     --port) PORT="$2"; shift 2;;
     --allow-from) ALLOW="$2"; shift 2;;
     --skip-check) SKIP_CHECK=1; shift;;
-    -h|--help) sed -n 2,5p "$0"; exit 0;;
+    -h|--help) sed -n 2,6p "$0"; exit 0;;
     *) echo "Unknown option $1"; exit 2;;
   esac
 done
 say() { printf '\n== %s\n' "$*"; }
+# shellcheck source=system.sh
+. "$PKG/system.sh"
 [ "$(id -u)" = 0 ] || { echo "Run with sudo: sudo $0 $*"; exit 1; }
 [ "$(uname -m)" = x86_64 ] || { echo "This package is for x86_64 servers."; exit 1; }
 VER="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$PKG/server.json")"
 MIN_DRIVER="$(sed -n 's/.*"min_driver": "\([^"]*\)".*/\1/p' "$PKG/server.json")"
 echo "LanePulse server $VER"
-if [ -r /etc/os-release ]; then . /etc/os-release; echo "System: $PRETTY_NAME"; [ "${ID:-}" = ubuntu ] || echo "Note: tested on Ubuntu; continuing."; fi
+if [ -r /etc/os-release ]; then
+  OS_PRETTY="$(. /etc/os-release; echo "${PRETTY_NAME:-}")"; OS_ID="$(. /etc/os-release; echo "${ID:-} ${ID_LIKE:-}")"
+  echo "System: $OS_PRETTY"
+  case " $OS_ID " in
+    *" ubuntu "*|*" rhel "*|*" fedora "*|*" centos "*) ;;
+    *) echo "Note: tested on Ubuntu and Red Hat Enterprise Linux 9; continuing.";;
+  esac
+fi
+selinux_on && echo "SELinux: $(getenforce 2>/dev/null || echo on); LanePulse's files are labelled for it."
 
 say "1. Checking the package"
 (cd "$PKG" && sha256sum --quiet -c SHA256SUMS) || { echo "Some files are damaged or missing; copy the package again."; exit 1; }
@@ -108,7 +119,11 @@ ALLOW="$ALLOW"
 TWB_ACCELERATOR="${TWB_ACCELERATOR:-auto}"
 CFG
 install -m 0755 "$PKG/lanepulse" /usr/local/bin/lanepulse
+# Red Hat's sudo does not look in /usr/local/bin, so "sudo lanepulse" needs this link.
+[ -e /usr/bin/lanepulse ] || ln -s /usr/local/bin/lanepulse /usr/bin/lanepulse
 install -m 0755 "$PKG/uninstall-server.sh" "$BASE/uninstall-server.sh"
+install -m 0644 "$PKG/system.sh" "$BASE/system.sh"
+selinux_label "$BASE"
 
 say "7. Service"
 cat > /etc/systemd/system/lanepulse.service <<UNIT
@@ -155,11 +170,11 @@ if [ -z "$ALLOW" ]; then
   ALLOW="$("$PY" -c 'import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1], strict=False))' "$ALLOW" 2>/dev/null || echo any)"
   sed -i "s|^ALLOW=.*|ALLOW=\"$ALLOW\"|" "$CONF"
 fi
-if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
-  if [ "$ALLOW" = any ]; then ufw allow "$PORT/tcp" >/dev/null; else ufw allow from "$ALLOW" to any port "$PORT" proto tcp >/dev/null; fi
-  echo "Firewall: port $PORT open to $ALLOW."
+if fw_active; then
+  fw_open "$ALLOW" "$PORT"
+  echo "Firewall ($(fw_name)): port $PORT open to $ALLOW."
 else
-  echo "The firewall (ufw) is off, so any computer that can reach this server can open LanePulse."
+  echo "The firewall ($(fw_name)) is off, so any computer that can reach this server can open LanePulse."
   echo "To allow only $ALLOW:  sudo lanepulse firewall   (keeps SSH open)"
 fi
 

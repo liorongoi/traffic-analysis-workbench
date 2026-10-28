@@ -41,16 +41,16 @@ case "$cmd" in
       "$PY" -c 'import sys; from trafficwb.speedcheck import main; sys.exit(main(sys.argv[1:]))' --out "$BASE/logs/speed-check.txt" "$@";;
   firewall)
     need_root firewall
-    command -v ufw >/dev/null 2>&1 || { echo "ufw is not installed: sudo apt install ufw"; exit 1; }
-    ufw allow OpenSSH >/dev/null
-    if [ "${ALLOW:-any}" = any ]; then ufw allow "$PORT/tcp" >/dev/null; else ufw allow from "$ALLOW" to any port "$PORT" proto tcp >/dev/null; fi
-    ufw --force enable >/dev/null
-    ufw status;;
+    # shellcheck source=system.sh
+    . "$BASE/system.sh"
+    fw_enable "${ALLOW:-any}" "$PORT";;
   rollback)
     need_root rollback
     [ -L "$BASE/previous" ] || { echo "No previous version to go back to."; exit 1; }
     cur="$(readlink "$BASE/current")"; prev="$(readlink "$BASE/previous")"
     ln -sfn "$prev" "$BASE/current"; ln -sfn "$cur" "$BASE/previous"
+    # shellcheck source=system.sh
+    . "$BASE/system.sh"; selinux_label "$BASE"
     systemctl restart lanepulse.service
     echo "Now running $(basename "$prev"). If the update changed the database format, restore the backup taken before it"
     echo "(see INSTALL.txt, Roll back).";;

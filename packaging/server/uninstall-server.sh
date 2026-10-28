@@ -6,10 +6,13 @@ CONF=/etc/lanepulse/lanepulse.conf
 [ -f "$CONF" ] && . "$CONF"
 systemctl disable --now lanepulse.service 2>/dev/null || true
 rm -f /etc/systemd/system/lanepulse.service /etc/logrotate.d/lanepulse /usr/local/bin/lanepulse
+[ "$(readlink /usr/bin/lanepulse 2>/dev/null)" = /usr/local/bin/lanepulse ] && rm -f /usr/bin/lanepulse
 systemctl daemon-reload
-if command -v ufw >/dev/null 2>&1 && [ -n "${PORT:-}" ]; then
-  if [ "${ALLOW:-any}" = any ]; then ufw delete allow "$PORT/tcp" >/dev/null 2>&1 || true
-  else ufw delete allow from "$ALLOW" to any port "$PORT" proto tcp >/dev/null 2>&1 || true; fi
+if [ -f /opt/lanepulse/system.sh ]; then
+  # shellcheck source=system.sh
+  . /opt/lanepulse/system.sh
+  [ -n "${PORT:-}" ] && fw_close "${ALLOW:-any}" "$PORT"
+  selinux_unlabel /opt/lanepulse
 fi
 rm -rf /opt/lanepulse /etc/lanepulse
 echo "LanePulse removed. Kept: data in ${DATA:-/srv/lanepulse/data}, backups in ${BACKUPS:-/srv/lanepulse/backups},"
