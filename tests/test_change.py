@@ -299,3 +299,14 @@ def test_the_road_area_is_the_union_of_each_words_outline_less_its_own_gaps():
              {"kind": "include", "prompt": "overpass", "polygon": sq(30, 45, 70, 55)}]
     m = ChangeService._poly_mask(polys, 100, 100)
     assert m[50, 50] and m[42, 32] and not m[42, 50]
+
+
+def test_two_lone_headlights_far_apart_are_one_vehicle_but_two_cars_are_two():
+    bg, spread = build_reference([g(night_scene(s)) for s in range(4)])
+    frame = night_scene(17)
+    cv2.circle(frame, (140, 225), 3, 255, -1)           # one far vehicle: its lights 30 px apart, beyond the merge gap
+    cv2.circle(frame, (170, 225), 3, 255, -1)
+    ch = find_changes(g(frame), bg, spread, None)[0]
+    assert len(ch) == 1 and ch[0].parts == 2, ch
+    two = with_car_lights(with_car_lights(night_scene(18), 60, 200, glow=False), 250, 200, glow=False)
+    assert len(find_changes(g(two), bg, spread, None)[0]) == 2

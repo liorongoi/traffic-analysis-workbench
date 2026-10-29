@@ -26,7 +26,7 @@ from .night import dumps, measure_condition, png, unpng
 from .regions import RegionSet
 from .store import Mission, transaction, utcnow
 
-ALGO = "change-v4"
+ALGO = "change-v5"
 CONDITIONS = ("day", "dusk", "night")
 # A frame without a background of its own condition borrows a close one: dusk and night stand in for each other.
 FALLBACK = {"day": (), "dusk": ("night",), "night": ("dusk",)}
@@ -50,6 +50,7 @@ class ChangeParams:
     lamp_level: float = 200.0      # bright in the empty background: street lamps, lit signs
     lamp_reach_share: float = 0.015  # around them (share of frame width) a halo grows and shrinks with fog: no new lights
     road_light_reach_share: float = 0.06   # soft road light joins bright lights this close (share of frame width)
+    pair_gap_factor: float = 8.0   # two lone lights of one size this many sizes apart, side by side: one vehicle
     sam_threshold: float = 0.35
     sam_context: float = 1.0       # crop margin on each side, in units of the change's own size
     sam_min_crop: int = 320        # px; small far changes are cropped at least this large
@@ -157,6 +158,7 @@ def find_changes(gray: np.ndarray, background: np.ndarray, spread: np.ndarray, a
         boxes.append((x, y, x + bw, y + bh))
     groups = _merge(boxes, p.merge_gap_share * w, h)
     groups = _merge_road_light(groups, boxes, labels, keep, diff, new_core, p, w)
+    groups = _pair_lone_lights(groups, boxes, labels, keep, new_core, p)
     out = []
     for grp in groups:
         x1 = min(boxes[i][0] for i in grp)
@@ -244,6 +246,40 @@ def _merge_road_light(groups: list[list[int]], boxes, labels, keep, diff, new_co
                 best = (d, j)
         if best is not None and i in merged:
             merged[best[1]] += merged.pop(i)
+    return list(merged.values())
+
+
+def _pair_lone_lights(groups: list[list[int]], boxes, labels, keep, new_core, p: "ChangeParams") -> list[list[int]]:
+    """Two lone headlights side by side at the same height are one vehicle (far away, or seen through a railing,
+    they are further apart than the merge gap). Groups that already hold a pair are left alone."""
+    def info(grp):
+        x1 = min(boxes[i][0] for i in grp); y1 = min(boxes[i][1] for i in grp)
+        x2 = max(boxes[i][2] for i in grp); y2 = max(boxes[i][3] for i in grp)
+        sel = np.isin(labels[y1:y2, x1:x2], [keep[i] for i in grp])
+        return (x1, y1, x2, y2), int((new_core[y1:y2, x1:x2] & sel).sum())
+
+    lone = []
+    for k, grp in enumerate(groups):
+        (x1, y1, x2, y2), core = info(grp)
+        bw, bh = x2 - x1, y2 - y1
+        if core >= p.new_core_px and bw <= 2.0 * bh and bh <= 2.0 * bw:   # one round light, not a pair or a streak
+            lone.append((k, (x1, y1, x2, y2), max(bw, bh)))
+    used, merged = set(), {k: list(g) for k, g in enumerate(groups)}
+    pairs = []
+    for i, (ka, a, sa) in enumerate(lone):
+        for kb, b, sb in lone[i + 1:]:
+            size = max(sa, sb)
+            if min(sa, sb) < 0.5 * size:
+                continue          # a headlight pair is two lights of about the same size
+            dy = abs((a[1] + a[3]) - (b[1] + b[3])) / 2
+            gap = max(a[0], b[0]) - min(a[2], b[2])
+            if dy <= 0.6 * size and 0 < gap <= p.pair_gap_factor * size:
+                pairs.append((gap, ka, kb))
+    for _, ka, kb in sorted(pairs):
+        if ka in used or kb in used:
+            continue
+        used |= {ka, kb}
+        merged[ka] += merged.pop(kb)
     return list(merged.values())
 
 
@@ -430,8 +466,12 @@ class ChangeService:
         med = unpng(bg["median"])
         found = find_areas(engine, cv2.cvtColor(med, cv2.COLOR_GRAY2BGR), list(self.p.area_prompts), "include",
                            self.p.area_threshold)
+        hgt = bg["height"]
         polys = [{"kind": a.kind, "prompt": a.prompt.removesuffix(" (gap)"), "polygon": [list(pt) for pt in a.polygon]}
-                 for a in found]
+                 for a in found
+                 # an "overpass" or "ramp" along the bottom edge is the railing in front of the camera, not a road
+                 if not (a.kind == "include" and a.prompt != self.p.area_prompts[0]
+                         and max(pt[1] for pt in a.polygon) >= hgt - 2)]
         mask = self._poly_mask(polys, bg["width"], bg["height"], exclude)
         vs = ViewService(self.m)
         used = json.loads(bg["params"]).get("used_ids", json.loads(bg["input_ids"]))
