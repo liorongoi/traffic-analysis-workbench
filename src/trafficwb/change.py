@@ -26,7 +26,7 @@ from .night import dumps, measure_condition, png, unpng
 from .regions import RegionSet
 from .store import Mission, transaction, utcnow
 
-ALGO = "change-v3"
+ALGO = "change-v4"
 CONDITIONS = ("day", "dusk", "night")
 # A frame without a background of its own condition borrows a close one: dusk and night stand in for each other.
 FALLBACK = {"day": (), "dusk": ("night",), "night": ("dusk",)}
@@ -53,7 +53,9 @@ class ChangeParams:
     sam_threshold: float = 0.35
     sam_context: float = 1.0       # crop margin on each side, in units of the change's own size
     sam_min_crop: int = 320        # px; small far changes are cropped at least this large
-    area_prompts: tuple[str, ...] = ("road",)   # with no regions drawn, SAM 3.1 outlines these on the empty background
+    # with no regions drawn, SAM 3.1 outlines these on the empty background; their union is compared
+    # ("road" alone leaves out overpasses and ramps)
+    area_prompts: tuple[str, ...] = ("road", "overpass", "highway ramp")
     area_threshold: float = 0.4
 
     def record(self) -> dict:
@@ -416,8 +418,9 @@ class ChangeService:
 
     # ---------- where changes are looked for ----------
     def area_row(self, background_id: int) -> sqlite3.Row | None:
-        return self.con.execute("SELECT * FROM reference_area WHERE background_id=? ORDER BY id DESC LIMIT 1",
-                                (background_id,)).fetchone()
+        """The road outlined on this background for the words asked now (other words: outlined again)."""
+        return self.con.execute("SELECT * FROM reference_area WHERE background_id=? AND prompts=? ORDER BY id DESC LIMIT 1",
+                                (background_id, dumps(list(self.p.area_prompts)))).fetchone()
 
     def _auto_area(self, view_id: int, bg: sqlite3.Row, engine, sam_model_id: int | None, exclude) -> sqlite3.Row:
         """SAM 3.1 outlines the road on the empty background itself: no vehicles hide it, and day and night each
@@ -427,7 +430,8 @@ class ChangeService:
         med = unpng(bg["median"])
         found = find_areas(engine, cv2.cvtColor(med, cv2.COLOR_GRAY2BGR), list(self.p.area_prompts), "include",
                            self.p.area_threshold)
-        polys = [{"kind": a.kind, "polygon": [list(pt) for pt in a.polygon]} for a in found]
+        polys = [{"kind": a.kind, "prompt": a.prompt.removesuffix(" (gap)"), "polygon": [list(pt) for pt in a.polygon]}
+                 for a in found]
         mask = self._poly_mask(polys, bg["width"], bg["height"], exclude)
         vs = ViewService(self.m)
         used = json.loads(bg["params"]).get("used_ids", json.loads(bg["input_ids"]))
@@ -452,12 +456,15 @@ class ChangeService:
     def _poly_mask(polys: list[dict], w: int, h: int, exclude=None):
         if not any(p_["kind"] == "include" for p_ in polys):
             return None
-        m = np.zeros((h, w), np.uint8)
-        for k in ("include", "exclude"):
-            for p_ in polys:
-                if p_["kind"] == k:
-                    cv2.fillPoly(m, [np.round(np.array(p_["polygon"])).astype(np.int32)], 1 if k == "include" else 0)
-        m = m.astype(bool)
+        m = np.zeros((h, w), bool)
+        # per word: its outlines less its own gaps (a gap in the road may be the overpass found by another word)
+        for word in dict.fromkeys(p_.get("prompt", "") for p_ in polys):
+            one = np.zeros((h, w), np.uint8)
+            for k in ("include", "exclude"):
+                for p_ in polys:
+                    if p_["kind"] == k and p_.get("prompt", "") == word:
+                        cv2.fillPoly(one, [np.round(np.array(p_["polygon"])).astype(np.int32)], 1 if k == "include" else 0)
+            m |= one.astype(bool)
         return m & exclude if exclude is not None else m
 
     def area_for(self, view_id: int, bg: sqlite3.Row, engine=None, sam_model_id: int | None = None):

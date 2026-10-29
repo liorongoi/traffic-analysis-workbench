@@ -289,3 +289,13 @@ def test_a_glare_is_placed_at_its_lights_not_at_the_bottom_of_its_box():
     ax, ay = c.anchor
     assert 160 <= ax <= 180 and 145 <= ay <= 155      # between the two headlights
     assert c.change_box[3] > ay + 20                  # the lit road reaches well below them
+
+
+def test_the_road_area_is_the_union_of_each_words_outline_less_its_own_gaps():
+    from trafficwb.change import ChangeService
+    sq = lambda x1, y1, x2, y2: [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+    polys = [{"kind": "include", "prompt": "road", "polygon": sq(0, 0, 100, 100)},
+             {"kind": "exclude", "prompt": "road", "polygon": sq(40, 40, 60, 60)},          # the overpass is a gap in the road
+             {"kind": "include", "prompt": "overpass", "polygon": sq(30, 45, 70, 55)}]
+    m = ChangeService._poly_mask(polys, 100, 100)
+    assert m[50, 50] and m[42, 32] and not m[42, 50]
