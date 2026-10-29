@@ -11,6 +11,8 @@
 #          it stops. Needs no administrator rights. It also starts the server now.
 # restart: stops the running server; it starts again by itself 10 s later, with the version start.cmd names.
 # remove:  removes the automatic start and stops the server.
+# uninstall: what the uninstaller runs first: remove, then deletes the model packs that came with LanePulse. Models
+#          trained on this computer are kept, in <Target>\trained-models; installing again puts them back.
 # open:    what the Lanemark shortcut runs: starts the server when it is not running, then opens the browser.
 # boot:    for an IT administrator: a scheduled task that starts at power-on, before anyone signs in.
 #          Creating it needs administrator rights. It runs as a Windows account you name (asked for its password),
@@ -18,7 +20,7 @@
 #         which cannot read network shares.
 # Both write the server's output to <Target>\logs\server.log. Nothing is downloaded.
 param(
-  [ValidateSet("status", "signin", "boot", "restart", "remove", "open")]
+  [ValidateSet("status", "signin", "boot", "restart", "remove", "open", "uninstall")]
   [string]$Mode = "status",
   [string]$Target = $PSScriptRoot,
   [string]$User = "",
@@ -182,6 +184,29 @@ if ($Mode -eq "open") {
   exit 0
 }
 if ($Mode -eq "remove") { Remove-All; exit 0 }
+if ($Mode -eq "uninstall") {
+  Remove-All
+  # Models trained on this computer (a card that records its training) are the user's own work: they are moved to
+  # <Target>\trained-models, which no uninstaller version deletes (the uninstall list of an earlier version, which
+  # Windows keeps, deletes the whole models folder). The next install puts them back. The rest is removed.
+  $models = Join-Path $Target "models"
+  $keep = Join-Path $Target "trained-models"
+  foreach ($card in @(Get-ChildItem $models -Filter model.json -Recurse -Depth 2 -ErrorAction SilentlyContinue)) {
+    $trained = $false
+    try { $trained = [bool]((Get-Content $card.FullName -Raw | ConvertFrom-Json).training) } catch { }
+    $pack = $card.Directory
+    if ($trained) {
+      $dest = Join-Path (Join-Path $keep $pack.Parent.Name) $pack.Name
+      if (-not (Test-Path $dest)) {
+        New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
+        Move-Item $pack.FullName $dest
+      }
+      Write-Host "Kept the trained model in $dest."
+    } else { Remove-Item -Recurse -Force $pack.FullName -ErrorAction SilentlyContinue }
+  }
+  if (Test-Path $models) { Remove-Item -Recurse -Force $models -ErrorAction SilentlyContinue }
+  exit 0
+}
 if ($Mode -eq "restart") {
   Stop-Server
   Write-Host "The server starts again within about 10 s if automatic start is set up; otherwise run $Start."
