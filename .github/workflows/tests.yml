@@ -77,7 +77,14 @@ jobs:
           TWB_REQUIRE_SAM3: "1"
         run: |
           $b = Get-ChildItem dist -Directory | Select-Object -First 1
-          $out = & "$($b.FullName)\install.ps1" -Target "$env:RUNNER_TEMP\twb" -Data "$env:RUNNER_TEMP\twbdata" -BackupDir "$env:RUNNER_TEMP\twbbk" *>&1 | Tee-Object -Variable log
+          $logf = "$env:RUNNER_TEMP\install-log.txt"
+          try {
+            & "$($b.FullName)\install.ps1" -Target "$env:RUNNER_TEMP\twb" -Data "$env:RUNNER_TEMP\twbdata" -BackupDir "$env:RUNNER_TEMP\twbbk" *>&1 | Tee-Object -FilePath $logf | Out-Null
+          } finally {
+            # the installer's output is captured for the checks below; show it too, so a failed check says why
+            Get-Content $logf -ErrorAction SilentlyContinue
+          }
+          $log = Get-Content $logf
           if ("${{ matrix.ort }}" -eq "auto" -and -not ($log -match "ONNX Runtime build: directml")) { throw "auto bundle did not choose DirectML on a runner without NVIDIA" }
           if (-not (Test-Path "$env:RUNNER_TEMP\twb\start.cmd")) { throw "start.cmd was not written" }
           if (-not ($log -match '"inference": "ok"')) { throw "SAM 3.1 did not run in the install check" }
