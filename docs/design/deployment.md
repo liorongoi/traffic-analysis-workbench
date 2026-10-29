@@ -8,7 +8,8 @@ Requirements ENV-01, ENV-04 to ENV-07, ARC-02, ARC-04, HW-01; questions Q20, Q22
 
 - the application wheel, with the built screens inside;
 - every dependency as a binary wheel for the target (`--platform win_amd64 --python 3.12`);
-- the model packs, checksum-verified before they are copied;
+- the model packs, checksum-verified before they are copied, including SAM 3.1 (about 880 MB, Meta's SAM License shipped
+  with it; see `docs/decisions/sam3.md`);
 - `install.ps1` (Windows), `install.sh` (Linux, used for testing), `INSTALL.txt`, `offline_smoke.py`;
 - `bundle.json` (versions, models, wheels) and `SHA256SUMS` over every file.
 
@@ -26,7 +27,7 @@ The published Windows installer is one `LanePulse-Setup-<version>.exe`. It runs 
 2. finds Python (given, the `py` launcher, `python` on the path, or the installer in the bundle, installed for the current user without admin rights);
 3. copies the wheels into a local wheelhouse (`<target>\wheelhouse`, add-only), creates a fresh environment `<target>\app-<version>` (a uniquely named repair environment if that version already exists) and installs from the local wheelhouse with downloads off. Earlier versions' folders stay;
 4. adds model packs that are not yet there (existing versions are never replaced);
-5. chooses the ONNX Runtime build (see above), then runs the disconnected install-to-export check (`offline_smoke.py`): synthetic images, a mission, scan, detection with the installed detector, CSV and Excel export, a verified backup, and the web server's page and session answer. On failure the previous version stays in use;
+5. chooses the ONNX Runtime build (see above), then runs the disconnected install-to-export check (`offline_smoke.py`): synthetic images, a mission, scan, detection with the installed detector, CSV and Excel export, a verified backup, and the web server's page and session answer. On failure the previous version stays in use. It also loads SAM 3.1 and, with 8.5 GB of memory free, outlines a road on a synthetic street; a SAM 3.1 problem is reported but does not stop the install (the build machine's tests set `TWB_REQUIRE_SAM3=1`, which makes it fail);
 6. on an update, backs up the data with the previous version, then writes `start.cmd` for the new version and records `current.txt` and `previous.txt`.
 
 No admin rights, Docker, WSL or Windows service are needed. LanePulse itself has no sign-in page or account requirement. Manual startup is the default; `autostart.ps1 -Mode signin` configures Windows to start the server when the Windows user session opens, while `-Mode boot` configures an administrator-created power-on task (ENV-08).

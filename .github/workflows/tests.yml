@@ -24,8 +24,8 @@ jobs:
       - name: Build the web screens
         run: python scripts/build_ui.py
       - run: python -m pip install -e ".[dev,probe,cpu]"
-      - name: Fetch model pack (stands in for the staging machine)
-        run: python scripts/fetch_models.py
+      - name: Fetch model pack (stands in for the staging machine; the SAM 3.1 tests use a small stand-in)
+        run: python scripts/fetch_models.py --no-sam3
       - run: python -m pytest -v
       - name: Hardware probe report (runner hardware, not the target workstation)
         run: python -m trafficwb.probe
@@ -74,11 +74,13 @@ jobs:
           PIP_NO_INDEX: "1"
           HTTPS_PROXY: http://127.0.0.1:9
           HTTP_PROXY: http://127.0.0.1:9
+          TWB_REQUIRE_SAM3: "1"
         run: |
           $b = Get-ChildItem dist -Directory | Select-Object -First 1
           $out = & "$($b.FullName)\install.ps1" -Target "$env:RUNNER_TEMP\twb" -Data "$env:RUNNER_TEMP\twbdata" -BackupDir "$env:RUNNER_TEMP\twbbk" *>&1 | Tee-Object -Variable log
           if ("${{ matrix.ort }}" -eq "auto" -and -not ($log -match "ONNX Runtime build: directml")) { throw "auto bundle did not choose DirectML on a runner without NVIDIA" }
           if (-not (Test-Path "$env:RUNNER_TEMP\twb\start.cmd")) { throw "start.cmd was not written" }
+          if (-not ($log -match '"inference": "ok"')) { throw "SAM 3.1 did not run in the install check" }
           Get-Content "$env:RUNNER_TEMP\twb\start.cmd"
       - name: Manual start and optional power-on task
         shell: pwsh

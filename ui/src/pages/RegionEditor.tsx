@@ -233,6 +233,7 @@ function FindPanel(p: {
   return (
     <>
       <p className="muted">Name what to analyse, or what to leave out. SAM 3.1 outlines it on this image, and you choose which outlines become regions.</p>
+      {sam.memory_note && <div className="msg warn">{sam.memory_note}</div>}
       <KindSwitch kind={kind} setKind={p.setKind} disabled={p.busy} />
       <div className="chips" role="group" aria-label="What to look for" style={{ marginTop: 12 }}>
         {suggestions.map((w) => (

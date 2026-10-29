@@ -41,6 +41,7 @@ from .models import ModelPack, ModelPackError
 PACK_NAME = "sam3.1-w8a16"
 TASK = "segmentation"
 IDLE_UNLOAD_S = 600
+MIN_MEMORY = 12 * 2**30        # below this much memory in the computer, the screens warn before SAM 3.1 is used
 
 # Words SAM 3.1 is asked for each vehicle class of this application. "van" is counted as a car, as COCO does.
 VEHICLE_PROMPTS: dict[str, tuple[str, ...]] = {
@@ -104,7 +105,7 @@ class Sam3Engine:
         self.image_size = int(self.card.get("input_size", 1008))
         self.text_len = int(self.card.get("text_length", 32))
         self.pad_id = int(self.card.get("pad_token_id", 49407))
-        self.box_format = self.card.get("box_format", "xyxy")
+        self.box_format = self.card.get("box_format", "xyxy")   # checked on the real model: normalised x1, y1, x2, y2
         self._lock = threading.RLock()
         self._models: dict | None = None
         self._tokenizer = None
@@ -128,14 +129,17 @@ class Sam3Engine:
             from tokenizers import Tokenizer
             t0 = time.monotonic()
             core = ov.Core()
-            cache = self.pack.path / ".ov-cache"
-            try:                            # compiled-model cache makes the next start faster; optional
-                cache.mkdir(exist_ok=True)
-                core.set_property({"CACHE_DIR": str(cache)})
-            except Exception:
-                pass
-            self._models = {p: core.compile_model(str(self._graph(p)), self.device)
-                            for p in ("vision", "text", "decoder")}
+            models = {}
+            for part in ("vision", "text", "decoder"):
+                model = core.read_model(str(self._graph(part)))
+                if part == "vision":
+                    # One image at a time. A fixed batch of 1 is also what lets the image encoder's transposed
+                    # convolutions run on Apple-silicon (ARM) CPUs, which refuse them with an open batch size.
+                    model.reshape({"pixel_values": [1, 3, self.image_size, self.image_size]})
+                # OpenVINO's default precision for the device (f16 on ARM, f32 or bf16 on x86) is kept on purpose:
+                # forcing f32 on ARM brings the same refusal back.
+                models[part] = core.compile_model(model, self.device)
+            self._models = models
             self._tokenizer = Tokenizer.from_file(str(self.pack.path / self.card["tokenizer"]))
             self.load_seconds = round(time.monotonic() - t0, 2)
             self.last_used = time.monotonic()
@@ -253,8 +257,17 @@ def available(root: Path | None = None) -> dict:
     except ImportError:
         runtime = False
     eng = _shared.get(cards[-1]["version"]) if cards else None
+    try:
+        import psutil
+        total = psutil.virtual_memory().total
+    except Exception:
+        total = None
     return {"installed": bool(cards) and runtime, "pack": cards[-1] if cards else None, "runtime": runtime,
-            "loaded": bool(eng and eng.loaded),
+            "loaded": bool(eng and eng.loaded), "memory_gb": round(total / 2**30, 1) if total else None,
+            # one image needs about 7 GB while SAM 3.1 works on it
+            "memory_note": None if not total or total >= MIN_MEMORY else
+            f"This computer has {total / 2**30:.0f} GB of memory; SAM 3.1 needs about 8 GB free while it works, "
+            "so it may be very slow or stop here.",
             "reason": None if cards and runtime else
             ("OpenVINO is missing from this installation." if cards else "The SAM 3.1 model pack is not installed.")}
 

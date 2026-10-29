@@ -1,0 +1,2 @@
+# Shipped byte for byte: their checksums are checked when the model packs are made.
+packaging/licenses/* -text

@@ -100,7 +100,7 @@ export type Region = { uid: string; kind: "include" | "exclude"; name: string | 
 
 // SAM 3.1: finds and outlines things named in words (vehicles, roads), on the CPU, offline.
 export type Sam3Status = {
-  installed: boolean; runtime: boolean; loaded: boolean; reason: string | null;
+  installed: boolean; runtime: boolean; loaded: boolean; reason: string | null; memory_note?: string | null;
   pack: { name: string; version: string; license?: string } | null;
   suggestions?: Record<"include" | "exclude", string[]>;
   vehicle_prompts?: Record<string, string[]>;

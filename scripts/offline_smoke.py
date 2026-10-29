@@ -64,27 +64,50 @@ def web_check(data: Path) -> tuple[str, dict]:
     return page, health
 
 
+SAM3_MIN_FREE = 8.5e9     # one SAM 3.1 image peaks at about 7 GB of memory
+
+
 def sam_check() -> dict:
-    """SAM 3.1, when its pack is installed: load it and outline the road on a synthetic street. It must run."""
+    """SAM 3.1, when its pack is installed: load it and, with enough free memory, outline a road on a synthetic street.
+
+    A failure is reported, not fatal: LanePulse works without SAM 3.1, and the screens say why it is unavailable.
+    With TWB_REQUIRE_SAM3=1 (the build machine's tests) any failure fails the check.
+    """
     import cv2
     import numpy as np
+    import psutil
 
     from trafficwb import sam3
     st = sam3.available()
     if not st["pack"]:
         return {"installed": False}
     t0 = time.time()
-    eng = sam3.engine()
-    eng.load()
-    img = np.full((720, 1280, 3), (200, 170, 140), np.uint8)               # sky
-    cv2.fillPoly(img, [np.array([[560, 300], [720, 300], [1280, 720], [0, 720]], np.int32)], (75, 75, 78))   # road
-    for y in range(330, 720, 60):                                           # lane dashes
-        cv2.line(img, (640, y), (640, y + 30), (235, 235, 235), 6)
-    found = eng.segment(img, ["road"], threshold=0.3)["road"]
-    areas = sam3.find_areas(eng, img, ["road"], threshold=0.3)
-    out = {"installed": True, "pack": f"{eng.pack.name} {eng.pack.version}", "load_s": eng.load_seconds,
-           "road_instances": len(found), "road_areas": len(areas), "seconds": round(time.time() - t0, 1)}
-    eng.release()
+    out: dict = {"installed": True}
+    try:
+        eng = sam3.engine()
+        out["pack"] = f"{eng.pack.name} {eng.pack.version}"
+        eng.load()
+        out["load_s"] = eng.load_seconds
+        free = psutil.virtual_memory().available
+        if free < SAM3_MIN_FREE:
+            out["inference"] = f"skipped: {free / 1e9:.1f} GB of memory free, {SAM3_MIN_FREE / 1e9:.1f} GB needed for a full check"
+        else:
+            img = np.full((720, 1280, 3), (200, 170, 140), np.uint8)               # sky
+            cv2.fillPoly(img, [np.array([[560, 300], [720, 300], [1280, 720], [0, 720]], np.int32)], (75, 75, 78))
+            for y in range(330, 720, 60):                                           # lane dashes
+                cv2.line(img, (640, y), (640, y + 30), (235, 235, 235), 6)
+            out["road_areas"] = len(sam3.find_areas(eng, img, ["road"], threshold=0.3))
+            out["inference"] = "ok"
+        eng.release()
+        out["ok"] = True
+    except Exception as exc:  # noqa: BLE001 - reported in words
+        out["ok"] = False
+        out["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        if os.environ.get("TWB_REQUIRE_SAM3") == "1":
+            raise
+        print(f"warning: SAM 3.1 did not pass its check on this computer ({out['error']}); "
+              "everything else works, and SAM 3.1 reports the error when it is used.", file=sys.stderr)
+    out["seconds"] = round(time.time() - t0, 1)
     return out
 
 

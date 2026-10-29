@@ -4,7 +4,7 @@ import { go } from "../router";
 import TimezoneMap from "../components/TimezoneMap";
 
 type Ref = { countries: Record<string, string>; country_zones: Record<string, string>; modes: Record<string, string[]>; zones: string[];
-  sam3?: { installed: boolean; reason: string | null } };
+  sam3?: { installed: boolean; reason: string | null; memory_note?: string | null } };
 type Preview = { file: string; ok: boolean; utc?: string; precision?: string; pattern?: string; reason?: string };
 
 const STEPS = ["Mission", "Place and time", "Source", "Output", "Check and create"];
@@ -214,7 +214,8 @@ export default function Wizard() {
 }
 
 export function DetectorChoice({ value, onChange, sam, disabled, legend = true }: {
-  value: string; onChange: (d: string) => void; sam?: { installed: boolean; reason: string | null }; disabled?: boolean; legend?: boolean;
+  value: string; onChange: (d: string) => void; sam?: { installed: boolean; reason: string | null; memory_note?: string | null };
+  disabled?: boolean; legend?: boolean;
 }) {
   return (
     <fieldset style={{ border: 0, padding: 0, margin: "4px 0 14px", minWidth: 0 }} aria-label="Vehicle detector">
@@ -233,6 +234,7 @@ export function DetectorChoice({ value, onChange, sam, disabled, legend = true }
             : `Not available on this computer. ${sam?.reason ?? ""}`}</small>
         </label>
       </div>
+      {value === "sam3" && sam?.memory_note && <div className="msg warn">{sam.memory_note}</div>}
     </fieldset>
   );
 }
