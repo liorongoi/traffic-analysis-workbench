@@ -304,9 +304,18 @@ def test_the_road_area_is_the_union_of_each_words_outline_less_its_own_gaps():
 def test_two_lone_headlights_far_apart_are_one_vehicle_but_two_cars_are_two():
     bg, spread = build_reference([g(night_scene(s)) for s in range(4)])
     frame = night_scene(17)
-    cv2.circle(frame, (140, 225), 3, 255, -1)           # one far vehicle: its lights 30 px apart, beyond the merge gap
-    cv2.circle(frame, (170, 225), 3, 255, -1)
-    ch = find_changes(g(frame), bg, spread, None)[0]
+    cv2.circle(frame, (150, 225), 3, 255, -1)           # one far vehicle: its lights 24 px apart, beyond the merge gap
+    cv2.circle(frame, (174, 225), 3, 255, -1)
+    p = ChangeParams(lone_light_share=0.04)              # the test frame is small: 0.025 of 320 px is 8 px
+    ch = find_changes(g(frame), bg, spread, None, p)[0]
     assert len(ch) == 1 and ch[0].parts == 2, ch
     two = with_car_lights(with_car_lights(night_scene(18), 60, 200, glow=False), 250, 200, glow=False)
     assert len(find_changes(g(two), bg, spread, None)[0]) == 2
+
+
+def test_a_big_glare_is_not_paired_with_a_vehicle_beside_it():
+    bg, spread = build_reference([g(night_scene(s)) for s in range(4)])
+    frame = night_scene(19)
+    cv2.circle(frame, (90, 200), 12, 255, -1)          # an oncoming vehicle's glare
+    cv2.circle(frame, (190, 200), 3, 255, -1)          # one light of another vehicle, 85 px away
+    assert len(find_changes(g(frame), bg, spread, None)[0]) == 2
