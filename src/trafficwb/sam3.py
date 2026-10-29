@@ -167,7 +167,8 @@ class Sam3Engine:
     # ---------- inference ----------
     def _run(self, part: str, feed: dict) -> dict:
         res = self._models[part](feed)
-        return {o.get_any_name(): res[o] for o in self._models[part].outputs}
+        # An output can carry several tensor names, and get_any_name() may pick an internal one, so map them all.
+        return {name: res[o] for o in self._models[part].outputs for name in o.get_names()}
 
     def encode_image(self, img_bgr: np.ndarray) -> dict:
         """Image features, reused by every prompt asked about the same image."""
