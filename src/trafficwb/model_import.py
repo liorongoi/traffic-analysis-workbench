@@ -19,7 +19,7 @@ from pathlib import Path
 from . import models
 from .models import ModelPack, ModelPackError, sha256_file
 
-TASKS = ("vehicle_detection", "plate_detection", "plate_ocr")
+TASKS = ("vehicle_detection", "plate_detection", "plate_ocr", "segmentation")
 
 
 def _unpack(src: Path, work: Path) -> Path:

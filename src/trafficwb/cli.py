@@ -3,7 +3,7 @@
 trafficwb-mission create --data DIR --name N --source DIR --output DIR --country IL --zone Asia/Jerusalem [...]
 trafficwb-mission scan   --data DIR --mission ID [--stability 30]
 trafficwb-mission status --data DIR [--mission ID]
-trafficwb-mission detect --data DIR --mission ID [--model yolox-s] [--tiles 3x2]
+trafficwb-mission detect --data DIR --mission ID [--model yolox-s | --model sam3] [--tiles 3x2]
 trafficwb-mission results --data DIR --mission ID [--limit 50]
 trafficwb-mission export --data DIR --mission ID [--formats csv,xlsx]
 """
@@ -35,6 +35,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--output", required=True)
     c.add_argument("--formats", default="xlsx,csv")
     c.add_argument("--author", default="operator")
+    c.add_argument("--detector", default="standard", choices=["standard", "sam3"],
+                   help="vehicle detector for still images: standard (YOLOX-s) or sam3 (SAM 3.1)")
     s = sub.add_parser("scan")
     s.add_argument("--data", required=True)
     s.add_argument("--mission", required=True)
@@ -45,7 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("detect")
     d.add_argument("--data", required=True)
     d.add_argument("--mission", required=True)
-    d.add_argument("--model", default="yolox-s")
+    d.add_argument("--model", help="yolox-s (default), another vehicle detector pack, or sam3 (SAM 3.1); default: the "
+                   "mission's own choice")
     d.add_argument("--model-version")
     d.add_argument("--tiles", default="3x2", help="columns x rows, 1x1 to disable tiling")
     d.add_argument("--rule", default="bottom_center", choices=["bottom_center", "centroid", "overlap"])
@@ -64,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "create":
         cfg = MissionConfig(name=a.name, input_type=a.input_type, mode=a.mode, country=a.country, iana_zone=a.zone,
                             source_dir=a.source, include_subdirs=not a.no_subdirs, processing=a.processing,
-                            output_dir=a.output, export_formats=a.formats.split(","))
+                            output_dir=a.output, export_formats=a.formats.split(","), detector=a.detector)
         val = validate(cfg, root.path)
         for w in val.warnings:
             print(f"warning: {w}", file=sys.stderr)
@@ -93,9 +96,15 @@ def main(argv: list[str] | None = None) -> int:
         from .detect import DetectorSettings, YoloxDetector
         from .process import Processor
         cols, rows = (int(x) for x in a.tiles.lower().split("x"))
-        pack = models.find(a.model, a.model_version)
-        det = YoloxDetector(pack, DetectorSettings(tiles=(cols, rows)))
         m = root.open_mission(a.mission)
+        model = a.model or ("sam3" if m.input_type == "images" and m.config().detector == "sam3" else "yolox-s")
+        if model in ("sam3", "sam3.1"):
+            from .sam3 import Sam3Detector, engine
+            eng = engine()
+            det, pack = Sam3Detector(eng), eng.pack
+        else:
+            pack = models.find(model, a.model_version)
+            det = YoloxDetector(pack, DetectorSettings(tiles=(cols, rows)))
         if m.input_type == "video":
             from .video_process import VideoProcessor
             proc = VideoProcessor(m, det, pack.card)

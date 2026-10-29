@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .detect import Detector
+from .detect import Detector, accepts_area
 from .night import measure_condition
 from .night_service import NightService
 from .regions import RULES, RegionSet
@@ -98,6 +98,7 @@ class Processor:
         self.night = NightService(mission)
         self.control = control or RunControl()
         self.plate_models = plate_models   # loaded only when a plate recognition mission needs it
+        self._area_aware = accepts_area(detector)
 
     def pending_runs(self) -> list[int]:
         # Includes runs interrupted after their last image but before night analysis and completion.
@@ -153,7 +154,16 @@ class Processor:
                              (it["id"],))
             try:
                 img = read_image(self.views._path(it["source_version_id"]))
-                dets = self.detector.detect(img)
+                view_id = self.views.current_view(it["source_version_id"])
+                regions = None
+                if view_id is not None:
+                    self.views.check_drift(it["source_version_id"])
+                    if self.views.regions_applicable(view_id):
+                        regions = region_cache.get(view_id) or RegionSet.load(self.con, view_id)
+                        region_cache[view_id] = regions
+                # Only the view's scan area is searched closely; the whole frame is still looked at once.
+                dets = (self.detector.detect(img, area=regions) if regions is not None and self._area_aware
+                        else self.detector.detect(img))
             except Exception as exc:  # one bad image must not stop the run
                 self.con.execute("UPDATE run_item SET processing_state='failed', error_code=?, error_detail=? WHERE id=?",
                                  (type(exc).__name__, str(exc)[:500], it["id"]))
@@ -162,13 +172,6 @@ class Processor:
                 rep.failed += 1
                 rep.errors.append(f"{it['rel_path']}: {exc}")
                 continue
-            view_id = self.views.current_view(it["source_version_id"])
-            regions = None
-            if view_id is not None:
-                self.views.check_drift(it["source_version_id"])
-                if self.views.regions_applicable(view_id):
-                    regions = region_cache.get(view_id) or RegionSet.load(self.con, view_id)
-                    region_cache[view_id] = regions
             now = utcnow()
             self.con.execute("BEGIN")
             # Detections and the 'done' state commit together: a crash leaves neither, and a done item is never redone.

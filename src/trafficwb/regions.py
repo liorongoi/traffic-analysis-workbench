@@ -90,6 +90,22 @@ class RegionSet:
         return cls([Region(r["region_uid"], r["kind"], r["name"], [tuple(p) for p in json.loads(r["polygon"])])
                     for r in rows if not r["deleted"]])
 
+    def mask(self, width: int, height: int):
+        """Boolean image of the scan area (included and not excluded), for skipping parts of a frame."""
+        import cv2
+        import numpy as np
+        key = (width, height)
+        if getattr(self, "_mask_key", None) != key:
+            m = np.zeros((height, width), np.uint8)
+            if not self.include:
+                m[:] = 1
+            for r in self.include:
+                cv2.fillPoly(m, [np.round(np.array(r.polygon)).astype(np.int32)], 1)
+            for r in self.exclude:
+                cv2.fillPoly(m, [np.round(np.array(r.polygon)).astype(np.int32)], 0)
+            self._mask, self._mask_key = m.astype(bool), key
+        return self._mask
+
     def vertices(self) -> list[Point]:
         return [p for r in self.include + self.exclude for p in r.polygon]
 

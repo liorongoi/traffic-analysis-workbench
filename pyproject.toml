@@ -19,6 +19,8 @@ dependencies = [
     "uvicorn>=0.29",
     "watchdog>=4.0",       # filesystem notifications, with periodic reconciliation as the fallback
     "psutil>=5.9",          # non-blocking process/system resource figures in the progress UI
+    "openvino>=2025.3",     # runs SAM 3.1 (open-vocabulary detection and segmentation) on the CPU
+    "tokenizers>=0.20",     # SAM 3.1's text prompts (CLIP tokenizer)
 ]
 
 [project.optional-dependencies]
@@ -27,7 +29,7 @@ cpu = ["onnxruntime>=1.17"]
 cuda = ["onnxruntime-gpu[cuda,cudnn]>=1.21"]
 directml = ["onnxruntime-directml>=1.17"]
 probe = []
-dev = ["pytest>=8", "httpx>=0.27"]
+dev = ["pytest>=8", "httpx>=0.27", "onnx>=1.16"]   # onnx builds the small SAM 3.1 stand-in for the tests
 # Training the vehicle detector (from the learning page, or trafficwb-train). Combine with one ONNX Runtime extra
 # (cpu, cuda or directml), which also checks the exported model.
 train = ["torch>=2.3", "onnx>=1.16"]

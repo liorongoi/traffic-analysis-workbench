@@ -98,6 +98,20 @@ export type NightBands = {
 export type Light = { id: number; box: Box; cx: number; cy: number; area: number };
 export type Region = { uid: string; kind: "include" | "exclude"; name: string | null; polygon: [number, number][] };
 
+// SAM 3.1: finds and outlines things named in words (vehicles, roads), on the CPU, offline.
+export type Sam3Status = {
+  installed: boolean; runtime: boolean; loaded: boolean; reason: string | null;
+  pack: { name: string; version: string; license?: string } | null;
+  suggestions?: Record<"include" | "exclude", string[]>;
+  vehicle_prompts?: Record<string, string[]>;
+};
+export type AreaProposal = { prompt: string; kind: "include" | "exclude"; polygon: [number, number][]; area_share: number; score: number };
+export type AreaTask = {
+  id: string; view_id: number; version_id: number; prompts: string[]; kind: "include" | "exclude";
+  state: "running" | "finished" | "failed"; stage: string; error: string | null; elapsed_s: number;
+  proposals: AreaProposal[]; size: [number, number] | [];
+};
+
 export type Item = {
   id: number;
   file: string;

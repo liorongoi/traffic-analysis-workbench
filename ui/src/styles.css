@@ -212,6 +212,52 @@ td.num, th.num, table.t .num { text-align: right; }
 .legend svg { vertical-align: middle; }
 kbd { font-family: var(--mono); font-size: 11px; line-height: 1.4; padding: 0 5px; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 3px; background: var(--field); color: var(--text-2); }
 
+/* ---- Regions found by SAM 3.1 ----
+   Proposals are drawn in the brand teal so they never read as saved regions (blue include, red exclude)
+   until the operator adds them. While SAM 3.1 looks, one lane-dash line sweeps down the image. */
+.seg { display: flex; padding: 3px; gap: 3px; margin-bottom: 14px; background: var(--field); border: 1px solid var(--line); border-radius: var(--radius); }
+.seg button { flex: 1; min-height: 30px; border: 0; background: transparent; color: var(--muted); }
+.seg button:hover:not(:disabled) { background: var(--panel-2); color: var(--text); border: 0; }
+.seg button.on, .seg button.on:hover:not(:disabled) { background: var(--panel-2); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+button.chip { min-height: 28px; padding: 2px 11px; border-radius: 999px; font-weight: 500; color: var(--text-2); background: transparent; }
+button.chip.on { color: var(--text); background: var(--accent-soft); border-color: var(--accent); }
+button.chip.on::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.badge.kind-include { color: var(--include); background: rgba(114, 183, 255, .1); }
+.badge.kind-exclude { color: var(--exclude); background: rgba(255, 129, 127, .1); }
+.stage polygon.found { fill: rgba(69, 201, 176, .08); stroke: var(--accent); stroke-opacity: .75; cursor: pointer; transition: fill .12s ease, stroke-opacity .12s ease; }
+.stage polygon.found.on { fill: rgba(69, 201, 176, .24); stroke-opacity: 1; }
+.stage polygon.found[data-kind="exclude"] { stroke: var(--exclude); }
+.stage polygon.found.focus { stroke-opacity: 1; fill-opacity: 1; filter: drop-shadow(0 0 6px rgba(69, 201, 176, .55)); }
+.stage.scanning img { filter: saturate(.55) brightness(.8); transition: filter .4s ease; }
+.scanbar {
+  position: absolute; left: 0; right: 0; height: 3px; top: 0; pointer-events: none;
+  background: repeating-linear-gradient(90deg, var(--lane) 0 22px, transparent 22px 34px);
+  box-shadow: 0 0 14px 2px rgba(227, 179, 65, .45);
+  animation: scan 2.6s cubic-bezier(.45, 0, .55, 1) infinite alternate;
+}
+@keyframes scan { from { top: 4%; } to { top: 95%; } }
+.found-status { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--panel-2); color: var(--text-2); }
+.pulse { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--lane); animation: pulse 1.2s ease-in-out infinite; vertical-align: 1px; }
+@keyframes pulse { 50% { opacity: .25; } }
+.found-list ul { list-style: none; margin: 6px 0 10px; padding: 0; display: grid; gap: 2px; }
+.found-list li { padding: 4px 6px; border-radius: var(--radius-sm); }
+.found-list li.focus { background: var(--panel-2); }
+.found-list li label { gap: 8px; flex-wrap: nowrap; cursor: pointer; }
+.found-list .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.3; }
+.found-list .grow small { display: block; font-size: 12px; }
+.found-list .num { font-variant-numeric: tabular-nums; font-size: 12.5px; }
+
+/* ---- Detector choice ---- */
+.choices { display: grid; gap: 8px; }
+.choice { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: start; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--field); cursor: pointer; }
+.choice:hover { border-color: var(--hover-line); }
+.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.choice:has(input:disabled) { opacity: .55; cursor: default; }
+.choice input { margin-top: 3px; }
+.choice b { font-weight: 600; }
+.choice small { grid-column: 2; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+
 .thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
 .thumbs img { height: 90px; border-radius: var(--radius-sm); border: 1px solid var(--line); display: block; }
 .thumbs a:hover img { border-color: var(--accent); }

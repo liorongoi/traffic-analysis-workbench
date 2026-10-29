@@ -64,6 +64,30 @@ def web_check(data: Path) -> tuple[str, dict]:
     return page, health
 
 
+def sam_check() -> dict:
+    """SAM 3.1, when its pack is installed: load it and outline the road on a synthetic street. It must run."""
+    import cv2
+    import numpy as np
+
+    from trafficwb import sam3
+    st = sam3.available()
+    if not st["pack"]:
+        return {"installed": False}
+    t0 = time.time()
+    eng = sam3.engine()
+    eng.load()
+    img = np.full((720, 1280, 3), (200, 170, 140), np.uint8)               # sky
+    cv2.fillPoly(img, [np.array([[560, 300], [720, 300], [1280, 720], [0, 720]], np.int32)], (75, 75, 78))   # road
+    for y in range(330, 720, 60):                                           # lane dashes
+        cv2.line(img, (640, y), (640, y + 30), (235, 235, 235), 6)
+    found = eng.segment(img, ["road"], threshold=0.3)["road"]
+    areas = sam3.find_areas(eng, img, ["road"], threshold=0.3)
+    out = {"installed": True, "pack": f"{eng.pack.name} {eng.pack.version}", "load_s": eng.load_seconds,
+           "road_instances": len(found), "road_areas": len(areas), "seconds": round(time.time() - t0, 1)}
+    eng.release()
+    return out
+
+
 def main(argv=None) -> int:
     from trafficwb import safe_console
     safe_console()
@@ -119,12 +143,13 @@ def main(argv=None) -> int:
     from trafficwb.models import find
     from trafficwb.runtime import make_session
     _, info = make_session(find("yolox-s").weights)
+    sam = sam_check()
     from trafficwb.store import DataRoot as _DR
     m = _DR(data).open_mission(mid)
     n_img = m.con.execute("SELECT COUNT(*) FROM source_version").fetchone()[0]
     n_det = m.con.execute("SELECT COUNT(*) FROM detection").fetchone()[0]
     print(json.dumps({"ok": True, "version": __version__, "network": no_network(), "images": n_img, "detections": n_det,
-                      "exported": exported, "backup": b.name, "accelerator": info.record(),
+                      "exported": exported, "backup": b.name, "accelerator": info.record(), "sam3": sam,
                       "seconds": round(time.time() - t0, 1)}, ensure_ascii=False))
     return 0
 

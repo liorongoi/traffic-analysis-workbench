@@ -52,7 +52,8 @@ try {
 # Microsoft C++ runtime (msvcp140.dll and the rest). ONNX Runtime and PyTorch need a recent one, and the copy in
 # C:\Windows\System32 is often older on computers where it was never updated (updating it needs an administrator).
 # The bundle carries its own; it is kept in <install>\vc-runtime, so a small update finds it too, and put next to
-# LanePulse's Python and next to the libraries that use it, where Windows looks before System32.
+# LanePulse's Python and next to the libraries that use it (ONNX Runtime, PyTorch, OpenVINO for SAM 3.1), where Windows
+# looks before System32.
 $KeptVc = Join-Path $Target "vc-runtime"
 $BundleVc = Join-Path $Bundle "vc-runtime"
 if (Test-Path $BundleVc) {
@@ -244,6 +245,7 @@ function Install-Env([string]$build) {
   $site = Join-Path $Venv "Lib\site-packages"
   Install-VcRuntime (Join-Path $site "onnxruntime\capi")
   Install-VcRuntime (Join-Path $site "torch\lib")
+  Install-VcRuntime (Join-Path $site "openvino\libs")
   if ($SkipCheck) { return "unchecked" }
   # First check that every compiled part loads on this computer, and say in plain words which one does not and why.
   $pcCheck = Join-Path $Bundle "pc_check.py"

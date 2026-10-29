@@ -66,6 +66,18 @@ class MissionBody(BaseModel):
     export_formats: list[str] = Field(default_factory=lambda: ["xlsx", "csv"])
     latitude: float | None = None
     longitude: float | None = None
+    detector: str = "standard"
+
+
+class DetectorBody(BaseModel):
+    detector: str
+
+
+class FindAreasBody(BaseModel):
+    prompts: list[str] = Field(min_length=1, max_length=8)
+    kind: str = "include"
+    image_id: int
+    threshold: float = Field(0.4, ge=0.05, le=0.95)
 
 
 class TimePreviewBody(BaseModel):
@@ -117,6 +129,10 @@ class RegionBody(BaseModel):
     polygon: list[list[float]]
     name: str | None = None
     region_uid: str | None = None
+
+
+class RegionBatchBody(BaseModel):
+    regions: list[RegionBody] = Field(min_length=1, max_length=60)
 
 
 class ExportBody(BaseModel):
@@ -250,11 +266,18 @@ def default_detector_factory(data_root: Path | str | None = None):
 def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True,
                plate_factory: Callable | None = None, model_loader: Callable | None = None,
-               backup_dir: Path | str | None = None, backup_at: str = "02:00") -> FastAPI:
+               backup_dir: Path | str | None = None, backup_at: str = "02:00",
+               sam_factory: Callable | None = None, sam_status: Callable[[], dict] | None = None) -> FastAPI:
     data_root = Path(data_root)
     DataRoot(data_root)  # create folders and control.db
     jobs = JobManager(data_root, detector_factory or (lambda: default_detector_factory(data_root)), monitor_interval,
-                      stability_seconds, plate_factory, model_loader)
+                      stability_seconds, plate_factory, model_loader, sam_factory)
+
+    def sam_info() -> dict:
+        if sam_status:
+            return sam_status()
+        from ..sam3 import available
+        return available()
     previews: dict[str, tuple[float, dict]] = {}
     from ..admin import BackupScheduler
     backups = BackupScheduler(data_root, backup_dir, backup_at) if backup_dir else None
@@ -337,7 +360,13 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     @app.get("/api/reference")
     def reference(_u: User = Depends(user)):
         return {"countries": TARGET_COUNTRIES, "country_zones": COUNTRY_ZONES, "modes": {k: sorted(v) for k, v in MODES.items()},
-                "zones": sorted(zoneinfo.available_timezones()), "classes": list(VEHICLE_CLASSES), "version": __version__}
+                "zones": sorted(zoneinfo.available_timezones()), "classes": list(VEHICLE_CLASSES), "version": __version__,
+                "sam3": sam_info()}
+
+    @app.get("/api/sam3")
+    def sam3_status(_u: User = Depends(user)):
+        from ..sam3 import AREA_SUGGESTIONS, VEHICLE_PROMPTS
+        return {**sam_info(), "suggestions": AREA_SUGGESTIONS, "vehicle_prompts": VEHICLE_PROMPTS}
 
     @app.post("/api/source-preview")
     def source_preview(body: PreviewBody, _u: User = Depends(user)):
@@ -382,6 +411,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
 
     @app.post("/api/missions")
     def mission_create(body: MissionBody, u: User = Depends(user)):
+        if body.detector == "sam3" and not sam_info()["installed"]:
+            raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""),
+                           "Choose the standard detector, or install the full LanePulse package.")
         try:
             m = DataRoot(data_root).create_mission(MissionConfig(**body.model_dump()), u.username)
         except MissionValidationError as exc:
@@ -429,6 +461,22 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         m.update_config(u.username, "monitoring " + ("on" if body.enabled else "off"), monitoring_enabled=body.enabled)
         jobs.set_monitoring(m.id, body.enabled)
         return {"enabled": body.enabled}
+
+    @app.put("/api/missions/{mission_id}/detector")
+    def detector_set(body: DetectorBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        from ..store import DETECTORS
+        cfg = m.config()
+        if body.detector not in DETECTORS:
+            raise ApiError(400, "invalid", f"Detector must be one of {sorted(DETECTORS)}.")
+        if body.detector == "sam3" and cfg.input_type != "images":
+            raise ApiError(400, "invalid", "SAM 3.1 detection is for still images; video missions use the standard detector.")
+        if body.detector == "sam3" and not sam_info()["installed"]:
+            raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""))
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "Processing is running. Change the detector when it has finished or is cancelled.")
+        if body.detector != getattr(cfg, "detector", "standard"):
+            m.update_config(u.username, f"detector set to {body.detector}", detector=body.detector)
+        return {"detector": body.detector}
 
     @app.post("/api/missions/{mission_id}/notifications/ack")
     def ack(m: Mission = Depends(mission)):
@@ -707,6 +755,46 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         from ..night_service import NightService
         NightService(m).refresh()  # night candidates follow the new regions at once
         return out
+
+    @app.post("/api/missions/{mission_id}/views/{view_id}/regions/batch")
+    def regions_save_batch(view_id: int, body: RegionBatchBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Several regions at once (areas found by SAM 3.1): all are saved, or none if one is not valid."""
+        uids = []
+        ed = RegionEditor(m.con)
+        m.con.execute("BEGIN")
+        try:
+            for r in body.regions:
+                uids.append(ed.save(view_id, r.kind, [tuple(p) for p in r.polygon], u.username, r.name, r.region_uid))
+        except (ValueError, KeyError) as exc:
+            m.con.execute("ROLLBACK")
+            raise ApiError(400, "invalid_edit", str(exc).strip("'")) from None
+        m.con.execute("COMMIT")
+        from ..night_service import NightService
+        NightService(m).refresh()
+        return {"uids": uids}
+
+    @app.post("/api/missions/{mission_id}/views/{view_id}/find-areas")
+    def find_areas_start(view_id: int, body: FindAreasBody, m: Mission = Depends(mission), _u: User = Depends(user)):
+        if body.kind not in ("include", "exclude"):
+            raise ApiError(400, "invalid", "kind must be include or exclude.")
+        prompts = [p.strip()[:60] for p in body.prompts if p.strip()]
+        if not prompts:
+            raise ApiError(400, "invalid", "Name at least one thing to look for, such as road.")
+        info = sam_info()
+        if not info["installed"]:
+            raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (info["reason"] or ""),
+                           "Draw the regions by hand, or install the full LanePulse package.")
+        if m.con.execute("SELECT 1 FROM camera_view WHERE id=?", (view_id,)).fetchone() is None:
+            raise ApiError(404, "no_view", "That camera view does not exist.")
+        _vid(m, body.image_id)
+        return jobs.find_areas(m.id, view_id, body.image_id, prompts, body.kind, body.threshold).snapshot()
+
+    @app.get("/api/missions/{mission_id}/find-areas/{task_id}")
+    def find_areas_get(task_id: str, m: Mission = Depends(mission)):
+        t = jobs.area_tasks.get(task_id)
+        if t is None or t.mission_id != m.id:
+            raise ApiError(404, "no_task", "That search has ended; start it again.")
+        return t.snapshot()
 
     @app.delete("/api/missions/{mission_id}/views/{view_id}/regions/{uid}")
     def regions_delete(view_id: int, uid: str, m: Mission = Depends(mission), u: User = Depends(user)):

@@ -6,6 +6,7 @@ import EventsTab from "./Events";
 import PlatesTab from "./Plates";
 import LearningTab from "./Learning";
 import NightReviewTab from "./NightReview";
+import { DetectorChoice } from "./Wizard";
 
 export type SavedQuery = { filter: Filter; sort: string; desc: boolean };
 export const queryKey = (mid: string) => `twb-query-${mid}`;
@@ -45,6 +46,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
             <span>{cap(m.config.mode.replace(/_/g, " "))}</span>
             <span>{m.config.iana_zone}</span>
             <span>{m.config.processing === "continuous" ? `Continuous, monitoring ${m.config.monitoring_enabled ? "on" : "off"}` : "One-time"}</span>
+            {!isVideo && <span>{m.config.detector === "sam3" ? "SAM 3.1 detector" : "Standard detector"}</span>}
           </div>
         </div>
       </div>
@@ -135,6 +137,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
             </>
           ) : <p className="muted">One-time mission: it processes the files present at its first scan.</p>}
         </div>
+        {m.config.input_type === "images" && <DetectorCard m={m} reload={reload} />}
       </div>
       <div className="grid cols-2">
         <div className="card">
@@ -156,6 +159,35 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
         </div>
       </div>
       <DeleteMission m={m} />
+    </div>
+  );
+}
+
+function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
+  const [sam, setSam] = useState<any>(null);
+  const [value, setValue] = useState<string>(m.config.detector ?? "standard");
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { api("/sam3").then(setSam).catch(() => setSam({ installed: false, reason: "Could not check." })); }, []);
+  useEffect(() => { setValue(m.config.detector ?? "standard"); }, [m.config.detector]);
+  const busy = m.job && ["running", "paused"].includes(m.job.state);
+  const changed = value !== (m.config.detector ?? "standard");
+  const saveIt = async () => {
+    setErr(null);
+    setSaving(true);
+    try { await api(`/missions/${m.id}/detector`, { method: "PUT", body: { detector: value } }); reload(); }
+    catch (e) { setErr((e as ApiError).message); }
+    finally { setSaving(false); }
+  };
+  return (
+    <div className="card">
+      <h2>Vehicle detector</h2>
+      <DetectorChoice value={value} onChange={setValue} sam={sam ?? undefined} disabled={busy} legend={false} />
+      {changed && <p className="muted">Images already processed keep their detections; the change applies to the next run. Each detection records the model that made it.</p>}
+      {busy && <p className="muted">The detector can be changed when processing has finished.</p>}
+      {changed && <div className="row"><button className="primary" disabled={busy || saving} onClick={saveIt}>{saving ? "Saving…" : "Use this detector"}</button>
+        <button onClick={() => setValue(m.config.detector ?? "standard")}>Cancel</button></div>}
+      {err && <div className="msg err" role="alert">{err}</div>}
     </div>
   );
 }
