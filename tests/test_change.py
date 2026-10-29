@@ -280,3 +280,12 @@ def test_without_regions_sam_outlines_the_road_on_the_empty_background(mission):
     # comparing again finds nothing to do: the road outline is kept with the background
     c.post(f"/api/missions/{mid}/backgrounds/compare", headers=H1)
     assert wait(c, f"/api/missions/{mid}")["result"]["images_compared"] == 0
+
+
+def test_a_glare_is_placed_at_its_lights_not_at_the_bottom_of_its_box():
+    bg, spread = build_reference([g(night_scene(s)) for s in range(4)])
+    frame = with_car_lights(night_scene(16), 170, 150)
+    (c,) = find_changes(g(frame), bg, spread, None)[0]
+    ax, ay = c.anchor
+    assert 160 <= ax <= 180 and 145 <= ay <= 155      # between the two headlights
+    assert c.change_box[3] > ay + 20                  # the lit road reaches well below them

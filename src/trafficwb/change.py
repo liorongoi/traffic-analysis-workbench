@@ -26,7 +26,7 @@ from .night import dumps, measure_condition, png, unpng
 from .regions import RegionSet
 from .store import Mission, transaction, utcnow
 
-ALGO = "change-v2"
+ALGO = "change-v3"
 CONDITIONS = ("day", "dusk", "night")
 # A frame without a background of its own condition borrows a close one: dusk and night stand in for each other.
 FALLBACK = {"day": (), "dusk": ("night",), "night": ("dusk",)}
@@ -72,6 +72,7 @@ class Change:
     sam_score: float | None = None
     change_box: tuple[float, float, float, float] | None = None
     in_region: int | None = None
+    anchor: tuple[float, float] | None = None   # the point tested against the scan area (None: bottom middle of the box)
     flags: list[str] = field(default_factory=list)
 
 
@@ -169,6 +170,9 @@ def find_changes(gray: np.ndarray, background: np.ndarray, spread: np.ndarray, a
         c = Change(full, score, kind, len(grp), int(sel.sum()))
         if kind == "lights":
             c.box, c.change_box = _vehicle_at_lights(core, x1, y1, full), full
+            ys, xs = np.nonzero(core)
+            # a glare's box reaches down over the lit road (and a bridge below it): its lights say where it is
+            c.anchor = (round(float(xs.mean()) + x1, 1), round(float(ys.mean()) + y1, 1))
         out.append(c)
     out.sort(key=lambda c: (c.box[1], c.box[0]))
     return out, round(shift, 2)
@@ -541,8 +545,11 @@ class ChangeService:
                 # At night a vehicle shows its lights; a soft or dark change alone is light on the road or a shadow.
                 c.flags.append("no_lights_at_night")
             if mask is not None:
-                bx = int(min(max((c.box[0] + c.box[2]) / 2, 0), mask.shape[1] - 1))
-                by = int(min(max(c.box[3] - 1, 0), mask.shape[0] - 1))
+                ax, ay = c.anchor if c.anchor is not None else ((c.box[0] + c.box[2]) / 2, c.box[3] - 1)
+                if c.sam_cls is not None:      # SAM's tight box: its bottom middle is where the vehicle stands
+                    ax, ay = (c.box[0] + c.box[2]) / 2, c.box[3] - 1
+                bx = int(min(max(ax, 0), mask.shape[1] - 1))
+                by = int(min(max(ay, 0), mask.shape[0] - 1))
                 c.in_region = int(mask[by, bx])
         aid = self.con.execute(
             "INSERT INTO change_analysis(source_version_id,reference_id,region_revision_id,algo,params,sam_model_id,shift,"
