@@ -52,6 +52,23 @@ a form, so a public, ungated export is used.
 - **Boxes** come out as normalised x1, y1, x2, y2 (checked against the masks), scaled to the image's own width and height
   because the image is resized to 1008 x 1008 without keeping its aspect ratio.
 
+## Vehicles found against empty-road backgrounds
+
+At night the detector misses many vehicles that show only as headlight glare. So the operator can mark a few images of a
+camera view where the road is empty (on the region editor, or "Empty road" while reviewing). LanePulse builds one
+background per light (day, dusk, night) from them: the median of the images and how much each pixel varies between them.
+Dusk and night stand in for each other when one is missing.
+
+Each image is then compared with the background of its own light, after removing an overall brightness change (exposure,
+wet road). What differs inside the scan area, by more than the usual variation, is a change; nearby parts merge, and the
+light a vehicle throws on the road joins the lights that cast it. At night and dusk only changes with a bright light core
+count (glare counts as a vehicle), unless SAM 3.1 recognises a vehicle in a close-up of the change; SAM also gives the
+type and a tighter box. Changes already covered by a detected or drawn vehicle are not counted twice.
+
+These vehicles show as "V" boxes, are corrected like any detection, and are exported with the evidence level
+`vehicle_from_change`. Each empty image is also compared with the others ("empty check"), so a background that would
+produce false vehicles shows it before it is used.
+
 ## Not done yet
 
 - Point and box prompts ("this one, and things like it"): the geometry encoders exist in the export but are not shipped.

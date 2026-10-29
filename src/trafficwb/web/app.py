@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..detect import VEHICLE_CLASSES
+from ..change import CONDITIONS, ChangeService
 from ..export import export as run_export
 from ..localtime import to_local
 from ..regions import RegionEditor, RegionSet
@@ -78,6 +79,10 @@ class FindAreasBody(BaseModel):
     kind: str = "include"
     image_id: int
     threshold: float = Field(0.4, ge=0.05, le=0.95)
+
+
+class EmptyBody(BaseModel):
+    empty: bool = True
 
 
 class TimePreviewBody(BaseModel):
@@ -547,6 +552,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             "processing_state": item["processing_state"] if item else "not_queued",
             "error": item["error_detail"] if item else None,
             "review_status": rs.review_status(version_id),
+            "empty_background": ChangeService(m).is_marked(version_id),
             "objects": [{**o.__dict__, "counted": o.counted} for o in rs.objects(version_id)],
             "candidates": [c.__dict__ for c in rs.candidates(version_id)],
             "lights": [li.__dict__ for li in NightService(m).lights(version_id)],
@@ -788,6 +794,46 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(404, "no_view", "That camera view does not exist.")
         _vid(m, body.image_id)
         return jobs.find_areas(m.id, view_id, body.image_id, prompts, body.kind, body.threshold).snapshot()
+
+    # ---------- empty backgrounds: vehicles found as changes ----------
+    def _view(m: Mission, view_id: int) -> int:
+        if m.con.execute("SELECT 1 FROM camera_view WHERE id=? AND merged_into IS NULL", (view_id,)).fetchone() is None:
+            raise ApiError(404, "no_view", "That camera view does not exist.")
+        return view_id
+
+    @app.get("/api/missions/{mission_id}/views/{view_id}/backgrounds")
+    def backgrounds(view_id: int, m: Mission = Depends(mission)):
+        cs = ChangeService(m)
+        out = cs.references(_view(m, view_id))
+        out["suggestions"] = cs.suggest_empty(view_id)
+        out["busy"] = jobs.busy(m.id)
+        return out
+
+    @app.put("/api/missions/{mission_id}/items/{version_id}/empty")
+    def mark_empty(version_id: int, body: EmptyBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        out = {}
+        _edit(lambda: out.update(ChangeService(m).mark(_vid(m, version_id), u.username, body.empty)))
+        return out
+
+    @app.get("/api/missions/{mission_id}/views/{view_id}/backgrounds/{condition}.jpg")
+    def background_image(view_id: int, condition: str, m: Mission = Depends(mission)):
+        if condition not in CONDITIONS:
+            raise ApiError(404, "no_background", "Use day, dusk or night.")
+        cs = ChangeService(m)
+        bg = cs.current(_view(m, view_id), condition)
+        if bg is None:
+            raise ApiError(404, "no_background", f"This view has no empty {condition} background yet.")
+        med, _ = cs.arrays(bg)
+        ok, buf = cv2.imencode(".jpg", med.astype("uint8"), [cv2.IMWRITE_JPEG_QUALITY, 88])
+        return Response(buf.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/missions/{mission_id}/backgrounds/compare")
+    def backgrounds_compare(m: Mission = Depends(mission), _u: User = Depends(user)):
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "The mission is processing. The comparison runs at the end of it anyway.")
+        if not m.con.execute("SELECT 1 FROM reference_mark LIMIT 1").fetchone():
+            raise ApiError(400, "no_empty_images", "Mark a few empty-road images of a camera view first.")
+        return jobs.start(m.id, "compare_backgrounds").snapshot()
 
     @app.get("/api/missions/{mission_id}/find-areas/{task_id}")
     def find_areas_get(task_id: str, m: Mission = Depends(mission)):

@@ -234,6 +234,9 @@ class JobManager:
             if job.kind == "train":
                 self._train(job, m)
                 return
+            if job.kind == "compare_backgrounds":
+                self._compare(job, m)
+                return
             if job.kind == "scan_and_process":
                 job.control.stage = "scanning source folder"
                 cycle(m, stability_seconds=self.stability)
@@ -256,7 +259,8 @@ class JobManager:
                 from ..video_process import VideoProcessor
                 proc = VideoProcessor(m, det, card, control=job.control, plate_models=self.plate_models)
             else:
-                proc = Processor(m, det, card, control=job.control, plate_models=self.plate_models)
+                proc = Processor(m, det, card, control=job.control, plate_models=self.plate_models,
+                                 sam_engine=self._sam_if_available)
             job.report = [r.__dict__ for r in proc.process_all(progress)]
             if m.input_type == "images" and m.config().mode == "plate_recognition" and not job.control.cancelled:
                 job.control.stage = "reading plates"
@@ -273,6 +277,32 @@ class JobManager:
                 pass
         finally:
             job.finished = time.time()
+
+    def _sam_if_available(self):
+        """SAM 3.1 when it is installed and this computer can hold it; otherwise an error (callers carry on)."""
+        if not self.sam_factory:
+            from ..sam3 import available
+            st = available()
+            if not st.get("installed"):
+                raise RuntimeError(st.get("reason") or "SAM 3.1 is not installed")
+            if st.get("memory_note"):
+                raise RuntimeError(st["memory_note"])
+        return self.sam_engine()
+
+    def _compare(self, job: Job, m) -> None:
+        from ..process import compare_with_backgrounds
+
+        def progress(n, total):
+            job.total = total
+            job.done = n
+            job.rate_done += 1
+            if job.rate_start is None:
+                job.rate_start = time.time()
+                job.rate_done = 0
+
+        job.control.stage = "comparing with the empty backgrounds"
+        job.result = compare_with_backgrounds(m, self._sam_if_available, job.control, progress)
+        job.state = "cancelled" if job.control.cancelled else "finished"
 
     def _search(self, job: Job, m) -> None:
         from ..search import SearchService

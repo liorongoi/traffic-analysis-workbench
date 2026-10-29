@@ -66,6 +66,23 @@ class RunReport:
     errors: list[str] = field(default_factory=list)
     night: dict = field(default_factory=dict)
     plates: dict = field(default_factory=dict)
+    changes: dict = field(default_factory=dict)
+
+
+def compare_with_backgrounds(mission: Mission, sam_engine: Callable[[], object] | None = None,
+                             control: RunControl | None = None, progress=None) -> dict:
+    """Compare processed images with their views' empty backgrounds, asking SAM 3.1 when it is installed."""
+    from .change import ChangeService
+    engine = sam_model = None
+    if sam_engine is not None:
+        try:
+            engine = sam_engine()
+            engine.load()
+            sam_model = register_model(mission.con, engine.describe(), engine.pack.card)
+        except Exception as exc:   # SAM 3.1 is optional here: vehicles stay untyped
+            engine = None
+            mission.notify("info", "sam3_unavailable", f"Vehicles found against empty backgrounds are not typed: {exc}")
+    return ChangeService(mission).refresh(engine, sam_model, control, progress)
 
 
 def register_model(con, describe: dict, card: dict) -> int:
@@ -85,7 +102,7 @@ class Processor:
 
     def __init__(self, mission: Mission, detector: Detector, card: dict | None = None,
                  region_rule: str = "bottom_center", min_overlap: float = 0.5, control: RunControl | None = None,
-                 plate_models: Callable[[], tuple] | None = None):
+                 plate_models: Callable[[], tuple] | None = None, sam_engine: Callable[[], object] | None = None):
         if region_rule not in RULES:
             raise ValueError(f"region rule must be one of {RULES}")
         self.m = mission
@@ -98,6 +115,7 @@ class Processor:
         self.night = NightService(mission)
         self.control = control or RunControl()
         self.plate_models = plate_models   # loaded only when a plate recognition mission needs it
+        self.sam_engine = sam_engine       # SAM 3.1, to type vehicles found against empty backgrounds; optional
         self._area_aware = accepts_area(detector)
 
     def pending_runs(self) -> list[int]:
@@ -197,6 +215,10 @@ class Processor:
         # Night: backgrounds need many images, so lights are grouped once the images are in.
         self.control.stage = "night analysis"
         rep.night = self.night.refresh(with_decisions=True)
+        # Views with empty-road images: what differs from them on the road is a vehicle (glare included).
+        if self.con.execute("SELECT 1 FROM reference_mark LIMIT 1").fetchone():
+            self.control.stage = "comparing with the empty backgrounds"
+            rep.changes = compare_with_backgrounds(self.m, self.sam_engine, self.control)
         if self.m.config().mode == "plate_recognition":
             self.control.stage = "reading plates"
             try:

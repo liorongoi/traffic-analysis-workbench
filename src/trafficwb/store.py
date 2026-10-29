@@ -756,6 +756,62 @@ CREATE TABLE video_start_revision (
 );
 CREATE INDEX ix_video_start_revision ON video_start_revision(source_version_id, id);
 """,
+    15: """
+-- Empty-road images an operator chose per camera view; latest row per image wins (marked | unmarked).
+CREATE TABLE reference_mark (
+  id INTEGER PRIMARY KEY,
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  action TEXT NOT NULL CHECK (action IN ('marked','unmarked')),
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_reference_mark ON reference_mark(view_id, source_version_id, id);
+-- The empty background of a view for one light condition: per-pixel median of its empty images. Immutable.
+CREATE TABLE reference_background (
+  id INTEGER PRIMARY KEY,
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  condition TEXT NOT NULL,          -- day | dusk | night
+  input_ids TEXT NOT NULL,          -- JSON: source versions it was built from
+  image_count INTEGER NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  median BLOB NOT NULL,             -- PNG, grey, original resolution
+  spread BLOB NOT NULL,             -- PNG, per-pixel spread between the empty images (0 with fewer than 3)
+  params TEXT NOT NULL,
+  built_at TEXT NOT NULL
+);
+CREATE INDEX ix_reference_background ON reference_background(view_id, condition, id);
+-- One comparison of an image with its view's empty background. Machine output, immutable; the newest counts.
+CREATE TABLE change_analysis (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  reference_id INTEGER REFERENCES reference_background(id),   -- NULL: no empty background applies (any more)
+  region_revision_id INTEGER,
+  algo TEXT NOT NULL,
+  params TEXT NOT NULL,
+  sam_model_id INTEGER REFERENCES model_version(id),           -- SAM 3.1 pack that typed the vehicles; NULL: not used
+  shift REAL,                       -- brightness difference to the background that was taken out
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_change_analysis ON change_analysis(source_version_id, id);
+CREATE TABLE change_vehicle (
+  id INTEGER PRIMARY KEY,
+  analysis_id INTEGER NOT NULL REFERENCES change_analysis(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  x1 REAL NOT NULL, y1 REAL NOT NULL, x2 REAL NOT NULL, y2 REAL NOT NULL,   -- original pixels
+  change_box TEXT NOT NULL,         -- JSON: the changed area before SAM narrowed it
+  cls TEXT NOT NULL,                -- vehicle (type unknown) or the class SAM 3.1 confirmed
+  score REAL NOT NULL,              -- how strongly the area differs from the empty background, 0..1
+  kind TEXT NOT NULL,               -- lights (brighter than the background: headlights, glare) | shape
+  parts INTEGER NOT NULL,           -- changed areas merged into this one (two headlights and a reflection: 3)
+  changed_px INTEGER NOT NULL,
+  sam_cls TEXT, sam_score REAL,
+  in_region INTEGER,
+  flags TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX ix_change_vehicle ON change_vehicle(analysis_id);
+""",
 }
 
 

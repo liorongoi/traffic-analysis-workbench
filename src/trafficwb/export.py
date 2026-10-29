@@ -43,6 +43,9 @@ class ExportError(RuntimeError):
     pass
 
 
+# Evidence level of an object in the export, by where it came from.
+EVIDENCE = {"machine": "detected", "change": "vehicle_from_change", "human": "human_added"}
+
 def _fmt(v) -> str:
     if v is None:
         return ""
@@ -78,10 +81,11 @@ def build_tables(mission: Mission, flt: Filter | None = None) -> tuple[list[list
             mb = o.machine_box or (None, None, None, None)
             objects.append([_fmt(x) for x in [
                 mission.id, row.run_id, row.source_version_id, row.filename, v["sha256"], row.capture_utc, row.capture_local,
-                row.view, o.uid, "detected" if o.origin == "machine" else "human_added", o.origin, o.status, o.cls,
+                row.view, o.uid, EVIDENCE.get(o.origin, "human_added"), o.origin, o.status, o.cls,
                 *o.box, o.machine_cls, o.score, *mb, o.correction,
                 {1: "yes", 0: "no", None: "not applied"}[o.in_region], "yes" if o.counted else "no",
-                models.get(det_model.get(o.detection_id)) if o.detection_id else "", row.review_status,
+                models.get(det_model.get(o.detection_id)) if o.detection_id else
+                ("change against the empty background" if o.origin == "change" else ""), row.review_status,
                 "", "", "", "", "", "", "", ""]])
         for c in rs.candidates(row.source_version_id):
             level = {"confirmed": "confirmed_vehicle_from_lights", "unresolved": "unresolved_candidate"}.get(
