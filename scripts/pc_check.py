@@ -82,7 +82,11 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--training", action="store_true", help="also load PyTorch")
     a = ap.parse_args(argv)
-    parts = [("numpy", "NumPy"), ("cv2", "OpenCV"), ("onnxruntime", "ONNX Runtime (runs the models)")]
+    # OpenVINO's model converter would report usage on import; hide that package, as LanePulse itself does.
+    for name in ("openvino_telemetry", "openvino_telemetry.backend", "openvino_telemetry.backend.backend_ga4"):
+        sys.modules.setdefault(name, None)
+    parts = [("numpy", "NumPy"), ("cv2", "OpenCV"), ("onnxruntime", "ONNX Runtime (runs the models)"),
+             ("openvino", "OpenVINO (runs SAM 3.1)"), ("tokenizers", "Tokenizers (SAM 3.1 text prompts)")]
     if a.training:
         parts.append(("torch", "PyTorch (training)"))
     report: dict = {"python": sys.executable, "windows": platform.platform(), "loaded": {}, "failed": None}

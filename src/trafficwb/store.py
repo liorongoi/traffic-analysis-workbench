@@ -31,6 +31,9 @@ MODES = {
     "video": {"object_search", "plate_recognition"},
 }
 EXPORT_FORMATS = {"xlsx", "csv"}
+# Vehicle detector of a still-image mission: YOLOX-s (or the model promoted on the learning page), or SAM 3.1,
+# which finds vehicles by name: slower, and stronger on unusual views. Video always uses the standard detector.
+DETECTORS = {"standard", "sam3"}
 
 CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -753,6 +756,75 @@ CREATE TABLE video_start_revision (
 );
 CREATE INDEX ix_video_start_revision ON video_start_revision(source_version_id, id);
 """,
+    15: """
+-- Empty-road images an operator chose per camera view; latest row per image wins (marked | unmarked).
+CREATE TABLE reference_mark (
+  id INTEGER PRIMARY KEY,
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  action TEXT NOT NULL CHECK (action IN ('marked','unmarked')),
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_reference_mark ON reference_mark(view_id, source_version_id, id);
+-- The empty background of a view for one light condition: per-pixel median of its empty images. Immutable.
+CREATE TABLE reference_background (
+  id INTEGER PRIMARY KEY,
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  condition TEXT NOT NULL,          -- day | dusk | night
+  input_ids TEXT NOT NULL,          -- JSON: source versions it was built from
+  image_count INTEGER NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  median BLOB NOT NULL,             -- PNG, grey, original resolution
+  spread BLOB NOT NULL,             -- PNG, per-pixel spread between the empty images (0 with fewer than 3)
+  params TEXT NOT NULL,
+  built_at TEXT NOT NULL
+);
+CREATE INDEX ix_reference_background ON reference_background(view_id, condition, id);
+-- With no regions drawn, the road SAM 3.1 outlines on an empty background is where changes are looked for. Immutable.
+CREATE TABLE reference_area (
+  id INTEGER PRIMARY KEY,
+  background_id INTEGER NOT NULL REFERENCES reference_background(id),
+  sam_model_id INTEGER REFERENCES model_version(id),
+  prompts TEXT NOT NULL,            -- JSON: the words asked
+  polygons TEXT NOT NULL,           -- JSON: [{kind include|exclude, polygon}]; [] when SAM found none
+  area_share REAL NOT NULL,
+  empty_check TEXT NOT NULL,        -- JSON: each empty image against the others, inside this area
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_reference_area ON reference_area(background_id, id);
+-- One comparison of an image with its view's empty background. Machine output, immutable; the newest counts.
+CREATE TABLE change_analysis (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  reference_id INTEGER REFERENCES reference_background(id),   -- NULL: no empty background applies (any more)
+  region_revision_id INTEGER,
+  algo TEXT NOT NULL,
+  params TEXT NOT NULL,
+  sam_model_id INTEGER REFERENCES model_version(id),           -- SAM 3.1 pack that typed the vehicles; NULL: not used
+  shift REAL,                       -- brightness difference to the background that was taken out
+  area_id INTEGER REFERENCES reference_area(id),   -- road found by SAM 3.1 when the view has no regions drawn
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_change_analysis ON change_analysis(source_version_id, id);
+CREATE TABLE change_vehicle (
+  id INTEGER PRIMARY KEY,
+  analysis_id INTEGER NOT NULL REFERENCES change_analysis(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  x1 REAL NOT NULL, y1 REAL NOT NULL, x2 REAL NOT NULL, y2 REAL NOT NULL,   -- original pixels
+  change_box TEXT NOT NULL,         -- JSON: the changed area before SAM narrowed it
+  cls TEXT NOT NULL,                -- vehicle (type unknown) or the class SAM 3.1 confirmed
+  score REAL NOT NULL,              -- how strongly the area differs from the empty background, 0..1
+  kind TEXT NOT NULL,               -- lights (a new near-white core: headlights, glare) | glow | shape
+  parts INTEGER NOT NULL,           -- changed areas merged into this one (two headlights and a reflection: 3)
+  changed_px INTEGER NOT NULL,
+  sam_cls TEXT, sam_score REAL,
+  in_region INTEGER,
+  flags TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX ix_change_vehicle ON change_vehicle(analysis_id);
+""",
 }
 
 
@@ -830,6 +902,7 @@ class MissionConfig:
     latitude: float | None = None
     longitude: float | None = None
     monitoring_enabled: bool = field(default=False)
+    detector: str = "standard"
 
 
 @dataclass
@@ -877,6 +950,10 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         v.errors.append("Processing must be one_time or continuous.")
     if not cfg.export_formats or not set(cfg.export_formats) <= EXPORT_FORMATS:
         v.errors.append("Export formats must be xlsx, csv, or both.")
+    if cfg.detector not in DETECTORS:
+        v.errors.append(f"Detector must be one of {sorted(DETECTORS)}.")
+    elif cfg.detector == "sam3" and cfg.input_type == "video":
+        v.errors.append("SAM 3.1 detection is for still images; video missions use the standard detector.")
 
     src = Path(cfg.source_dir)
     if not src.is_dir():

@@ -31,7 +31,7 @@ SORT_KEYS = ("capture_utc", "filename", "vehicle_count", "view", "review_status"
 class Obj:
     uid: str
     source_version_id: int
-    origin: str                     # machine | human
+    origin: str                     # machine | human | change (differs from the empty background)
     status: str                     # present | removed
     box: tuple[float, float, float, float]
     cls: str
@@ -135,6 +135,16 @@ class ReviewService:
                 box = (d["x1"], d["y1"], d["x2"], d["y2"])
                 objs[f"d{d['id']}"] = Obj(f"d{d['id']}", version_id, "machine", "present", box, d["cls"], d["in_region"],
                                           d["id"], d["cls"], box, d["score"], run_item_id=item["id"])
+            # Vehicles found as changes against the view's empty background; those a detector box covers are not
+            # counted twice.
+            from .change import NOT_COUNTED, ChangeService, overlaps
+            dboxes = [o.box for o in objs.values()]
+            for c in ChangeService(self.m).vehicles(version_id):
+                box = (c["x1"], c["y1"], c["x2"], c["y2"])
+                if set(json.loads(c["flags"])) & NOT_COUNTED or any(overlaps(box, b) for b in dboxes):
+                    continue
+                objs[f"c{c['id']}"] = Obj(f"c{c['id']}", version_id, "change", "present", box, c["cls"], c["in_region"],
+                                          None, c["cls"], box, c["score"], run_item_id=item["id"])
         revs = self.con.execute(
             "SELECT * FROM annotation_revision r WHERE source_version_id=? AND id=(SELECT MAX(id) FROM annotation_revision x "
             "WHERE x.object_uid=r.object_uid) ORDER BY id", (version_id,)).fetchall()
@@ -143,8 +153,8 @@ class ReviewService:
             box = (r["x1"], r["y1"], r["x2"], r["y2"])
             o = objs.get(r["object_uid"])
             if o is None:
-                if r["detection_id"] is not None:
-                    continue  # correction to a detection from an older run; superseded by reprocessing
+                if r["detection_id"] is not None or r["object_uid"].startswith("c"):
+                    continue  # correction to a machine object from an older run or comparison; superseded
                 objs[r["object_uid"]] = Obj(r["object_uid"], version_id, "human", r["status"], box, r["cls"],
                                             self._membership(version_id, box, run_id), correction="added")
                 continue
@@ -261,6 +271,13 @@ class ReviewService:
             if box is not None:
                 c.box = box
             c.cls = r["cls"]
+        # Lights that a vehicle found as a change already counts are not open candidates any more.
+        changes = [o.box for o in self.objects(version_id, include_removed=False) if o.origin == "change"]
+        if changes:
+            from .change import overlaps
+            for c in out.values():
+                if c.status == "unresolved" and c.origin == "machine" and any(overlaps(c.box, b) for b in changes):
+                    c.status = "not_candidate"
         return [c for c in out.values() if c.status != "not_candidate"]
 
     def _cand_rev(self, version_id: int, c: Candidate, action: str, author: str, box=None, cls=None, note=None) -> None:

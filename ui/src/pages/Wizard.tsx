@@ -3,7 +3,8 @@ import { api, ApiError, post } from "../api";
 import { go } from "../router";
 import TimezoneMap from "../components/TimezoneMap";
 
-type Ref = { countries: Record<string, string>; country_zones: Record<string, string>; modes: Record<string, string[]>; zones: string[] };
+type Ref = { countries: Record<string, string>; country_zones: Record<string, string>; modes: Record<string, string[]>; zones: string[];
+  sam3?: { installed: boolean; reason: string | null; memory_note?: string | null } };
 type Preview = { file: string; ok: boolean; utc?: string; precision?: string; pattern?: string; reason?: string };
 
 const STEPS = ["Mission", "Place and time", "Source", "Output", "Check and create"];
@@ -21,6 +22,7 @@ export default function Wizard() {
     name: "", input_type: "images", mode: "general_traffic", country: "IL", iana_zone: "Asia/Jerusalem",
     latitude: null as number | null, longitude: null as number | null,
     source_dir: "", include_subdirs: true, processing: "one_time", output_dir: "", export_formats: ["xlsx", "csv"],
+    detector: "standard",
   });
   const [zoneFilter, setZoneFilter] = useState("");
   const [utcPreview, setUtcPreview] = useState(() => new Date().toISOString().slice(0, 16));
@@ -100,7 +102,7 @@ export default function Wizard() {
           <>
             <label className="field"><span>Mission name</span><input autoFocus value={cfg.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Route 6 north, October" /></label>
             <label className="field"><span>Input type (cannot change later)</span>
-              <select value={cfg.input_type} onChange={(e) => { set("input_type", e.target.value); set("mode", ref.modes[e.target.value][0]); }}>
+              <select value={cfg.input_type} onChange={(e) => { set("input_type", e.target.value); set("mode", ref.modes[e.target.value][0]); if (e.target.value === "video") set("detector", "standard"); }}>
                 <option value="images">Still images</option><option value="video">Video recordings</option>
               </select>
             </label>
@@ -110,6 +112,7 @@ export default function Wizard() {
               </select>
             </label>
             <p className="muted">{MODE_HELP[cfg.mode]}</p>
+            {cfg.input_type === "images" && <DetectorChoice value={cfg.detector} onChange={(d) => set("detector", d)} sam={ref.sam3} />}
           </>
         )}
         {step === 1 && (
@@ -189,7 +192,8 @@ export default function Wizard() {
             <table className="t"><tbody>
               {Object.entries({ Name: cfg.name, "Input type": cfg.input_type, Mode: cfg.mode.replace(/_/g, " "), Country: cfg.country, "Time zone": cfg.iana_zone,
                 Location: cfg.latitude === null || cfg.longitude === null ? "Not set" : `${cfg.latitude.toFixed(4)}, ${cfg.longitude.toFixed(4)}`,
-                Source: `${cfg.source_dir}${cfg.include_subdirs ? " (with subfolders)" : ""}`, Processing: cfg.processing.replace("_", "-"), Output: cfg.output_dir, Formats: cfg.export_formats.join(", ") })
+                Source: `${cfg.source_dir}${cfg.include_subdirs ? " (with subfolders)" : ""}`, Processing: cfg.processing.replace("_", "-"), Output: cfg.output_dir, Formats: cfg.export_formats.join(", "),
+                "Vehicle detector": cfg.detector === "sam3" ? "SAM 3.1 (finds vehicles by name)" : "Standard (YOLOX-s)" })
                 .map(([k, v]) => <tr key={k}><th style={{ width: 140 }}>{k}</th><td className="bidi">{v}</td></tr>)}
             </tbody></table>
             {!check && !err && <p className="muted" role="status" aria-live="polite">Checking folders and settings…</p>}
@@ -206,5 +210,31 @@ export default function Wizard() {
         </div>
       </div>
     </div>
+  );
+}
+
+export function DetectorChoice({ value, onChange, sam, disabled, legend = true }: {
+  value: string; onChange: (d: string) => void; sam?: { installed: boolean; reason: string | null; memory_note?: string | null };
+  disabled?: boolean; legend?: boolean;
+}) {
+  return (
+    <fieldset style={{ border: 0, padding: 0, margin: "4px 0 14px", minWidth: 0 }} aria-label="Vehicle detector">
+      {legend && <legend style={{ padding: 0, fontSize: 12.5, fontWeight: 550, color: "var(--text-2)", marginBottom: 6 }}>Vehicle detector (can change later)</legend>}
+      <div className="choices">
+        <label className="choice">
+          <input type="radio" name="detector" checked={value === "standard"} disabled={disabled} onChange={() => onChange("standard")} />
+          <b>Standard</b>
+          <small>YOLOX-s, or the model promoted on the learning page. About a second per image, and it can be trained on your own camera images.</small>
+        </label>
+        <label className="choice">
+          <input type="radio" name="detector" checked={value === "sam3"} disabled={disabled || !sam?.installed} onChange={() => onChange("sam3")} />
+          <b>SAM 3.1</b>
+          <small>{sam?.installed
+            ? "Meta's Segment Anything 3.1 asks for each kind of vehicle by name. More thorough on unusual angles and crowded scenes; on a CPU it takes from several seconds to a minute per image."
+            : `Not available on this computer. ${sam?.reason ?? ""}`}</small>
+        </label>
+      </div>
+      {value === "sam3" && sam?.memory_note && <div className="msg warn">{sam.memory_note}</div>}
+    </fieldset>
   );
 }

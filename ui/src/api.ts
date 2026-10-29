@@ -59,7 +59,7 @@ export type Box = [number, number, number, number];
 
 export type Obj = {
   uid: string;
-  origin: "machine" | "human";
+  origin: "machine" | "human" | "change";
   status: "present" | "removed";
   box: Box;
   cls: string;
@@ -98,6 +98,20 @@ export type NightBands = {
 export type Light = { id: number; box: Box; cx: number; cy: number; area: number };
 export type Region = { uid: string; kind: "include" | "exclude"; name: string | null; polygon: [number, number][] };
 
+// SAM 3.1: finds and outlines things named in words (vehicles, roads), on the CPU, offline.
+export type Sam3Status = {
+  installed: boolean; runtime: boolean; loaded: boolean; reason: string | null; memory_note?: string | null;
+  pack: { name: string; version: string; license?: string } | null;
+  suggestions?: Record<"include" | "exclude", string[]>;
+  vehicle_prompts?: Record<string, string[]>;
+};
+export type AreaProposal = { prompt: string; kind: "include" | "exclude"; polygon: [number, number][]; area_share: number; score: number };
+export type AreaTask = {
+  id: string; view_id: number; version_id: number; prompts: string[]; kind: "include" | "exclude";
+  state: "running" | "finished" | "failed"; stage: string; error: string | null; elapsed_s: number;
+  proposals: AreaProposal[]; size: [number, number] | [];
+};
+
 export type Item = {
   id: number;
   file: string;
@@ -114,6 +128,7 @@ export type Item = {
   processing_state: string;
   error: string | null;
   review_status: string;
+  empty_background: boolean;
   objects: Obj[];
   candidates: Candidate[];
   lights: Light[];
@@ -146,4 +161,20 @@ export const REVIEW_LABEL: Record<string, string> = {
   unreviewed: "Unreviewed",
   approved: "Approved",
   bulk_approved_unreviewed: "Bulk approved (not reviewed)",
+};
+
+export type BackgroundCondition = {
+  images: number[];
+  background_id: number | null;
+  built_from: number[];
+  up_to_date: boolean;
+  empty_check: { source_version_id: number; changes: number }[];
+  area: { source: "regions" | "sam" | "whole_frame"; share: number } | null;
+};
+export type Backgrounds = {
+  view_id: number;
+  conditions: Record<"day" | "dusk" | "night", BackgroundCondition>;
+  fallback: Record<string, string[]>;
+  suggestions: { source_version_id: number; condition: string; vehicles: number; night_candidates: number; marked: boolean }[];
+  busy: boolean;
 };

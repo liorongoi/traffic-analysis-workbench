@@ -5,6 +5,9 @@ Layout: <models_root>/<name>/<version>/
     model.json    card: name, version, task, sha256, licenses, source, classes, input size
     LICENSE*      license texts as shipped by the authors
 
+A pack made of several files (SAM 3.1 has five graphs and a tokenizer) names its main file in
+"weights" and lists every other file with its SHA-256 under "files"; all of them are checked.
+
 Packs are prepared on a connected staging machine (scripts/fetch_models.py) and
 copied to the workstation. Nothing is ever downloaded at run time. Loading a
 pack checks the SHA-256 of the weights against the card and refuses on mismatch.
@@ -70,6 +73,13 @@ class ModelPack:
                 raise ModelPackError(
                     f"Weights in {path} do not match the model card (expected {card['sha256'][:12]}…, found {actual[:12]}…). "
                     "The pack may be damaged or altered; copy it again from the staging machine.")
+            for name, want in (card.get("files") or {}).items():
+                f = path / name
+                if not f.is_file():
+                    raise ModelPackError(f"{name} is missing from the model pack in {path}; copy the pack again.")
+                if sha256_file(f) != want:
+                    raise ModelPackError(f"{name} in {path} does not match the model card; the pack may be damaged "
+                                         "or altered. Copy it again.")
         return pack
 
 

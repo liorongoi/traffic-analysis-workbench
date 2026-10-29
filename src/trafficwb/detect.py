@@ -43,6 +43,7 @@ class DetectorSettings:
 
 
 class Detector(Protocol):
+    # Detectors may also take area=<RegionSet>: parts of the frame outside the scan area are then not searched.
     def detect(self, img_bgr: np.ndarray) -> list[Detection]: ...
     def describe(self) -> dict: ...
 
@@ -148,17 +149,31 @@ class YoloxDetector:
                                   COCO_VEHICLES[ids[best[k]]], round(float(conf[k]), 4), cs))
         return dets
 
-    def detect(self, img_bgr: np.ndarray) -> list[Detection]:
+    def detect(self, img_bgr: np.ndarray, area=None) -> list[Detection]:
+        """``area``: optional RegionSet. Tiles holding none of its scan area are skipped: a vehicle found only
+        there could not count, since its box would lie wholly outside the area."""
         h, w = img_bgr.shape[:2]
         dets = self._run(img_bgr, 0, 0)
         cols, rows = self.settings.tiles
         if (cols, rows) != (1, 1):
             tiles = tile_grid(w, h, cols, rows, self.settings.tile_overlap)
             if min(min(t[2] - t[0], t[3] - t[1]) for t in tiles) >= self.settings.min_tile_side:
+                cover = area.mask(w, h) if area is not None and hasattr(area, "mask") else None
                 for x1, y1, x2, y2 in tiles:
+                    if cover is not None and not cover[y1:y2, x1:x2].any():
+                        continue
                     dets += [d for d in self._run(img_bgr[y1:y2, x1:x2], x1, y1)
                              if not _touches_inner_edge(d.box, (x1, y1, x2, y2), (w, h))]
         return _merge_across_classes(_nms_per_class(dets, self.settings.nms_iou), self.settings.cross_class_iou)
+
+
+def accepts_area(detector) -> bool:
+    """Whether a detector can be told the scan area (test doubles and older detectors cannot)."""
+    import inspect
+    try:
+        return "area" in inspect.signature(detector.detect).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _touches_inner_edge(box, tile, frame, margin: float = 2.0) -> bool:

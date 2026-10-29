@@ -79,12 +79,41 @@ class Job:
                 "resource_usage": _resource_usage()}
 
 
+@dataclass
+class AreaTask:
+    """SAM 3.1 looking for named areas (road, parking lot) on one image of a camera view."""
+    id: str
+    mission_id: str
+    view_id: int
+    version_id: int
+    prompts: list[str]
+    kind: str
+    threshold: float
+    started: float = field(default_factory=time.time)
+    finished: float | None = None
+    state: str = "running"            # running | finished | failed
+    stage: str = "starting"
+    error: str | None = None
+    proposals: list = field(default_factory=list)
+    size: list = field(default_factory=list)
+
+    def snapshot(self) -> dict:
+        return {"id": self.id, "view_id": self.view_id, "version_id": self.version_id, "prompts": self.prompts,
+                "kind": self.kind, "state": self.state, "stage": self.stage, "error": self.error,
+                "elapsed_s": round((self.finished or time.time()) - self.started, 1),
+                "proposals": self.proposals, "size": self.size}
+
+
 class JobManager:
     def __init__(self, data_root: Path, detector_factory: Callable[[], tuple[object, dict]],
                  monitor_interval: float = 60, stability_seconds: int = 30,
                  plate_factory: Callable[[], tuple] | None = None,
-                 model_loader: Callable[[str, str], object] | None = None):
+                 model_loader: Callable[[str, str], object] | None = None,
+                 sam_factory: Callable[[], object] | None = None):
         self.data_root = Path(data_root)
+        self.sam_factory = sam_factory          # the SAM 3.1 engine; tests pass a small stand-in
+        self._sam_detector = None
+        self.area_tasks: dict[str, AreaTask] = {}
         self.model_loader = model_loader
         self.detector_factory = detector_factory
         self.plate_factory = plate_factory
@@ -103,6 +132,56 @@ class JobManager:
             if self._detector is None:
                 self._detector = self.detector_factory()
             return self._detector
+
+    def sam_engine(self):
+        if self.sam_factory:
+            return self.sam_factory()
+        from ..sam3 import engine
+        return engine()
+
+    def detector_for(self, m):
+        """The detector a mission chose: SAM 3.1 for still-image missions that asked for it, else the standard one."""
+        if m.input_type == "images" and getattr(m.config(), "detector", "standard") == "sam3":
+            from ..sam3 import Sam3Detector
+            eng = self.sam_engine()
+            with self._lock:
+                if self._sam_detector is None or self._sam_detector[0].engine is not eng:
+                    self._sam_detector = (Sam3Detector(eng), eng.pack.card)
+                return self._sam_detector
+        return self.detector()
+
+    # ---------- scan areas found by SAM 3.1 ----------
+    def find_areas(self, mission_id: str, view_id: int, version_id: int, prompts: list[str], kind: str,
+                   threshold: float) -> "AreaTask":
+        import uuid
+        task = AreaTask(uuid.uuid4().hex[:12], mission_id, view_id, version_id, prompts, kind, threshold)
+        with self._lock:
+            for k in [k for k, t in self.area_tasks.items() if t.finished and time.time() - t.finished > 3600]:
+                del self.area_tasks[k]
+            self.area_tasks[task.id] = task
+        threading.Thread(target=self._areas, args=(task,), name=f"areas-{task.id}", daemon=True).start()
+        return task
+
+    def _areas(self, t: "AreaTask") -> None:
+        from dataclasses import asdict as _asdict
+        from ..sam3 import find_areas
+        from ..views import ViewService
+        try:
+            t.stage = "loading SAM 3.1"
+            eng = self.sam_engine()
+            eng.load()
+            t.stage = "reading the image"
+            img = ViewService(DataRoot(self.data_root).open_mission(t.mission_id)).image(t.version_id)
+            t.stage = "looking for " + ", ".join(f"\u201c{p}\u201d" for p in t.prompts)
+            t.proposals = [_asdict(a) for a in find_areas(eng, img, t.prompts, t.kind, t.threshold)]
+            t.size = [int(img.shape[1]), int(img.shape[0])]
+            t.state = "finished"
+            t.stage = "done"
+        except Exception as exc:
+            t.state = "failed"
+            t.error = str(exc) or type(exc).__name__
+        finally:
+            t.finished = time.time()
 
     def reset_detector(self) -> None:
         """After a promotion or rollback, the next job loads the new production model."""
@@ -155,13 +234,19 @@ class JobManager:
             if job.kind == "train":
                 self._train(job, m)
                 return
+            if job.kind == "compare_backgrounds":
+                self._compare(job, m)
+                return
             if job.kind == "scan_and_process":
                 job.control.stage = "scanning source folder"
                 cycle(m, stability_seconds=self.stability)
             job.total = m.con.execute(
                 "SELECT COUNT(*) FROM run_item WHERE processing_state IN ('queued','running')").fetchone()[0]
             job.control.stage = "loading model"
-            det, card = self.detector()
+            det, card = self.detector_for(m)
+            if det.__class__.__name__ == "Sam3Detector":
+                job.control.stage = "loading SAM 3.1 (about a minute the first time)"
+                det.engine.load()
 
             def progress(n, total):
                 job.done += 1
@@ -174,7 +259,8 @@ class JobManager:
                 from ..video_process import VideoProcessor
                 proc = VideoProcessor(m, det, card, control=job.control, plate_models=self.plate_models)
             else:
-                proc = Processor(m, det, card, control=job.control, plate_models=self.plate_models)
+                proc = Processor(m, det, card, control=job.control, plate_models=self.plate_models,
+                                 sam_engine=self._sam_if_available)
             job.report = [r.__dict__ for r in proc.process_all(progress)]
             if m.input_type == "images" and m.config().mode == "plate_recognition" and not job.control.cancelled:
                 job.control.stage = "reading plates"
@@ -191,6 +277,32 @@ class JobManager:
                 pass
         finally:
             job.finished = time.time()
+
+    def _sam_if_available(self):
+        """SAM 3.1 when it is installed and this computer can hold it; otherwise an error (callers carry on)."""
+        if not self.sam_factory:
+            from ..sam3 import available
+            st = available()
+            if not st.get("installed"):
+                raise RuntimeError(st.get("reason") or "SAM 3.1 is not installed")
+            if st.get("memory_note"):
+                raise RuntimeError(st["memory_note"])
+        return self.sam_engine()
+
+    def _compare(self, job: Job, m) -> None:
+        from ..process import compare_with_backgrounds
+
+        def progress(n, total):
+            job.total = total
+            job.done = n
+            job.rate_done += 1
+            if job.rate_start is None:
+                job.rate_start = time.time()
+                job.rate_done = 0
+
+        job.control.stage = "comparing with the empty backgrounds"
+        job.result = compare_with_backgrounds(m, self._sam_if_available, job.control, progress)
+        job.state = "cancelled" if job.control.cancelled else "finished"
 
     def _search(self, job: Job, m) -> None:
         from ..search import SearchService

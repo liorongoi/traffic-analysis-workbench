@@ -5,7 +5,7 @@ offline workstation. The application itself never downloads anything.
 
     python scripts/fetch_models.py [--dest models]
 
-It also fetches the YOLOX-s training starting weights (yolox_s.pth) into training_weights/; the installers put
+It also fetches SAM 3.1 (sam3.1-w8a16, about 880 MB; --no-sam3 skips it) and the YOLOX-s training starting weights (yolox_s.pth) into training_weights/; the installers put
 them next to their own Python (share/lanepulse), so training on the learning page never goes online.
 """
 from __future__ import annotations
@@ -75,16 +75,104 @@ TRAINING_WEIGHTS = {
 }
 
 
-def fetch(url: str, dest: Path) -> None:
-    with urllib.request.urlopen(url, timeout=120) as r, open(dest, "wb") as f:
-        while chunk := r.read(1 << 20):
-            f.write(chunk)
+# SAM 3.1 (Meta's Segment Anything 3.1): the 8-bit weight-compressed (W8A16) OpenVINO export by
+# rajeshgangireddy, pinned to one commit, with every file's SHA-256. The .bin hashes are the ones Hugging Face
+# lists for those files; the .xml graphs and the tokenizer were hashed when the pin was chosen (29 Oct 2026).
+# The license is Meta's SAM License, which allows redistribution with the license text: it is shipped from
+# packaging/licenses (the Hugging Face repository only links to it).
+SAM3_COMMIT = "9e742f7509733b3cec1b1c902db562abff877b59"
+SAM3_BASE = f"https://huggingface.co/rajeshgangireddy/SAM3_OpenVINO/resolve/{SAM3_COMMIT}/"
+SAM3_FILES = {
+    "vision-encoder.xml": ("openvino-int8_w8a16/vision-encoder.xml", "415f47ec986f350c6fc35cc61d2eb1e45f695a71190ff95c00fb391c9de64d78"),
+    "vision-encoder.bin": ("openvino-int8_w8a16/vision-encoder.bin", "f973e2dcce4a76e7edc181578d35ed3d0a5e3bdefef2b4b8a40739c81a309f19"),
+    "text-encoder.xml": ("openvino-int8_w8a16/text-encoder.xml", "cec21de907c0ee54241690b5c8f56618cd564c788b306f0fbb63b3f02578847c"),
+    "text-encoder.bin": ("openvino-int8_w8a16/text-encoder.bin", "a486e1d22badae9150bee4f03c00bf75296b433cd6a4d087af7bc91b2fc01496"),
+    "prompt-decoder.xml": ("openvino-int8_w8a16/prompt-decoder.xml", "68db349e37c459adfe974d823255fada2178c2fc97524063e055ba367ddc97e6"),
+    "prompt-decoder.bin": ("openvino-int8_w8a16/prompt-decoder.bin", "7c30ef7afc461912b3fae9e37d14b33bc462c24df4b06035f0479771bd3b77cb"),
+    "tokenizer.json": ("tokenizer.json", "6d9109cc838977f3ca94a379eec36aecc7c807e1785cd729660ca2fc0171fb35"),
+}
+SAM3_LICENSE_SHA256 = "4dea99bfaa016e21bc860d73f344236bd1e5c4977d1a9a8fd32f822b500ae1be"   # Meta's text, 19 Nov 2025
+SAM3_CARD = {
+    "name": "sam3.1-w8a16",
+    "version": "ov-9e742f7",
+    "task": "segmentation",
+    "license": "SAM License (Meta, 19 November 2025): use, copy, change and redistribute with this license included; "
+               "not for military, warfare, nuclear, espionage or ITAR-controlled uses",
+    "license_url": "https://github.com/facebookresearch/sam3/blob/main/LICENSE",
+    "source": "https://huggingface.co/rajeshgangireddy/SAM3_OpenVINO (OpenVINO export of facebook/sam3.1, "
+              f"commit {SAM3_COMMIT}); original model https://github.com/facebookresearch/sam3",
+    "data_note": "Trained by Meta on its SA-Co data. Nothing in LanePulse retrains it; it runs as published.",
+    "precision": "INT8 weights, 16-bit activations (W8A16, NNCF weight compression)",
+    "runtime": "openvino",
+    "weights": "vision-encoder.xml",
+    "graphs": {"vision": "vision-encoder.xml", "text": "text-encoder.xml", "decoder": "prompt-decoder.xml"},
+    "tokenizer": "tokenizer.json",
+    "input_size": 1008,
+    "input_format": "RGB, resized to 1008x1008 without keeping aspect ratio, (x/255 - 0.5) / 0.5, NCHW float32",
+    "text_length": 32,
+    "pad_token_id": 49407,
+    "box_format": "xyxy",
+    "mask_size": 288,
+    "queries": 200,
+}
+
+
+def fetch(url: str, dest: Path, tries: int = 4) -> None:
+    import time
+    part = dest.with_name(dest.name + ".partial")
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as r, open(part, "wb") as f:
+                while chunk := r.read(1 << 20):
+                    f.write(chunk)
+            part.replace(dest)
+            return
+        except OSError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(2 ** (attempt + 1))
+
+
+def fetch_sam3(dest: Path) -> int:
+    d = dest / SAM3_CARD["name"] / SAM3_CARD["version"]
+    d.mkdir(parents=True, exist_ok=True)
+    for name, (path, want) in SAM3_FILES.items():
+        f = d / name
+        if f.exists() and sha256_file(f) == want:
+            continue
+        print(f"downloading {SAM3_BASE}{path}")
+        fetch(SAM3_BASE + path, f)
+        got = sha256_file(f)
+        if got != want:
+            f.unlink()
+            print(f"error: checksum mismatch for SAM 3.1 {name}: {got}", file=sys.stderr)
+            return 1
+    lic = Path(__file__).resolve().parents[1] / "packaging" / "licenses" / "SAM-LICENSE.txt"
+    if sha256_file(lic) != SAM3_LICENSE_SHA256:
+        print(f"error: {lic} is not Meta's SAM License text as pinned", file=sys.stderr)
+        return 1
+    (d / "LICENSE").write_bytes(lic.read_bytes())
+    card = dict(SAM3_CARD)
+    card["sha256"] = SAM3_FILES[card["weights"]][1]
+    card["files"] = {n: w for n, (_, w) in SAM3_FILES.items() if n != card["weights"]} | {"LICENSE": SAM3_LICENSE_SHA256}
+    (d / "model.json").write_text(json.dumps(card, indent=2), encoding="utf-8")
+    print(f"ok {d}")
+    return 0
+
+
+def sha256_file(p: Path) -> str:
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dest", default=str(Path(__file__).resolve().parents[1] / "models"))
     ap.add_argument("--training-weights", default=str(Path(__file__).resolve().parents[1] / "training_weights"))
+    ap.add_argument("--no-sam3", action="store_true", help="skip SAM 3.1 (about 880 MB), e.g. for unit tests")
     a = ap.parse_args(argv)
     for p in PACKS:
         d = Path(a.dest) / p["name"] / p["version"]
@@ -102,6 +190,8 @@ def main(argv=None) -> int:
         card["weights"] = "model.onnx"
         (d / "model.json").write_text(json.dumps(card, indent=2), encoding="utf-8")
         print(f"ok {d}")
+    if not a.no_sam3 and fetch_sam3(Path(a.dest)):
+        return 1
     t = Path(a.training_weights)
     t.mkdir(parents=True, exist_ok=True)
     w = t / TRAINING_WEIGHTS["file"]
