@@ -11,6 +11,7 @@ const STYLE = {
   machine: { stroke: "var(--machine)", dash: "" },
   human: { stroke: "var(--human)", dash: "8 4" },
   candidate: { stroke: "var(--candidate)", dash: "2 4" },
+  change: { stroke: "var(--change)", dash: "5 2 1 2" },
   confirmed: { stroke: "var(--human)", dash: "10 3 2 3" },
   plate: { stroke: "var(--plate)", dash: "" },
   plateHuman: { stroke: "var(--plate)", dash: "6 3" },
@@ -18,6 +19,10 @@ const STYLE = {
 const PLATE_REVIEW: Record<string, string> = {
   pending: "not reviewed", confirmed: "confirmed", corrected: "corrected", unreadable: "unreadable (operator)", no_plate: "no plate (operator)",
 };
+
+// One letter per origin on the image and in the list: Model, Human, V = differs from the empty road (Vehicle by change).
+const LETTER: Record<Obj["origin"], string> = { machine: "M", human: "H", change: "V" };
+const ORIGIN_TEXT: Record<Obj["origin"], string> = { machine: "detected", human: "added by operator", change: "found against the empty road" };
 
 const BAND_HINT: Record<string, string> = {
   far: "a vehicle shows as one light with a glow",
@@ -69,6 +74,7 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
   const objAct = (uid: string, body: object) => run(() => api(`${base}/objects/${uid}`, { method: "PATCH", body }));
   const candAct = (uid: string, body: object) => run(() => post(`${base}/candidates/${uid}`, body));
   const approve = () => run(() => post(`${base}/decision/approve`));
+  const markEmpty = (empty: boolean) => run(() => api(`${base}/empty`, { method: "PUT", body: { empty } }));
   const plateAct = (pid: number, body: object) => run(async () => { await post(`/missions/${missionId}/plates/${pid}/revise`, body); await loadPlates(); });
 
   const selObj = item?.objects.find((o) => sel?.kind === "obj" && o.uid === sel.uid);
@@ -182,8 +188,8 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
               </g>;
             })}
             {overlays && item.objects.filter((o) => o.status === "present" || showRemoved).map((o: Obj) => rect(
-              o.box, o.origin === "machine" ? STYLE.machine : STYLE.human,
-              `${o.origin === "machine" ? "M" : "H"} ${o.cls}${o.score != null && o.correction === "none" ? " " + o.score.toFixed(2) : ""}${o.status === "removed" ? " removed" : ""}${o.in_region === 0 ? " (outside region)" : ""}`,
+              o.box, STYLE[o.origin],
+              `${LETTER[o.origin]} ${o.cls}${o.score != null && o.correction === "none" ? " " + o.score.toFixed(2) : ""}${o.status === "removed" ? " removed" : ""}${o.in_region === 0 ? " (outside region)" : ""}`,
               sel?.kind === "obj" && sel.uid === o.uid, () => setSel({ kind: "obj", uid: o.uid }), o.status === "removed" || o.in_region === 0))}
             {overlays && item.candidates.filter((c) => c.status === "unresolved" || c.status === "confirmed").map((c: Candidate) => rect(
               c.box, c.status === "confirmed" ? STYLE.confirmed : STYLE.candidate,
@@ -229,6 +235,15 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
               <span className="badge">{item.processing_state}</span>
             </div>
             {item.error && <div className="msg err">{item.error}</div>}
+            {item.view.id != null && item.processing_state === "done" && (
+              <div className="empty-toggle">
+                <label className="row">
+                  <input type="checkbox" checked={item.empty_background} onChange={(e) => markEmpty(e.target.checked)} />
+                  <span>Empty road: use as this view's {item.condition?.condition ?? ""} background</span>
+                </label>
+                {item.empty_background && <a href={`#/m/${missionId}/regions/${item.view.id}`} className="muted">See the backgrounds →</a>}
+              </div>
+            )}
           </div>
           <div className="card grid cols-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
             <div className="stat"><div className="n">{counted}</div><div className="l">vehicles in this image</div></div>
@@ -236,8 +251,9 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
           </div>
           {selObj && (
             <div className="card selcard">
-              <h3>Selected: {selObj.origin === "machine" ? "detected" : "added by operator"} {selObj.cls}</h3>
-              {selObj.machine_cls && selObj.machine_cls !== selObj.cls && <div className="muted">Detector said {selObj.machine_cls}</div>}
+              <h3>Selected: {ORIGIN_TEXT[selObj.origin]} {selObj.cls}</h3>
+              {selObj.machine_cls && selObj.machine_cls !== selObj.cls && <div className="muted">{selObj.origin === "change" ? "Found as" : "Detector said"} {selObj.machine_cls}</div>}
+              {selObj.origin === "change" && <div className="muted">This part of the road differs from the view's empty background{selObj.machine_cls === "vehicle" ? "; SAM 3.1 did not tell its type, so choose one if you can" : ""}.</div>}
               <div className="row" style={{ marginTop: 6 }}>
                 <select value={selObj.cls} onChange={(e) => objAct(selObj.uid, { action: "reclass", cls: e.target.value })}>{CLASSES.map((c) => <option key={c}>{c}</option>)}</select>
                 <button className="danger" onClick={() => objAct(selObj.uid, { action: selObj.status === "removed" ? "restore" : "remove" })}>
@@ -306,7 +322,7 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
               <label className="row muted"><input type="checkbox" checked={showRemoved} onChange={(e) => setShowRemoved(e.target.checked)} /> show removed</label></div>
             {item.objects.filter((o) => o.status === "present" || showRemoved).map((o) => (
               <div key={o.uid} className={`objrow ${sel?.uid === o.uid ? "sel" : ""}`} onClick={() => setSel({ kind: "obj", uid: o.uid })}>
-                <span className="k">{o.origin === "machine" ? "M" : "H"}</span><span>{o.cls}</span>
+                <span className="k">{LETTER[o.origin]}</span><span>{o.cls}</span>
                 <span className="muted">{o.score != null ? o.score.toFixed(2) : ""} {o.correction !== "none" ? o.correction.replace("_", " ") : ""} {o.in_region === 0 ? "outside region" : ""}</span>
               </div>
             ))}
@@ -319,7 +335,9 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
           </div>
           <div className="card legend">
             <h3>Legend</h3>
-            {([["machine", "M  detected by the model"], ["human", "H  drawn by an operator"], ["candidate", "?  night candidate, not counted"], ["confirmed", "C  candidate confirmed by an operator"]] as const).map(([k, l]) => (
+            {([["machine", "M  detected by the model"], ["human", "H  drawn by an operator"],
+              ...(item.objects.some((o) => o.origin === "change") ? [["change", "V  differs from the empty road (lights count)"]] as const : []),
+              ["candidate", "?  night candidate, not counted"], ["confirmed", "C  candidate confirmed by an operator"]] as const).map(([k, l]) => (
               <div key={k}><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke={STYLE[k].stroke} strokeWidth="2" strokeDasharray={STYLE[k].dash} /></svg> {l}</div>
             ))}
             {Object.keys(plates).length > 0 && <div><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke="var(--plate)" strokeWidth="2" /></svg> plate found by the model (dashed: drawn by an operator)</div>}

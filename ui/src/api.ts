@@ -59,7 +59,7 @@ export type Box = [number, number, number, number];
 
 export type Obj = {
   uid: string;
-  origin: "machine" | "human";
+  origin: "machine" | "human" | "change";
   status: "present" | "removed";
   box: Box;
   cls: string;
@@ -128,6 +128,7 @@ export type Item = {
   processing_state: string;
   error: string | null;
   review_status: string;
+  empty_background: boolean;
   objects: Obj[];
   candidates: Candidate[];
   lights: Light[];
@@ -160,4 +161,19 @@ export const REVIEW_LABEL: Record<string, string> = {
   unreviewed: "Unreviewed",
   approved: "Approved",
   bulk_approved_unreviewed: "Bulk approved (not reviewed)",
+};
+
+export type BackgroundCondition = {
+  images: number[];
+  background_id: number | null;
+  built_from: number[];
+  up_to_date: boolean;
+  empty_check: { source_version_id: number; changes: number }[];
+};
+export type Backgrounds = {
+  view_id: number;
+  conditions: Record<"day" | "dusk" | "night", BackgroundCondition>;
+  fallback: Record<string, string[]>;
+  suggestions: { source_version_id: number; condition: string; vehicles: number; night_candidates: number; marked: boolean }[];
+  busy: boolean;
 };

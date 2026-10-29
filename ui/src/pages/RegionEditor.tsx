@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, AreaProposal, AreaTask, post, Region, Sam3Status } from "../api";
+import { api, ApiError, AreaProposal, AreaTask, Backgrounds, Job, post, Region, Sam3Status } from "../api";
 
 type Kind = "include" | "exclude";
 type Data = { width: number; height: number; representatives: Record<string, number[]>; regions: Region[] };
@@ -21,6 +21,7 @@ export default function RegionEditor({ missionId, viewId }: { missionId: string;
   const [task, setTask] = useState<AreaTask | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [focus, setFocus] = useState<number | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);   // an empty background shown in place of the image
   const svgRef = useRef<SVGSVGElement>(null);
 
   const load = async () => {
@@ -108,13 +109,15 @@ export default function RegionEditor({ missionId, viewId }: { missionId: string;
         <div className="row">
           <span className="muted">Background image:</span>
           {Object.entries(data.representatives).map(([c, ids]) => ids.map((id) => (
-            <button key={id} className={bgId === id ? "primary" : ""} disabled={running} onClick={() => { setBgId(id); setTask(null); }}>{c}</button>
+            <button key={id} className={bgId === id ? "primary" : ""} disabled={running} onClick={() => { setBgId(id); setTask(null); setPreview(null); }}>{c}</button>
           )))}
         </div>
       </div>
       <div className="inv">
         <div className={`stage${running ? " scanning" : ""}`}>
-          {bgId && <img src={`/api/missions/${missionId}/images/${bgId}`} alt="" draggable={false} />}
+          {preview ? <img src={`/api/missions/${missionId}/views/${viewId}/backgrounds/${preview}.jpg`} alt={`Empty ${preview} background`} draggable={false} />
+            : bgId && <img src={`/api/missions/${missionId}/images/${bgId}`} alt="" draggable={false} />}
+          {preview && <div className="stage-note">Empty {preview} background <button onClick={() => setPreview(null)}>Back to the image</button></div>}
           <svg ref={svgRef} viewBox={`0 0 ${data.width} ${data.height}`} preserveAspectRatio="xMidYMid meet" style={{ cursor: drawing ? "crosshair" : "default" }}
             onClick={(e) => drawing && setPts([...pts, toImage(e)])} onMouseMove={(e) => drawing && setHover(toImage(e))} onMouseLeave={() => setHover(null)}>
             <defs>
@@ -187,6 +190,7 @@ export default function RegionEditor({ missionId, viewId }: { missionId: string;
             ))}
             <p className="muted">Edits are kept as history. Night candidates follow new regions at once; detections already made keep the regions they were processed with until reprocessed.</p>
           </div>
+          <EmptyBackgrounds missionId={missionId} viewId={viewId} preview={preview} setPreview={setPreview} />
         </aside>
       </div>
     </div>
@@ -305,4 +309,106 @@ function groups(ps: AreaProposal[]) {
     if (g) g.idx.push(i); else out.push({ key, kind: a.kind, prompt: a.prompt, idx: [i] });
   });
   return out;
+}
+
+const COND_LABEL: Record<string, string> = { day: "Day", dusk: "Dusk", night: "Night" };
+
+// Empty-road images of this view: their median per light condition is the background changes are measured against.
+function EmptyBackgrounds({ missionId, viewId, preview, setPreview }: {
+  missionId: string; viewId: number; preview: string | null; setPreview: (c: string | null) => void;
+}) {
+  const [b, setB] = useState<Backgrounds | null>(null);
+  const [job, setJob] = useState<Job | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const load = () => api<Backgrounds>(`/missions/${missionId}/views/${viewId}/backgrounds`).then(setB).catch((e) => setErr(e.message));
+  useEffect(() => { load(); }, [missionId, viewId]);
+  const comparing = job?.kind === "compare_backgrounds" && (job.state === "running" || job.state === "paused");
+  useEffect(() => {
+    if (!comparing) return;
+    const t = setInterval(async () => {
+      const m = await api(`/missions/${missionId}`);
+      setJob(m.job);
+      if (!m.job || !["running", "paused"].includes(m.job.state)) { load(); }
+    }, 800);
+    return () => clearInterval(t);
+  }, [comparing]);
+  if (!b) return null;
+  const marked = new Set(Object.values(b.conditions).flatMap((c) => c.images));
+  const any = marked.size > 0;
+  const stale = Object.values(b.conditions).some((c) => !c.up_to_date);
+  const toggle = async (id: number, empty: boolean) => {
+    setErr(null);
+    try { await api(`/missions/${missionId}/items/${id}/empty`, { method: "PUT", body: { empty } }); load(); }
+    catch (e) { setErr((e as ApiError).message); }
+  };
+  const compare = async () => {
+    setErr(null);
+    try { setJob(await post<Job>(`/missions/${missionId}/backgrounds/compare`)); }
+    catch (e) { setErr((e as ApiError).message); }
+  };
+  const result = job?.state === "finished" ? (job as any).result : null;
+  return (
+    <div className="card emptybg">
+      <h2>Empty road backgrounds</h2>
+      <p className="muted">Mark a few images of this view where the road is empty, by day and by night. What differs from them on the road counts as a vehicle, headlight glare included. Each image is compared with the background of its own light.</p>
+      <div className="bg-conds">
+        {(["day", "dusk", "night"] as const).map((c) => {
+          const s = b.conditions[c];
+          const n = s.images.length;
+          const falseAlarms = s.empty_check.reduce((a, e) => a + e.changes, 0);
+          return (
+            <div key={c} className={`bg-cond${n ? " has" : ""}`}>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <b>{COND_LABEL[c]}</b>
+                {s.background_id && <button className={preview === c ? "primary" : ""} onClick={() => setPreview(preview === c ? null : c)}>{preview === c ? "Showing" : "Show"}</button>}
+              </div>
+              <div className="muted">
+                {n === 0 ? (b.fallback[c]?.length ? `None yet; uses ${b.fallback[c].join(" or ")} if there is one` : "None yet")
+                  : `${n} empty image${n > 1 ? "s" : ""}${s.up_to_date ? "" : " · builds on the next comparison"}`}
+              </div>
+              {s.empty_check.length > 0 && (
+                <div className={falseAlarms ? "warn-text" : "ok-text"}>
+                  {falseAlarms ? `${falseAlarms} false change${falseAlarms > 1 ? "s" : ""} between the empty images: check that they really are empty` : "Empty images agree with each other"}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <button className="linkish" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {open ? "Hide images" : any ? "Choose more empty images" : "Choose empty images"}
+      </button>
+      {open && (
+        <>
+          <p className="muted" style={{ marginTop: 6 }}>Images of this view with the fewest vehicles found. Tick the ones where the road is completely empty.</p>
+          <div className="ethumbs">
+            {b.suggestions.map((sg) => {
+              const on = marked.has(sg.source_version_id);
+              return (
+                <label key={sg.source_version_id} className={`ethumb${on ? " on" : ""}`}>
+                  <img src={`/api/missions/${missionId}/thumbs/${sg.source_version_id}?w=240`} alt="" loading="lazy" />
+                  <span className="ethumb-meta">
+                    <input type="checkbox" checked={on} onChange={(e) => toggle(sg.source_version_id, e.target.checked)} />
+                    {COND_LABEL[sg.condition] ?? sg.condition}
+                    <span className="muted">{sg.vehicles + sg.night_candidates ? ` · ${sg.vehicles + sg.night_candidates} found` : " · none found"}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <p className="muted">You can also tick “Empty road” on any image while reviewing results.</p>
+        </>
+      )}
+      <div className="row" style={{ marginTop: 10 }}>
+        <button className="primary" disabled={!any || comparing || b.busy} onClick={compare}>
+          {comparing ? `Comparing ${job!.done} of ${job!.total || "…"}` : stale ? "Build and compare all images" : "Compare all images again"}
+        </button>
+      </div>
+      {b.busy && !comparing && <p className="muted">Processing is running; the comparison runs at its end.</p>}
+      {result && <div className="msg ok" role="status">{result.images_compared} image{result.images_compared === 1 ? "" : "s"} compared, {result.vehicles} vehicle{result.vehicles === 1 ? "" : "s"} found that no detector box had.</div>}
+      {job?.state === "failed" && <div className="msg err" role="alert">The comparison stopped: {job.error}</div>}
+      {err && <div className="msg err" role="alert">{err}</div>}
+    </div>
+  );
 }
