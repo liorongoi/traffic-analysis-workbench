@@ -782,6 +782,18 @@ CREATE TABLE reference_background (
   built_at TEXT NOT NULL
 );
 CREATE INDEX ix_reference_background ON reference_background(view_id, condition, id);
+-- With no regions drawn, the road SAM 3.1 outlines on an empty background is where changes are looked for. Immutable.
+CREATE TABLE reference_area (
+  id INTEGER PRIMARY KEY,
+  background_id INTEGER NOT NULL REFERENCES reference_background(id),
+  sam_model_id INTEGER REFERENCES model_version(id),
+  prompts TEXT NOT NULL,            -- JSON: the words asked
+  polygons TEXT NOT NULL,           -- JSON: [{kind include|exclude, polygon}]; [] when SAM found none
+  area_share REAL NOT NULL,
+  empty_check TEXT NOT NULL,        -- JSON: each empty image against the others, inside this area
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_reference_area ON reference_area(background_id, id);
 -- One comparison of an image with its view's empty background. Machine output, immutable; the newest counts.
 CREATE TABLE change_analysis (
   id INTEGER PRIMARY KEY,
@@ -792,6 +804,7 @@ CREATE TABLE change_analysis (
   params TEXT NOT NULL,
   sam_model_id INTEGER REFERENCES model_version(id),           -- SAM 3.1 pack that typed the vehicles; NULL: not used
   shift REAL,                       -- brightness difference to the background that was taken out
+  area_id INTEGER REFERENCES reference_area(id),   -- road found by SAM 3.1 when the view has no regions drawn
   created_at TEXT NOT NULL
 );
 CREATE INDEX ix_change_analysis ON change_analysis(source_version_id, id);
@@ -803,7 +816,7 @@ CREATE TABLE change_vehicle (
   change_box TEXT NOT NULL,         -- JSON: the changed area before SAM narrowed it
   cls TEXT NOT NULL,                -- vehicle (type unknown) or the class SAM 3.1 confirmed
   score REAL NOT NULL,              -- how strongly the area differs from the empty background, 0..1
-  kind TEXT NOT NULL,               -- lights (brighter than the background: headlights, glare) | shape
+  kind TEXT NOT NULL,               -- lights (a new near-white core: headlights, glare) | glow | shape
   parts INTEGER NOT NULL,           -- changed areas merged into this one (two headlights and a reflection: 3)
   changed_px INTEGER NOT NULL,
   sam_cls TEXT, sam_score REAL,

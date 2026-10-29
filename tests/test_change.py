@@ -62,8 +62,19 @@ def test_one_car_with_lights_and_road_glow_is_one_change():
     assert len(ch) == 1, ch
     c = ch[0]
     assert c.kind == "lights" and c.parts >= 2
-    assert c.box[1] < 150 < c.box[3] and c.box[3] > 175     # the road glow is inside the vehicle's change
+    assert c.change_box[1] < 150 < c.change_box[3] and c.change_box[3] > 175   # the road glow is part of the change
+    assert c.box[0] < 161 and c.box[2] > 179 and c.box[3] < 175                # but the vehicle's box is around its lights
     assert abs(shift) < 3
+
+
+def test_a_street_lamp_halo_that_grows_in_fog_is_not_a_vehicle():
+    bg, spread = build_reference([g(night_scene(s)) for s in range(4)])
+    frame = night_scene(15)
+    for x in (60, 260):                                # fog: the lamps' halos are larger and white
+        cv2.circle(frame, (x, 40), 13, 255, -1)
+        cv2.circle(frame, (x, 40), 22, 150, 3)
+    ch = find_changes(g(frame), bg, spread, None)[0]
+    assert all(c.kind != "lights" for c in ch), ch
 
 
 def test_brightness_change_alone_and_lamps_are_not_changes():
@@ -107,6 +118,33 @@ class NoDetections:
         return []
 
 
+ROAD = np.array([[120, 60], [200, 60], [320, 240], [0, 240]], np.int32)
+
+
+class RoadOnlySam:
+    """Stands in for SAM 3.1: outlines the road of the test scene and sees no vehicles."""
+    pack = type("P", (), {"card": {"task": "segmentation", "license": "test"}})()
+
+    def load(self):
+        pass
+
+    def describe(self):
+        return {"model": {"name": "road-only", "version": "1", "sha256": "1" * 64}}
+
+    def encode_image(self, img):
+        return {"size": (img.shape[1], img.shape[0])}
+
+    def find(self, feats, text, threshold=0.5):
+        if text != "road":
+            return []
+        m = np.full((H, W), -1.0, np.float32)
+        cv2.fillPoly(m, [ROAD], 1.0)
+        return [sam3.Instance("road", 0.9, (0, 60, 320, 240), m, feats["size"])]
+
+    def segment(self, img, prompts, threshold=0.5):
+        return {q: [] for q in prompts}
+
+
 def wait(c, url, timeout=60):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -137,6 +175,8 @@ def mission(tmp_path, request):
     cv2.rectangle(dark, (150, 170), (190, 200), 0, -1)                               # a dark shape, no lights
     names.append(write(src, 5, dark))
     kw = {}
+    if getattr(request, "param", None) == "road":
+        kw = {"sam_factory": RoadOnlySam}
     if getattr(request, "param", None) == "sam":
         root = tmp_path / "packs"
         sam3_fake.build(root)
@@ -173,7 +213,7 @@ def test_empty_backgrounds_count_vehicles_from_their_lights(mission):
     assert job["state"] == "finished", job
     assert job["result"]["images_compared"] == 3, job
     st = c.get(f"/api/missions/{mid}/views/{vid}/backgrounds").json()["conditions"]["night"]
-    assert st["images"] == ids[:3] and st["up_to_date"]
+    assert st["images"] == ids[:3] and st["up_to_date"] and st["area"]["source"] == "whole_frame"
     assert [e["changes"] for e in st["empty_check"]] == [0, 0, 0]     # an empty image differs from no other
     bg = c.get(f"/api/missions/{mid}/views/{vid}/backgrounds/night.jpg")
     assert bg.status_code == 200 and bg.headers["content-type"] == "image/jpeg"
@@ -219,5 +259,24 @@ def test_sam_looks_at_each_change(mission):
     assert len(change) == 1
     assert change[0]["cls"] in ("vehicle", "car", "truck", "bus", "motorcycle", "bicycle")
     # the comparison is not repeated while nothing changed
+    c.post(f"/api/missions/{mid}/backgrounds/compare", headers=H1)
+    assert wait(c, f"/api/missions/{mid}")["result"]["images_compared"] == 0
+
+
+@pytest.mark.parametrize("mission", ["road"], indirect=True)
+def test_without_regions_sam_outlines_the_road_on_the_empty_background(mission):
+    c, mid, ids, rows = mission
+    vid = c.get(f"/api/missions/{mid}/views").json()["views"][0]["id"]
+    for v in ids[:3]:
+        c.put(f"/api/missions/{mid}/items/{v}/empty", json={"empty": True}, headers=H1)
+    c.post(f"/api/missions/{mid}/backgrounds/compare", headers=H1)
+    assert wait(c, f"/api/missions/{mid}")["state"] == "finished"
+    night = c.get(f"/api/missions/{mid}/views/{vid}/backgrounds").json()["conditions"]["night"]
+    assert night["area"]["source"] == "sam" and 0.45 < night["area"]["share"] < 0.65, night["area"]
+    assert [e["changes"] for e in night["empty_check"]] == [0, 0, 0]
+    counts = {r["source_version_id"]: r["vehicle_count"]
+              for r in c.post(f"/api/missions/{mid}/results", json={}, headers=H1).json()["rows"]}
+    assert [counts[v] for v in ids] == [0, 0, 0, 1, 1, 0], counts
+    # comparing again finds nothing to do: the road outline is kept with the background
     c.post(f"/api/missions/{mid}/backgrounds/compare", headers=H1)
     assert wait(c, f"/api/missions/{mid}")["result"]["images_compared"] == 0

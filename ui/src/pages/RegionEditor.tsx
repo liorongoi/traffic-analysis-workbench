@@ -348,6 +348,7 @@ function EmptyBackgrounds({ missionId, viewId, preview, setPreview }: {
     catch (e) { setErr((e as ApiError).message); }
   };
   const result = job?.state === "finished" ? (job as any).result : null;
+  const area = (["night", "dusk", "day"] as const).map((c) => b.conditions[c].area).find((x) => x) ?? null;
   return (
     <div className="card emptybg">
       <h2>Empty road backgrounds</h2>
@@ -376,6 +377,13 @@ function EmptyBackgrounds({ missionId, viewId, preview, setPreview }: {
           );
         })}
       </div>
+      {area && (
+        <p className={area.source === "whole_frame" ? "warn-text" : "muted"} style={{ marginTop: 8 }}>
+          {area.source === "regions" ? "Compared inside this view's regions."
+            : area.source === "sam" ? `No regions drawn, so only the road SAM 3.1 found on the empty background is compared (${Math.round(area.share * 100)}% of the image).`
+            : "No regions drawn: the whole image is compared, so lamps and sky can show as vehicles. Draw the road above, or install SAM 3.1 to find it."}
+        </p>
+      )}
       <button className="linkish" onClick={() => setOpen(!open)} aria-expanded={open}>
         {open ? "Hide images" : any ? "Choose more empty images" : "Choose empty images"}
       </button>

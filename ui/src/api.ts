@@ -169,6 +169,7 @@ export type BackgroundCondition = {
   built_from: number[];
   up_to_date: boolean;
   empty_check: { source_version_id: number; changes: number }[];
+  area: { source: "regions" | "sam" | "whole_frame"; share: number } | null;
 };
 export type Backgrounds = {
   view_id: number;

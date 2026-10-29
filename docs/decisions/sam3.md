@@ -65,6 +65,12 @@ light a vehicle throws on the road joins the lights that cast it. At night and d
 count (glare counts as a vehicle), unless SAM 3.1 recognises a vehicle in a close-up of the change; SAM also gives the
 type and a tighter box. Changes already covered by a detected or drawn vehicle are not counted twice.
 
+Changes are looked for only on the road: inside the view's include regions, or, when none are drawn, inside the
+road SAM 3.1 outlines on the empty background itself (kept with the background). Street lamps and lit signs are
+bright in the empty background too; their halos grow and shrink with fog, so a near-white area there is not a new
+light (the zone around each lamp grows with its size). A vehicle's box is drawn around its lights; the lit road
+ahead stays part of the change but not of the box.
+
 These vehicles show as "V" boxes, are corrected like any detection, and are exported with the evidence level
 `vehicle_from_change`. Each empty image is also compared with the others ("empty check"), so a background that would
 produce false vehicles shows it before it is used.
