@@ -3,9 +3,13 @@ LanePulse for Mac (Apple silicon: M1 to M5)
 
 Install
 1. Drag LanePulse onto the Applications folder in this window.
-2. Open Applications and double-click LanePulse. It opens in your browser at http://127.0.0.1:8765.
-   No administrator rights are needed. Python and PyTorch are included inside the app, nothing is downloaded, and no
-   other Python on the Mac is used or changed.
+2. Open Applications and double-click LanePulse.
+3. The first time, a Terminal window opens and LanePulse sets itself up from the internet: its own Python, PyTorch,
+   the other packages and the models (about 2 GB; a few minutes on a fast connection). Keep the window open. When it
+   is done, LanePulse opens in your browser at http://127.0.0.1:8765. From then on it runs without the internet.
+   No administrator rights are needed, and no other Python on the Mac is used or changed. Every file it downloads
+   is checked against the exact file this version was tested with. If the setup stops (for example the internet
+   drops), open LanePulse again: it continues from where it stopped.
 
 The first time, macOS may say it cannot check LanePulse for malicious software, because the app is not signed with
 an Apple developer account. To allow it, once:
@@ -17,7 +21,8 @@ Where things are
     data      missions, results and evidence
     backups   the nightly backup (02:00)
     models    the detector models, including trained ones you import
-    logs      server.log
+    logs      server.log, setup.log
+    runtime   the Python and packages LanePulse runs on (set up by the app)
 - Your source images and videos are only read, never moved.
 
 Use
@@ -31,9 +36,10 @@ Use
   window. Then evaluate it on the learning page and promote it if it is better.
 
 Update
-- Drag the new LanePulse onto Applications and replace the old one, then open it. Your data and models are kept; an
-  older version that is still running is stopped and the new one starts. The .dmg can be deleted afterwards.
+- Drag the new LanePulse onto Applications and replace the old one, then open it. It needs the internet once more
+  to update its runtime (usually only LanePulse itself is downloaded again; the models are kept). Your data and models are kept; an older version
+  that is still running is stopped and the new one starts. The .dmg can be deleted afterwards.
 
 Remove
 - Stop LanePulse, then drag it from Applications to the Bin. The LanePulse folder with your data stays until you
-  delete it yourself.
+  delete it yourself (its runtime folder, about 3 GB, can be deleted at once).
