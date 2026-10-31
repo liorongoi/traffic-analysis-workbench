@@ -131,6 +131,9 @@ class Processor:
         rep = RunReport(run_id)
         desc = self.detector.describe()
         model_id = register_model(self.con, desc, self.card)
+        # Two detectors: each detection is stored with the model that found it (both: the combined model).
+        part_ids = {k: register_model(self.con, d, c) for k, (d, c) in self.detector.parts().items()} \
+            if hasattr(self.detector, "parts") else {}
         run = self.con.execute("SELECT * FROM run WHERE id=?", (run_id,)).fetchone()
         models = json.loads(run["model_versions"] or "{}")
         models["vehicle_detection"] = desc["model"]
@@ -203,7 +206,8 @@ class Processor:
                     "INSERT INTO detection(run_item_id,source_version_id,view_id,x1,y1,x2,y2,cls,score,class_scores,"
                     "in_region,region_rule,model_version_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (it["id"], it["source_version_id"], view_id, *(float(v) for v in d.box), d.cls, float(d.score), json.dumps(d.class_scores),
-                     inside, self.rule if inside is not None else None, model_id, now))
+                     inside, self.rule if inside is not None else None,
+                     part_ids.get(getattr(d, "found_by", None), model_id), now))
             self.night.record_item(it["id"], it["source_version_id"], img, measure_condition(img))
             self.con.execute("UPDATE run_item SET processing_state='done', stage=NULL, error_code=NULL, error_detail=NULL "
                              "WHERE id=?", (it["id"],))

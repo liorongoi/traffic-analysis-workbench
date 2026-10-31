@@ -3,7 +3,7 @@
 trafficwb-mission create --data DIR --name N --source DIR --output DIR --country IL --zone Asia/Jerusalem [...]
 trafficwb-mission scan   --data DIR --mission ID [--stability 30]
 trafficwb-mission status --data DIR [--mission ID]
-trafficwb-mission detect --data DIR --mission ID [--model yolox-s | --model sam3] [--tiles 3x2]
+trafficwb-mission detect --data DIR --mission ID [--model yolox-s | --model sam3 | --model both] [--tiles 3x2]
 trafficwb-mission results --data DIR --mission ID [--limit 50]
 trafficwb-mission export --data DIR --mission ID [--formats csv,xlsx]
 """
@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("detect")
     d.add_argument("--data", required=True)
     d.add_argument("--mission", required=True)
-    d.add_argument("--model", help="yolox-s (default), another vehicle detector pack, or sam3 (SAM 3.1); default: the "
+    d.add_argument("--model", help="yolox-s (default), another vehicle detector pack, or sam3 (SAM 3.1), or both (merged); default: the "
                    "mission's own choice")
     d.add_argument("--model-version")
     d.add_argument("--tiles", default="3x2", help="columns x rows, 1x1 to disable tiling")
@@ -97,11 +97,21 @@ def main(argv: list[str] | None = None) -> int:
         from .process import Processor
         cols, rows = (int(x) for x in a.tiles.lower().split("x"))
         m = root.open_mission(a.mission)
-        model = a.model or ("sam3" if m.input_type == "images" and m.config().detector == "sam3" else "yolox-s")
+        chosen = m.config().detector if m.input_type == "images" else "standard"
+        model = a.model or (chosen if chosen in ("sam3", "both") else "yolox-s")
+        card = None
         if model in ("sam3", "sam3.1"):
             from .sam3 import Sam3Detector, engine
             eng = engine()
             det, pack = Sam3Detector(eng), eng.pack
+        elif model == "both":
+            from .combined import CombinedDetector
+            from .sam3 import Sam3Detector, engine
+            eng = engine()
+            pack = models.find("yolox-s", a.model_version)
+            det = CombinedDetector(YoloxDetector(pack, DetectorSettings(tiles=(cols, rows))), pack.card,
+                                   Sam3Detector(eng), eng.pack.card)
+            card = det.card()
         else:
             pack = models.find(model, a.model_version)
             det = YoloxDetector(pack, DetectorSettings(tiles=(cols, rows)))
@@ -109,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
             from .video_process import VideoProcessor
             proc = VideoProcessor(m, det, pack.card)
         else:
-            proc = Processor(m, det, pack.card, region_rule=a.rule)
+            proc = Processor(m, det, card or pack.card, region_rule=a.rule)
         reps = proc.process_all(
             progress=lambda n, t: print(f"\r{n}/{t}", end="", file=sys.stderr, flush=True))
         print(file=sys.stderr)

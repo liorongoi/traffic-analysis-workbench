@@ -46,7 +46,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
             <span>{cap(m.config.mode.replace(/_/g, " "))}</span>
             <span>{m.config.iana_zone}</span>
             <span>{m.config.processing === "continuous" ? `Continuous, monitoring ${m.config.monitoring_enabled ? "on" : "off"}` : "One-time"}</span>
-            {!isVideo && <span>{m.config.detector === "sam3" ? "SAM 3.1 detector" : "Standard detector"}</span>}
+            {!isVideo && <span>{m.config.detector === "sam3" ? "SAM 3.1 detector" : m.config.detector === "both" ? "Standard + SAM 3.1 detectors" : "Standard detector"}</span>}
           </div>
         </div>
       </div>

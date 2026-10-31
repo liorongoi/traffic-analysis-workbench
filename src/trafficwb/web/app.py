@@ -416,7 +416,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
 
     @app.post("/api/missions")
     def mission_create(body: MissionBody, u: User = Depends(user)):
-        if body.detector == "sam3" and not sam_info()["installed"]:
+        if body.detector in ("sam3", "both") and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""),
                            "Choose the standard detector, or install the full LanePulse package.")
         try:
@@ -473,9 +473,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         cfg = m.config()
         if body.detector not in DETECTORS:
             raise ApiError(400, "invalid", f"Detector must be one of {sorted(DETECTORS)}.")
-        if body.detector == "sam3" and cfg.input_type != "images":
+        if body.detector in ("sam3", "both") and cfg.input_type != "images":
             raise ApiError(400, "invalid", "SAM 3.1 detection is for still images; video missions use the standard detector.")
-        if body.detector == "sam3" and not sam_info()["installed"]:
+        if body.detector in ("sam3", "both") and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""))
         if jobs.busy(m.id):
             raise ApiError(409, "busy", "Processing is running. Change the detector when it has finished or is cancelled.")

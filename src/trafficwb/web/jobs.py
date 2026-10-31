@@ -141,13 +141,20 @@ class JobManager:
 
     def detector_for(self, m):
         """The detector a mission chose: SAM 3.1 for still-image missions that asked for it, else the standard one."""
-        if m.input_type == "images" and getattr(m.config(), "detector", "standard") == "sam3":
+        choice = getattr(m.config(), "detector", "standard") if m.input_type == "images" else "standard"
+        if choice in ("sam3", "both"):
             from ..sam3 import Sam3Detector
             eng = self.sam_engine()
             with self._lock:
                 if self._sam_detector is None or self._sam_detector[0].engine is not eng:
                     self._sam_detector = (Sam3Detector(eng), eng.pack.card)
-                return self._sam_detector
+                sam = self._sam_detector
+            if choice == "sam3":
+                return sam
+            from ..combined import CombinedDetector
+            std, std_card = self.detector()
+            both = CombinedDetector(std, std_card, sam[0], sam[1])
+            return both, both.card()
         return self.detector()
 
     # ---------- scan areas found by SAM 3.1 ----------

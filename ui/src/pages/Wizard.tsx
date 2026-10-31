@@ -193,7 +193,7 @@ export default function Wizard() {
               {Object.entries({ Name: cfg.name, "Input type": cfg.input_type, Mode: cfg.mode.replace(/_/g, " "), Country: cfg.country, "Time zone": cfg.iana_zone,
                 Location: cfg.latitude === null || cfg.longitude === null ? "Not set" : `${cfg.latitude.toFixed(4)}, ${cfg.longitude.toFixed(4)}`,
                 Source: `${cfg.source_dir}${cfg.include_subdirs ? " (with subfolders)" : ""}`, Processing: cfg.processing.replace("_", "-"), Output: cfg.output_dir, Formats: cfg.export_formats.join(", "),
-                "Vehicle detector": cfg.detector === "sam3" ? "SAM 3.1 (finds vehicles by name)" : "Standard (YOLOX-s)" })
+                "Vehicle detector": cfg.detector === "sam3" ? "SAM 3.1 (finds vehicles by name)" : cfg.detector === "both" ? "Both: standard and SAM 3.1, merged" : "Standard (YOLOX-s)" })
                 .map(([k, v]) => <tr key={k}><th style={{ width: 140 }}>{k}</th><td className="bidi">{v}</td></tr>)}
             </tbody></table>
             {!check && !err && <p className="muted" role="status" aria-live="polite">Checking folders and settings…</p>}
@@ -233,8 +233,15 @@ export function DetectorChoice({ value, onChange, sam, disabled, legend = true }
             ? "Meta's Segment Anything 3.1 asks for each kind of vehicle by name. More thorough on unusual angles and crowded scenes; on a CPU it takes from several seconds to a minute per image."
             : `Not available on this computer. ${sam?.reason ?? ""}`}</small>
         </label>
+        <label className="choice">
+          <input type="radio" name="detector" checked={value === "both"} disabled={disabled || !sam?.installed} onChange={() => onChange("both")} />
+          <b>Both</b>
+          <small>{sam?.installed
+            ? "The standard detector and SAM 3.1 on every image. A vehicle both find counts once; each vehicle says which of them found it. The most complete, and as slow as SAM 3.1."
+            : "Needs SAM 3.1, which is not available on this computer."}</small>
+        </label>
       </div>
-      {value === "sam3" && sam?.memory_note && <div className="msg warn">{sam.memory_note}</div>}
+      {(value === "sam3" || value === "both") && sam?.memory_note && <div className="msg warn">{sam.memory_note}</div>}
     </fieldset>
   );
 }

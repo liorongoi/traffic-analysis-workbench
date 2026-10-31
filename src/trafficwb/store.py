@@ -32,8 +32,8 @@ MODES = {
 }
 EXPORT_FORMATS = {"xlsx", "csv"}
 # Vehicle detector of a still-image mission: YOLOX-s (or the model promoted on the learning page), or SAM 3.1,
-# which finds vehicles by name: slower, and stronger on unusual views. Video always uses the standard detector.
-DETECTORS = {"standard", "sam3"}
+# which finds vehicles by name: slower, and stronger on unusual views; or both, merged. Video always uses the standard detector.
+DETECTORS = {"standard", "sam3", "both"}
 
 CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -952,7 +952,7 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         v.errors.append("Export formats must be xlsx, csv, or both.")
     if cfg.detector not in DETECTORS:
         v.errors.append(f"Detector must be one of {sorted(DETECTORS)}.")
-    elif cfg.detector == "sam3" and cfg.input_type == "video":
+    elif cfg.detector in ("sam3", "both") and cfg.input_type == "video":
         v.errors.append("SAM 3.1 detection is for still images; video missions use the standard detector.")
 
     src = Path(cfg.source_dir)
