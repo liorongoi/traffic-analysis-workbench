@@ -44,7 +44,11 @@ $model = New-TrainedModel $dir
 
 Write-Host "===== This build over it, while it runs"
 $code = Invoke-Setup $New "update"
-if ($code -ne 0) { Get-Content "$env:RUNNER_TEMP\setup-update.log" | Select-Object -Last 30; throw "the update failed (exit code $code)" }
+if ($code -ne 0) {
+  Write-Host "----- install.log"
+  Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 250 | Out-Host
+  throw "the update failed (exit code $code)"
+}
 $venv = (Get-Content "$dir\current.txt" -Raw).Trim()
 if ($venv -eq $oldVenv) { throw "the update did not switch to the new version" }
 if ((Get-Content "$dir\previous.txt" -Raw).Trim() -ne $oldVenv) { throw "the older version is not kept for rollback" }
