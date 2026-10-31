@@ -393,6 +393,10 @@ jobs:
           HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 "$PY" scripts/offline_smoke.py --work "$RUNNER_TEMP/check" --models "$LANEPULSE_HOME/models"
           "$APP/Contents/MacOS/LanePulse"
           curl -fsS http://127.0.0.1:8765/api/health
+          # SAM 3.1 is offered by the running app, and can be chosen on the new-mission screen.
+          curl -fsS http://127.0.0.1:8765/api/sam3 | "$pythonLocation/bin/python3" -c 'import json,sys; s = json.load(sys.stdin); print({k: s[k] for k in ("installed", "reason", "memory_gb")}); assert s["installed"], s'
+          "$pythonLocation/bin/python3" -m pip install --quiet playwright && "$pythonLocation/bin/python3" -m playwright install chromium >/dev/null
+          "$pythonLocation/bin/python3" .github/scripts/mac_sam_screen.py http://127.0.0.1:8765 "$RUNNER_TEMP/mac-new-mission.png"
           test -x "$LANEPULSE_HOME/Stop LanePulse.command" && test -x "$LANEPULSE_HOME/Import Model.command"
           grep -q 'runtime/python/bin/python3' "$LANEPULSE_HOME/Import Model.command"
           "$LANEPULSE_HOME/Stop LanePulse.command"
@@ -402,7 +406,28 @@ jobs:
           HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 "$APP/Contents/MacOS/LanePulse"
           curl -fsS http://127.0.0.1:8765/api/health
           "$LANEPULSE_HOME/Stop LanePulse.command"
+          # A server of an older build still running that this app did not record (as the first builds, which had no
+          # version in /api/health): opening the app replaces it, so the screens are this build's.
+          "$PY" -c '# trafficwb older server stand-in
+          import http.server, json
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_GET(self):
+                  b = json.dumps({"status": "ok"}).encode(); self.send_response(200); self.end_headers(); self.wfile.write(b)
+          http.server.HTTPServer(("127.0.0.1", 8765), H).serve_forever()' &
+          for i in $(seq 20); do curl -fsS -m 2 http://127.0.0.1:8765/api/health >/dev/null 2>&1 && break; sleep 1; done
+          rm -f "$LANEPULSE_HOME/.server.pid"
+          "$APP/Contents/MacOS/LanePulse"
+          v="$(curl -fsS http://127.0.0.1:8765/api/health | "$pythonLocation/bin/python3" -c 'import json,sys; print(json.load(sys.stdin).get("version", ""))')"
+          test "$v" = "${{ steps.mac.outputs.version }}" || { echo "the older server is still the one answering ($v)"; exit 1; }
+          "$LANEPULSE_HOME/Stop LanePulse.command"
           tail -20 "$LANEPULSE_HOME/logs/server.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-new-mission-screen
+          path: ${{ runner.temp }}/mac-new-mission.png
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
           name: LanePulse-Mac-${{ steps.mac.outputs.version }}
