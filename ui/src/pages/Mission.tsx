@@ -188,6 +188,69 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
       {changed && <div className="row"><button className="primary" disabled={busy || saving} onClick={saveIt}>{saving ? "Saving…" : "Use this detector"}</button>
         <button onClick={() => setValue(m.config.detector ?? "standard")}>Cancel</button></div>}
       {err && <div className="msg err" role="alert">{err}</div>}
+      {!changed && ["sam3", "both"].includes(m.config.detector) && sam?.vehicle_prompts && (
+        <SamWords m={m} defaults={sam.vehicle_prompts} busy={busy} reload={reload} />
+      )}
+    </div>
+  );
+}
+
+const CLASS_LABEL: Record<string, string> = { car: "Car", truck: "Truck", bus: "Bus", motorcycle: "Motorcycle", bicycle: "Bicycle" };
+
+/** The words SAM 3.1 is asked for, per vehicle class: each word found counts as that class. */
+function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<string, string[]>; busy: boolean; reload: () => void }) {
+  const saved: Record<string, string[]> = m.config.sam3_words ?? defaults;
+  const [words, setWords] = useState<Record<string, string[]>>(saved);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setWords(m.config.sam3_words ?? defaults); }, [m.config.sam3_words]);
+  const classes = Object.keys(defaults);
+  const changed = JSON.stringify(classes.map((c) => words[c] ?? [])) !== JSON.stringify(classes.map((c) => saved[c] ?? []));
+  const isDefault = JSON.stringify(classes.map((c) => words[c] ?? [])) === JSON.stringify(classes.map((c) => defaults[c]));
+  const add = (c: string) => {
+    const w = (draft[c] ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+    if (!w) return;
+    if (!(words[c] ?? []).includes(w)) setWords({ ...words, [c]: [...(words[c] ?? []), w] });
+    setDraft({ ...draft, [c]: "" });
+  };
+  const remove = (c: string, w: string) => setWords({ ...words, [c]: (words[c] ?? []).filter((x) => x !== w) });
+  const save = async (body: Record<string, string[]> | null) => {
+    setErr(null);
+    setSaving(true);
+    try { await api(`/missions/${m.id}/sam3-words`, { method: "PUT", body: { words: body } }); reload(); }
+    catch (e) { setErr((e as ApiError).message); }
+    finally { setSaving(false); }
+  };
+  return (
+    <div className="samwords">
+      <h3>Words SAM 3.1 looks for</h3>
+      <p className="muted">Each word is asked on every image; what it finds counts as that class. Add words such as “police car” or “tractor”, or remove a class's words to stop looking for it. Each word adds about half a second per image.</p>
+      {classes.map((c) => (
+        <div key={c} className="samwords-row">
+          <b>{CLASS_LABEL[c] ?? c}</b>
+          <div className="chips">
+            {(words[c] ?? []).map((w) => (
+              <span key={w} className="wordchip">{w}
+                <button aria-label={`Remove ${w}`} disabled={busy} onClick={() => remove(c, w)}>×</button>
+              </span>
+            ))}
+            {(words[c] ?? []).length === 0 && <span className="muted">not looked for</span>}
+          </div>
+          <form className="row" onSubmit={(e) => { e.preventDefault(); add(c); }}>
+            <input aria-label={`Add a word for ${c}`} placeholder="add a word" value={draft[c] ?? ""} maxLength={40} disabled={busy}
+              onChange={(e) => setDraft({ ...draft, [c]: e.target.value })} />
+            <button type="submit" disabled={busy || !(draft[c] ?? "").trim()}>Add</button>
+          </form>
+        </div>
+      ))}
+      <div className="row" style={{ marginTop: 8 }}>
+        {changed && <button className="primary" disabled={busy || saving} onClick={() => save(words)}>{saving ? "Saving…" : "Use these words"}</button>}
+        {changed && <button onClick={() => setWords(saved)}>Cancel</button>}
+        {!isDefault && !changed && <button className="linkish" disabled={busy || saving} onClick={() => save(null)}>Back to the default words</button>}
+      </div>
+      {changed && <p className="muted">Images already processed keep their detections; the words apply to the next run.</p>}
+      {err && <div className="msg err" role="alert">{err}</div>}
     </div>
   );
 }

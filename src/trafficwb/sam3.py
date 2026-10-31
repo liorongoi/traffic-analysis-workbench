@@ -52,6 +52,45 @@ VEHICLE_PROMPTS: dict[str, tuple[str, ...]] = {
     "bicycle": ("bicycle",),
 }
 assert set(VEHICLE_PROMPTS) == set(COCO_VEHICLES.values())
+MAX_WORDS = 12                 # per class; each word is one more pass of the prompt decoder (about half a second)
+
+
+def vehicle_prompts(words: dict | None) -> dict[str, tuple[str, ...]]:
+    """The words a mission asks SAM 3.1 for, per vehicle class (None: the defaults above). A class left out keeps
+    its default words; an empty list means that class is not looked for. Raises ValueError on bad input."""
+    if words is None:
+        return dict(VEHICLE_PROMPTS)
+    if not isinstance(words, dict):
+        raise ValueError("Words must be given per vehicle class.")
+    unknown = set(words) - set(VEHICLE_PROMPTS)
+    if unknown:
+        raise ValueError(f"Unknown vehicle class {', '.join(sorted(unknown))}; use {', '.join(VEHICLE_PROMPTS)}.")
+    out = {}
+    for cls, default in VEHICLE_PROMPTS.items():
+        ws = words.get(cls, list(default))
+        if not isinstance(ws, (list, tuple)):
+            raise ValueError(f"Words for {cls} must be a list.")
+        clean = []
+        for w in ws:
+            w = " ".join(str(w).split()).lower()
+            if not w:
+                continue
+            if len(w) > 40:
+                raise ValueError(f"'{w[:40]}…' is too long; keep each word or phrase under 40 characters.")
+            if w not in clean:
+                clean.append(w)
+        if len(clean) > MAX_WORDS:
+            raise ValueError(f"At most {MAX_WORDS} words per class ({cls} has {len(clean)}).")
+        out[cls] = tuple(clean)
+    seen: dict[str, str] = {}
+    for cls, ws in out.items():
+        for w in ws:
+            if w in seen:
+                raise ValueError(f"'{w}' is listed under both {seen[w]} and {cls}.")
+            seen[w] = cls
+    if not seen:
+        raise ValueError("Give at least one word to look for.")
+    return out
 
 # Suggestions on the region editor; any other words can be typed.
 AREA_SUGGESTIONS = {"include": ["road", "highway lane", "intersection", "bridge"],
@@ -354,14 +393,16 @@ class Sam3DetectorSettings:
 class Sam3Detector:
     """Vehicle detection by asking SAM 3.1 for each vehicle class by name. Slower than YOLOX, and needs no training."""
 
-    def __init__(self, eng: Sam3Engine, settings: Sam3DetectorSettings | None = None):
+    def __init__(self, eng: Sam3Engine, settings: Sam3DetectorSettings | None = None,
+                 prompts: dict[str, tuple[str, ...]] | None = None):
         self.engine = eng
         self.pack = eng.pack
         self.settings = settings or Sam3DetectorSettings()
+        self.prompts = prompts or dict(VEHICLE_PROMPTS)
 
     def describe(self) -> dict:
         d = self.engine.describe()
-        d["preprocessing"] = {**d["preprocessing"], "prompts": {k: list(v) for k, v in VEHICLE_PROMPTS.items()},
+        d["preprocessing"] = {**d["preprocessing"], "prompts": {k: list(v) for k, v in self.prompts.items()},
                               "settings": self.settings.record()}
         d["providers"] = ["OpenVINO CPU"]
         return d
@@ -369,7 +410,7 @@ class Sam3Detector:
     def _pass(self, img: np.ndarray, ox: int, oy: int) -> list[Detection]:
         feats = self.engine.encode_image(img)
         raw: list[tuple[str, float, tuple]] = []
-        for cls, words in VEHICLE_PROMPTS.items():
+        for cls, words in self.prompts.items():
             for word in words:
                 for inst in self.engine.find(feats, word, self.settings.score_threshold):
                     x1, y1, x2, y2 = inst.box

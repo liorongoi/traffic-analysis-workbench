@@ -52,6 +52,22 @@ a form, so a public, ungated export is used.
 - **Boxes** come out as normalised x1, y1, x2, y2 (checked against the masks), scaled to the image's own width and height
   because the image is resized to 1008 x 1008 without keeping its aspect ratio.
 
+## Both detectors, and the words SAM 3.1 looks for
+
+A still-image mission can also run **both** detectors on every image. A vehicle both find (boxes overlapping by IoU 0.5,
+or one 80% inside the other) counts once, with the more confident box and class; one found by only one of them is
+kept. Each detection is stored with the model that found it; one found by both with a combined model named after
+both, so the export's model column shows where each vehicle came from. It takes about as long as SAM 3.1 alone.
+
+The words SAM 3.1 is asked for are set per mission on the Overview (the defaults: car, van, truck, bus, motorcycle,
+bicycle). Each word belongs to one of the five vehicle classes; a class with no words is not looked for. New classes
+of their own (a pedestrian, say) would also need review, export and training changes, so they are not offered yet.
+The same words type the vehicles found against empty-road backgrounds.
+
+SAM 3.1 itself cannot be trained in LanePulse: the shipped export is for inference only, and training needs Meta's
+full-precision weights and a large NVIDIA GPU. Images reviewed in a SAM 3.1 or "Both" mission do train the standard
+detector on the learning page, like any other reviewed image.
+
 ## Vehicles found against empty-road backgrounds
 
 At night the detector misses many vehicles that show only as headlight glare. So the operator can mark a few images of a

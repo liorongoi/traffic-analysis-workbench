@@ -903,6 +903,7 @@ class MissionConfig:
     longitude: float | None = None
     monitoring_enabled: bool = field(default=False)
     detector: str = "standard"
+    sam3_words: dict | None = None   # words SAM 3.1 looks for, per vehicle class; None: the defaults
 
 
 @dataclass
@@ -954,6 +955,12 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         v.errors.append(f"Detector must be one of {sorted(DETECTORS)}.")
     elif cfg.detector in ("sam3", "both") and cfg.input_type == "video":
         v.errors.append("SAM 3.1 detection is for still images; video missions use the standard detector.")
+    if cfg.sam3_words is not None:
+        from .sam3 import vehicle_prompts
+        try:
+            vehicle_prompts(cfg.sam3_words)
+        except ValueError as exc:
+            v.errors.append(f"Words for SAM 3.1: {exc}")
 
     src = Path(cfg.source_dir)
     if not src.is_dir():

@@ -143,11 +143,13 @@ class JobManager:
         """The detector a mission chose: SAM 3.1 for still-image missions that asked for it, else the standard one."""
         choice = getattr(m.config(), "detector", "standard") if m.input_type == "images" else "standard"
         if choice in ("sam3", "both"):
-            from ..sam3 import Sam3Detector
+            from ..sam3 import Sam3Detector, vehicle_prompts
             eng = self.sam_engine()
+            prompts = vehicle_prompts(getattr(m.config(), "sam3_words", None))
             with self._lock:
-                if self._sam_detector is None or self._sam_detector[0].engine is not eng:
-                    self._sam_detector = (Sam3Detector(eng), eng.pack.card)
+                cur = self._sam_detector
+                if cur is None or cur[0].engine is not eng or cur[0].prompts != prompts:
+                    self._sam_detector = (Sam3Detector(eng, prompts=prompts), eng.pack.card)
                 sam = self._sam_detector
             if choice == "sam3":
                 return sam

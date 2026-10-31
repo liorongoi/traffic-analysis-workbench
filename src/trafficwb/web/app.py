@@ -68,10 +68,15 @@ class MissionBody(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     detector: str = "standard"
+    sam3_words: dict[str, list[str]] | None = None
 
 
 class DetectorBody(BaseModel):
     detector: str
+
+
+class WordsBody(BaseModel):
+    words: dict[str, list[str]] | None = None     # None: back to the default words
 
 
 class FindAreasBody(BaseModel):
@@ -466,6 +471,21 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         m.update_config(u.username, "monitoring " + ("on" if body.enabled else "off"), monitoring_enabled=body.enabled)
         jobs.set_monitoring(m.id, body.enabled)
         return {"enabled": body.enabled}
+
+    @app.put("/api/missions/{mission_id}/sam3-words")
+    def sam3_words_set(body: WordsBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        from ..sam3 import VEHICLE_PROMPTS, vehicle_prompts
+        try:
+            prompts = vehicle_prompts(body.words)
+        except ValueError as exc:
+            raise ApiError(400, "invalid", str(exc)) from None
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "Processing is running. Change the words when it has finished or is cancelled.")
+        words = None if prompts == dict(VEHICLE_PROMPTS) else {k: list(v) for k, v in prompts.items()}
+        if words != getattr(m.config(), "sam3_words", None):
+            m.update_config(u.username, "words for SAM 3.1 changed" if words else "words for SAM 3.1 back to the defaults",
+                            sam3_words=words)
+        return {"words": {k: list(v) for k, v in prompts.items()}, "default": words is None}
 
     @app.put("/api/missions/{mission_id}/detector")
     def detector_set(body: DetectorBody, m: Mission = Depends(mission), u: User = Depends(user)):

@@ -70,3 +70,35 @@ def test_mission_with_both_detectors(api):
     state["installed"] = False
     r = c.put(f"/api/missions/{mid}/detector", json={"detector": "both"}, headers=H1)
     assert r.status_code == 400 and r.json()["error"] == "sam3_missing"
+
+
+def test_words_to_look_for_are_checked_and_used():
+    import pytest
+    from trafficwb.sam3 import VEHICLE_PROMPTS, vehicle_prompts
+    assert vehicle_prompts(None) == VEHICLE_PROMPTS
+    w = vehicle_prompts({"car": ["Car", " police  car ", "car"], "truck": ["truck", "tractor"]})
+    assert w["car"] == ("car", "police car") and w["truck"] == ("truck", "tractor") and w["bus"] == ("bus",)
+    assert vehicle_prompts({"bicycle": []})["bicycle"] == ()
+    for bad in ({"tank": ["tank"]}, {"car": ["x" * 41]}, {"car": ["van"], "truck": ["van"]},
+                {c: [] for c in VEHICLE_PROMPTS}):
+        with pytest.raises(ValueError):
+            vehicle_prompts(bad)
+
+
+def test_mission_words_reach_sam(api, tmp_path):
+    c, body, state = api
+    mid = c.post("/api/missions", json={**body, "detector": "sam3"}, headers=H1).json()["id"]
+    r = c.put(f"/api/missions/{mid}/sam3-words", json={"words": {"truck": ["truck", "tractor"]}}, headers=H1)
+    assert r.status_code == 200 and r.json()["words"]["truck"] == ["truck", "tractor"] and not r.json()["default"]
+    assert c.get(f"/api/missions/{mid}").json()["config"]["sam3_words"]["truck"] == ["truck", "tractor"]
+    bad = c.put(f"/api/missions/{mid}/sam3-words", json={"words": {"tank": ["tank"]}}, headers=H1)
+    assert bad.status_code == 400 and "tank" in bad.json()["message"]
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    assert wait(c, f"/api/missions/{mid}", key="job")["state"] == "finished"
+    from trafficwb.store import DataRoot
+    m = DataRoot(tmp_path / "data").open_mission(mid)
+    pre = m.con.execute("SELECT preprocessing FROM run ORDER BY id DESC LIMIT 1").fetchone()[0]
+    assert '"tractor"' in pre                                           # the run records the words SAM was asked
+    m.con.close()
+    r = c.put(f"/api/missions/{mid}/sam3-words", json={"words": None}, headers=H1)
+    assert r.json()["default"] and c.get(f"/api/missions/{mid}").json()["config"]["sam3_words"] is None
