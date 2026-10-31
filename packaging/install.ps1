@@ -161,6 +161,25 @@ if ([IO.Path]::GetFullPath($Python).StartsWith([IO.Path]::GetFullPath($Target), 
 
 # 3. Wheels collect in one local wheelhouse, so a small update bundle (application only) finds the runtime there.
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
+# An install that was stopped part way (Setup closed, the computer switched off) leaves its half-made folder,
+# marked with <folder>.installing: removed here, unless it is somehow the one in use.
+$inUse = @("current.txt", "previous.txt") | ForEach-Object { Join-Path $Target $_ } | Where-Object { Test-Path $_ } |
+  ForEach-Object { (Get-Content $_ -Raw).Trim() }
+Get-ChildItem $Target -Filter "app-*.installing" -File -ErrorAction SilentlyContinue | ForEach-Object {
+  $half = $_.FullName -replace '\.installing$', ''
+  if ($inUse -notcontains $half) {
+    Write-Host "Removing $half, left by an install that did not finish."
+    if (Test-Path $half) { Remove-Item -Recurse -Force $half -ErrorAction SilentlyContinue }
+    if (-not (Test-Path $half)) { Remove-Item -Force $_.FullName }
+  }
+}
+# Copied to <name>.partial and then renamed, so a copy cut short is never taken for a whole file; a file whose size
+# differs from the bundle's (cut short by an older version of this script) is copied again.
+function Copy-Whole([string]$src, [string]$dest) {
+  $part = "$dest.partial"
+  Copy-Item -LiteralPath $src $part -Force
+  Move-Item -LiteralPath $part $dest -Force
+}
 $Venv = Join-Path $Target "app-$($Info.version)"
 # Keep the previous build intact for rollback. A same-version repair gets a fresh folder so reinstalling
 # the same setup executable does not collide with the existing environment.
@@ -171,10 +190,11 @@ if (Test-Path $Venv) {
 }
 $Wheels = Join-Path $Target "wheelhouse"
 New-Item -ItemType Directory -Force -Path $Wheels | Out-Null
+Get-ChildItem $Wheels -Filter *.partial -File | Remove-Item -Force
 Get-ChildItem (Join-Path $Bundle "wheelhouse") -Filter *.whl | ForEach-Object {
   $dest = Join-Path $Wheels $_.Name
   # The application wheel can be rebuilt under the same version number: always take the bundle's own.
-  if (-not (Test-Path $dest) -or $_.Name -like "trafficwb-*") { Copy-Item $_.FullName $dest -Force }
+  if (-not (Test-Path $dest) -or $_.Name -like "trafficwb-*" -or (Get-Item -LiteralPath $dest).Length -ne $_.Length) { Copy-Whole $_.FullName $dest }
 }
 
 # 4. Model packs: add the bundle's versions; existing versions are kept.
@@ -193,7 +213,24 @@ $BundleModels = Join-Path $Bundle "models"
 if (Test-Path $BundleModels) { Get-ChildItem $BundleModels -Directory | ForEach-Object {
   Get-ChildItem $_.FullName -Directory | ForEach-Object {
     $dest = Join-Path $Models (Join-Path $_.Parent.Name $_.Name)
-    if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null; Copy-Item -Recurse $_.FullName $dest }
+    if (-not (Test-Path $dest)) {
+      New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
+      $part = "$dest.partial"
+      if (Test-Path $part) { Remove-Item -Recurse -Force $part }
+      Copy-Item -Recurse $_.FullName $part
+      Rename-Item $part (Split-Path $dest -Leaf)
+    } else {
+      # Already there: put back any of this pack's files that are missing or not whole.
+      $src = $_.FullName
+      Get-ChildItem $src -Recurse -File | ForEach-Object {
+        $f = Join-Path $dest $_.FullName.Substring($src.Length + 1)
+        if (-not (Test-Path -LiteralPath $f) -or (Get-Item -LiteralPath $f).Length -ne $_.Length) {
+          Write-Host "Repairing $f"
+          New-Item -ItemType Directory -Force -Path (Split-Path $f) | Out-Null
+          Copy-Whole $_.FullName $f
+        }
+      }
+    }
   }
 } }
 
@@ -220,6 +257,7 @@ function Install-Env([string]$build) {
   # Messages a program writes to stderr (pip warnings, model loading notes) must not stop the install when the
   # output is redirected, as Windows PowerShell does then; failures are caught by the exit codes below.
   $ErrorActionPreference = "Continue"
+  Set-Content -Path "$Venv.installing" -Value "Removed by the next install if this one does not finish."
   & $Python -m venv $Venv | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "Creating the Python environment failed." }
   $script:VPy = Join-Path $Venv "Scripts\python.exe"
@@ -272,6 +310,7 @@ $used = Install-Env $Choice
 if ($Choice -eq "cuda" -and $used -ne "cuda" -and -not $SkipCheck -and ($Info.wheels | Where-Object { $_ -like "onnxruntime_directml-*" })) {
   Write-Host "CUDA did not start on this machine (models ran on $used); installing the DirectML build instead."
   Remove-Item -Recurse -Force $Venv
+  Remove-Item -Force "$Venv.installing" -ErrorAction SilentlyContinue
   $Choice = "directml"
   $used = Install-Env $Choice
 }
@@ -299,6 +338,7 @@ set TWB_MODELS=$Models
 "@ | Set-Content -Encoding ASCII (Join-Path $Target "start.cmd")
 if (Test-Path (Join-Path $Target "current.txt")) { Copy-Item (Join-Path $Target "current.txt") (Join-Path $Target "previous.txt") -Force }
 Set-Content -Path (Join-Path $Target "current.txt") -Value $Venv
+Remove-Item -Force "$Venv.installing" -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $Bundle "autostart.ps1") (Join-Path $Target "autostart.ps1") -Force
 if (Test-Path (Join-Path $Bundle "pc_check.py")) { Copy-Item (Join-Path $Bundle "pc_check.py") (Join-Path $Target "pc_check.py") -Force }
 @"

@@ -199,7 +199,21 @@ begin
            'Details are in:' + #13#10 + Log + #13#10 + #13#10 +
            'Your data and previous version have been kept. Close LanePulse and retry the installer. If it fails again, share install.log.', mbError, MB_OK, IDOK);
     Failed := True;
+    // A first install that did not finish: no icon that would open nothing. (After a failed update the previous
+    // version is still installed and its icons stay.)
+    if not FileExists(ExpandConstant('{app}\current.txt')) then
+    begin
+      DeleteFile(ExpandConstant('{autoprograms}\LanePulse.lnk'));
+      DeleteFile(ExpandConstant('{autoprograms}\LanePulse - speed check.lnk'));
+      DeleteFile(ExpandConstant('{autodesktop}\LanePulse.lnk'));
+    end;
   end;
+end;
+
+// Setup's exit code says whether LanePulse was installed (for silent installs and IT deployment tools).
+function GetCustomSetupExitCode: Integer;
+begin
+  if Failed then Result := 1 else Result := 0;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
