@@ -70,6 +70,16 @@ CMD
   fi
 fi
 
+# A LanePulse server of another build still answering (one started some other way, or whose process number was
+# lost) would show the older screens: stop it, whatever started it. Only a LanePulse process is stopped.
+running="$(curl -fsS -m 2 "$URL/api/health" 2>/dev/null | "$PY" -c 'import json,sys; print(json.load(sys.stdin).get("version",""))' 2>/dev/null || true)"
+if up && [ "$running" != "$VER" ]; then
+  for pid in $(lsof -nP -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null); do
+    ps -o command= -p "$pid" 2>/dev/null | grep -q trafficwb && kill "$pid" 2>/dev/null
+  done
+  for _ in $(seq 30); do up || break; sleep 1; done
+fi
+
 if ! up; then
   if [ -f "$LOGS/server.log" ] && [ "$(stat -f%z "$LOGS/server.log" 2>/dev/null || echo 0)" -gt 10000000 ]; then
     mv -f "$LOGS/server.log" "$LOGS/server.old.log"

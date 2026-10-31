@@ -248,10 +248,47 @@ def find_pack(root: Path | None = None) -> ModelPack:
                               "a SAM 3.1 model pack can also be added with the Import Model tool.") from exc
 
 
+CPU_CHECK_FILE = ".sam3-cpu-check.json"
+
+
+def cpu_id() -> str:
+    """Names this computer's processor, so a check made on it is not applied to another."""
+    import platform
+    return f"{platform.machine()} {platform.processor()}".strip()
+
+
+def cpu_check(root: Path | None = None) -> dict | None:
+    """The install check's result of running SAM 3.1 on this processor, if it ran here (None otherwise)."""
+    import json
+    from . import models
+    f = (root or models.models_root()) / CPU_CHECK_FILE
+    try:
+        got = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return got if isinstance(got, dict) and got.get("cpu") == cpu_id() else None
+
+
+def save_cpu_check(ok: bool, reason: str | None, root: Path | None = None) -> None:
+    import json
+    from . import models
+    base = root or models.models_root()
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        (base / CPU_CHECK_FILE).write_text(json.dumps({"cpu": cpu_id(), "ok": ok, "reason": reason}), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def available(root: Path | None = None) -> dict:
     """What the screens show about SAM 3.1, without loading it (the checksum is checked on first use)."""
     from . import models
     cards = [c for c in models.installed(TASK, root) if c["name"] == PACK_NAME]
+    check = cpu_check(root)
+    if cards and check and not check.get("ok"):
+        # It stopped the install check on this processor: offering it would stop LanePulse when it is used.
+        return {"installed": False, "pack": cards[-1], "runtime": True, "loaded": False, "memory_gb": None,
+                "memory_note": None, "reason": check.get("reason") or "SAM 3.1 does not run on this computer's processor."}
     try:
         import_openvino()
         runtime = True

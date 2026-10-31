@@ -132,6 +132,20 @@ def test_every_file_of_the_pack_is_checked(tmp_path):
     assert st["installed"] is False and "not installed" in st["reason"]
 
 
+def test_not_offered_on_a_processor_where_it_stopped_the_install_check(tmp_path):
+    """The install check runs SAM 3.1 in its own process; where it stopped (an instruction the processor lacks), the
+    screens say so instead of offering it, on this processor only."""
+    sam3_fake.build(tmp_path)
+    assert sam3.available(tmp_path)["installed"] is True
+    sam3.save_cpu_check(False, "SAM 3.1 does not run on this computer's processor.", tmp_path)
+    st = sam3.available(tmp_path)
+    assert st["installed"] is False and "processor" in st["reason"]
+    (tmp_path / sam3.CPU_CHECK_FILE).write_text(json.dumps({"cpu": "another processor", "ok": False, "reason": "x"}))
+    assert sam3.available(tmp_path)["installed"] is True
+    sam3.save_cpu_check(True, None, tmp_path)
+    assert sam3.available(tmp_path)["installed"] is True
+
+
 def test_openvino_never_reports_usage(tmp_path, pack_root):
     """Importing OpenVINO and running SAM 3.1 opens no network connection and writes no telemetry files."""
     script = tmp_path / "probe.py"
