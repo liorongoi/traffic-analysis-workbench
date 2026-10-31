@@ -231,53 +231,79 @@ function groupsFor(c: string): Groups {
   return [...own, ...others];
 }
 
-/** A drop-down that adds the picked word at once; it shows a class's own groups first. */
-function WordPick({ groups, have, onPick, disabled, label }: { groups: Groups; have: string[]; onPick: (w: string) => void; disabled: boolean; label: string }) {
+const classTitle = (c: string) => CLASS_LABEL[c] ?? c[0].toUpperCase() + c.slice(1);
+
+/** A type-in box: type any word and press Enter, or pick one of the suggestions, which are grouped by kind and
+ *  narrowed to what has been typed. */
+function AddPick({ groups, have, onAdd, disabled, label, prompt, maxLength, wide }:
+  { wide?: boolean; groups: Groups; have: string[]; onAdd: (w: string) => void; disabled: boolean; label: string; prompt: string; maxLength: number }) {
+  const [text, setText] = useState("");
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(-1);
+  const q = text.trim().toLowerCase();
+  const shown: Groups = groups.map(([g, ws]): [string, string[]] => [g, ws.filter((w) => !have.includes(w) && (!q || w.includes(q)))])
+    .filter(([, ws]) => ws.length);
+  const flat = shown.flatMap(([, ws]) => ws);
+  const pick = (w: string) => { if (w.trim()) onAdd(w); setText(""); setHi(-1); };
   return (
-    <select aria-label={label} value="" disabled={disabled} onChange={(e) => { if (e.target.value) onPick(e.target.value); }}>
-      <option value="">pick a word…</option>
-      {groups.map(([g, ws]) => {
-        const left = ws.filter((w) => !have.includes(w));
-        return left.length ? <optgroup key={g} label={g}>{left.map((w) => <option key={w} value={w}>{w}</option>)}</optgroup> : null;
-      })}
-    </select>
+    <div className={wide ? "addpick wide" : "addpick"} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false); }}>
+      <input aria-label={label} placeholder={prompt} value={text} maxLength={maxLength} disabled={disabled}
+        role="combobox" aria-expanded={open} autoComplete="off"
+        onFocus={() => setOpen(true)} onChange={(e) => { setText(e.target.value); setOpen(true); setHi(-1); }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHi(Math.min(hi + 1, flat.length - 1)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setHi(Math.max(hi - 1, -1)); }
+          else if (e.key === "Enter") { e.preventDefault(); pick(hi >= 0 ? flat[hi] : text); }
+          else if (e.key === "Escape") { setText(""); setOpen(false); }
+        }} />
+      {open && !disabled && (shown.length > 0 || q) && (
+        <div className="addpick-menu" role="listbox">
+          {q && !flat.includes(q) && <button type="button" className="addpick-own" onMouseDown={(e) => e.preventDefault()} onClick={() => pick(text)}>Add “{text.trim()}”</button>}
+          {shown.map(([g, ws]) => (
+            <div key={g}>
+              <div className="addpick-group">{g}</div>
+              {ws.map((w) => (
+                <button type="button" key={w} role="option" aria-selected={flat[hi] === w} className={flat[hi] === w ? "on" : ""}
+                  onMouseDown={(e) => e.preventDefault()} onClick={() => pick(w)}>{w}</button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
 /** The words SAM 3.1 is asked for, per class: each word found counts as that class. Classes of the mission's own
- *  (e.g. pedestrian, tractor) can be added, and left out of the vehicle count. */
+ *  (e.g. pedestrian, tractor) can be added, and left out of the vehicle count. Folded to one summary line until opened. */
 function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<string, string[]>; busy: boolean; reload: () => void }) {
   const saved: Record<string, string[]> = m.config.sam3_words ?? defaults;
   const savedOut: string[] = m.config.sam3_uncounted ?? [];
+  const [open, setOpen] = useState(false);
   const [words, setWords] = useState<Record<string, string[]>>(saved);
   const [out, setOut] = useState<string[]>(savedOut);
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const [newCls, setNewCls] = useState({ name: "", word: "" });
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   useEffect(() => { setWords(m.config.sam3_words ?? defaults); setOut(m.config.sam3_uncounted ?? []); }, [m.config.sam3_words, m.config.sam3_uncounted]);
   const builtIn = Object.keys(defaults);
   const own = Object.keys(words).filter((c) => !builtIn.includes(c));
   const classes = [...builtIn, ...own];
+  const used = Object.values(words).flat();
   const key = (w: Record<string, string[]>, o: string[]) => JSON.stringify([Object.keys(w).sort().map((c) => [c, w[c]]), [...o].sort()]);
   const changed = key(words, out) !== key(saved, savedOut);
   const isDefault = key(words, out) === key(defaults, []);
   const norm = (t: string) => t.trim().toLowerCase().replace(/\s+/g, " ");
-  const add = (c: string) => {
-    const w = norm(draft[c] ?? "");
-    if (!w) return;
-    if (!(words[c] ?? []).includes(w)) setWords({ ...words, [c]: [...(words[c] ?? []), w] });
-    setDraft({ ...draft, [c]: "" });
+  const addWord = (c: string, t: string) => {
+    const w = norm(t);
+    if (w && !(words[c] ?? []).includes(w)) setWords({ ...words, [c]: [...(words[c] ?? []), w] });
   };
   const remove = (c: string, w: string) => setWords({ ...words, [c]: (words[c] ?? []).filter((x) => x !== w) });
-  const addClass = () => {
-    const name = norm(newCls.name), w = norm(newCls.word) || name;
-    if (!name) return;
+  const addClass = (t: string) => {
+    const name = norm(t);
     setErr(null);
     if (classes.includes(name)) { setErr(`There is already a class called ${name}.`); return; }
-    setWords({ ...words, [name]: newCls.word ? [w] : (CLASS_WORDS[name] ?? [w]) });
+    setWords({ ...words, [name]: CLASS_WORDS[name] ?? [name] });
     setOut([...out, name]);  // a new class is not a vehicle until said so
-    setNewCls({ name: "", word: "" });
   };
   const dropClass = (c: string) => {
     const { [c]: _, ...rest } = words;
@@ -287,73 +313,68 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
   const save = async (body: Record<string, string[]> | null, uncounted: string[]) => {
     setErr(null);
     setSaving(true);
-    try { await api(`/missions/${m.id}/sam3-words`, { method: "PUT", body: { words: body, uncounted } }); reload(); }
+    try { await api(`/missions/${m.id}/sam3-words`, { method: "PUT", body: { words: body, uncounted } }); reload(); setOpen(false); }
     catch (e) { setErr((e as ApiError).message); }
     finally { setSaving(false); }
   };
+  const classGroups: Groups = SUGGESTED_CLASSES.map(([g, cs]) => [g, cs.map(([c]) => c)]);
   return (
     <div className="samwords">
-      <h3>Words SAM 3.1 looks for</h3>
-      <p className="muted">Each word is asked on every image; what it finds counts as that class. SAM 3.1 has no fixed list of classes: it looks for whatever words you give it. Pick a word from a class's list, grouped by kind, or type your own; remove a class's words to stop looking for it. Each word adds about half a second per image.</p>
-      {classes.map((c) => {
-        const mine = own.includes(c);
-        return (
-          <div key={c} className="samwords-row">
-            <div>
-              <b>{CLASS_LABEL[c] ?? c}</b>
-              {mine && (
-                <div className="samwords-own">
-                  <label title="Count what this class finds as vehicles">
-                    <input type="checkbox" checked={!out.includes(c)} disabled={busy}
-                      onChange={(e) => setOut(e.target.checked ? out.filter((x) => x !== c) : [...out, c])} /> a vehicle
-                  </label>
-                  <button className="linkish" disabled={busy} onClick={() => dropClass(c)}>remove class</button>
-                </div>
-              )}
-            </div>
-            <div className="chips">
-              {(words[c] ?? []).map((w) => (
-                <span key={w} className="wordchip">{w}
-                  <button aria-label={`Remove ${w}`} disabled={busy} onClick={() => remove(c, w)}>×</button>
-                </span>
-              ))}
-              {(words[c] ?? []).length === 0 && <span className="muted">{mine ? "needs at least one word" : "not looked for"}</span>}
-            </div>
-            <form className="row" onSubmit={(e) => { e.preventDefault(); add(c); }}>
-              <WordPick groups={groupsFor(c)} have={Object.values(words).flat()} disabled={busy} label={`Pick a word for ${c}`}
-                onPick={(w) => setWords({ ...words, [c]: [...(words[c] ?? []), w] })} />
-              <input aria-label={`Add a word for ${c}`} placeholder="or type one" value={draft[c] ?? ""} maxLength={40} disabled={busy}
-                onChange={(e) => setDraft({ ...draft, [c]: e.target.value })} />
-              <button type="submit" disabled={busy || !(draft[c] ?? "").trim()}>Add</button>
-            </form>
-          </div>
-        );
-      })}
-      <form className="row samwords-new" onSubmit={(e) => { e.preventDefault(); addClass(); }}>
-        <b>New class</b>
-        <select aria-label="Pick a new class" value="" disabled={busy} onChange={(e) => {
-          const name = e.target.value;
-          if (name) setNewCls({ name, word: "" });  // no word typed: the class starts with all its suggested words
-        }}>
-          <option value="">pick a class…</option>
-          {SUGGESTED_CLASSES.map(([g, cs]) => {
-            const left = cs.filter(([c]) => !classes.includes(c));
-            return left.length ? <optgroup key={g} label={g}>{left.map(([c]) => <option key={c} value={c}>{c}</option>)}</optgroup> : null;
-          })}
-        </select>
-        <input aria-label="New class name" placeholder="or type a name" value={newCls.name} maxLength={24} disabled={busy}
-          onChange={(e) => setNewCls({ ...newCls, name: e.target.value })} />
-        <input aria-label="First word for the new class" placeholder="word SAM looks for (optional)" value={newCls.word} maxLength={40} disabled={busy}
-          onChange={(e) => setNewCls({ ...newCls, word: e.target.value })} />
-        <button type="submit" disabled={busy || !newCls.name.trim()}>Add class</button>
-      </form>
-      <p className="muted">A class of your own appears in review and export. Untick “a vehicle” to keep it out of the vehicle count. It is not used to train the standard detector.</p>
-      <div className="row" style={{ marginTop: 8 }}>
-        {changed && <button className="primary" disabled={busy || saving} onClick={() => save(words, out)}>{saving ? "Saving…" : "Use these words"}</button>}
-        {changed && <button onClick={() => { setWords(saved); setOut(savedOut); }}>Cancel</button>}
-        {!isDefault && !changed && <button className="linkish" disabled={busy || saving} onClick={() => save(null, [])}>Back to the default words</button>}
+      <div className="row samwords-head">
+        <h3>Words SAM 3.1 looks for</h3>
+        <button className="linkish" onClick={() => { if (open && changed) { setWords(saved); setOut(savedOut); } setOpen(!open); }}>
+          {open ? (changed ? "Cancel" : "Close") : "Edit"}</button>
       </div>
-      {changed && <p className="muted">Images already processed keep their detections; the words apply to the next run.</p>}
+      {!open && (
+        <p className="samwords-sum">
+          {classes.filter((c) => (saved[c] ?? []).length).map((c, i) => (
+            <span key={c}>{i > 0 && " · "}<b>{classTitle(c)}</b>{out.includes(c) ? " (not counted)" : ""}: {(saved[c] ?? []).join(", ")}</span>
+          ))}
+        </p>
+      )}
+      {open && <>
+        <table className="samwords-table">
+          <thead><tr><th>Class</th><th>Search words</th><th title="Counted as a vehicle">Counted</th><th /></tr></thead>
+          <tbody>
+            {classes.map((c) => {
+              const mine = own.includes(c);
+              return (
+                <tr key={c}>
+                  <td className="cls">{classTitle(c)}</td>
+                  <td>
+                    <div className="chips">
+                      {(words[c] ?? []).map((w) => (
+                        <span key={w} className="wordchip">{w}
+                          <button aria-label={`Remove ${w}`} disabled={busy} onClick={() => remove(c, w)}>×</button>
+                        </span>
+                      ))}
+                      {(words[c] ?? []).length === 0 && <span className="muted">not looked for</span>}
+                      <AddPick groups={groupsFor(c)} have={used} disabled={busy} label={`Add a word for ${c}`} prompt="+ type a word"
+                        maxLength={40} onAdd={(w) => addWord(c, w)} />
+                    </div>
+                  </td>
+                  <td className="ctr">
+                    <input type="checkbox" aria-label={`Count ${c} as a vehicle`} checked={!out.includes(c)} disabled={busy || !mine}
+                      title={mine ? "Count what this class finds as vehicles" : "Vehicle classes are always counted"}
+                      onChange={(e) => setOut(e.target.checked ? out.filter((x) => x !== c) : [...out, c])} />
+                  </td>
+                  <td className="ctr">
+                    {mine && <button className="iconbtn" aria-label={`Remove class ${c}`} title="Remove class" disabled={busy} onClick={() => dropClass(c)}>×</button>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <div className="row samwords-foot">
+          <AddPick wide groups={classGroups.map(([g, cs]) => [g, cs.filter((c) => !classes.includes(c))])} have={[]} disabled={busy}
+            label="Add a class" prompt="+ type a class" maxLength={24} onAdd={addClass} />
+          <span className="spacer" />
+          {!isDefault && <button className="linkish" disabled={busy || saving} onClick={() => save(null, [])}>Reset to defaults</button>}
+          {changed && <button className="primary" disabled={busy || saving} onClick={() => save(words, out)}>{saving ? "Saving…" : "Save"}</button>}
+        </div>
+        <p className="muted small">SAM 3.1 has no fixed class list: pick a suggested word or type your own. Each word adds about half a second per image. Classes you add are reviewed and exported like the others, and are not used to train the standard detector.</p>
+      </>}
       {err && <div className="msg err" role="alert">{err}</div>}
     </div>
   );
