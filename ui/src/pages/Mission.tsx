@@ -236,22 +236,14 @@ const SUGGESTED_CLASSES: [string, [string, string[]][]][] = [
   ["Animals", [["animal", ["deer", "moose", "dog", "horse"]]]],
 ];
 const CLASS_WORDS: Record<string, string[]> = Object.fromEntries(SUGGESTED_CLASSES.flatMap(([, cs]) => cs));
-/** The groups offered for a class: its own first, then the rest under "Other". */
-function groupsFor(c: string): Groups {
-  const own: Groups = SUGGESTED_WORDS[c] ?? (CLASS_WORDS[c] ? [["Suggested", CLASS_WORDS[c]]] : []);
-  const ownWords = new Set(own.flatMap(([, ws]) => ws));
-  const others: Groups = Object.entries(SUGGESTED_WORDS).filter(([k]) => k !== c)
-    .map(([k, gs]) => [`Other: ${CLASS_LABEL[k] ?? k}`, gs.flatMap(([, ws]) => ws).filter((w) => !ownWords.has(w))]);
-  return [...own, ...others];
-}
 
 const classTitle = (c: string) => CLASS_LABEL[c] ?? c[0].toUpperCase() + c.slice(1);
 
 /** A type-in box: type a leading word and every related suggestion is listed, grouped by kind (a group whose name
  *  matches is shown whole, so "trailer" lists all trailer combinations). Tick one or several and add them together,
  *  or press Enter to add the typed word itself. */
-function AddPick({ groups, have, onAdd, disabled, label, prompt, maxLength, wide }:
-  { wide?: boolean; groups: Groups; have: string[]; onAdd: (ws: string[]) => void; disabled: boolean; label: string; prompt: string; maxLength: number }) {
+function AddPick({ groups, have, onAdd, disabled, label, prompt, maxLength, wide, targets }:
+  { wide?: boolean; targets?: [string, string][]; groups: Groups; have: string[]; onAdd: (ws: string[], target?: string) => void; disabled: boolean; label: string; prompt: string; maxLength: number }) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
@@ -266,9 +258,9 @@ function AddPick({ groups, have, onAdd, disabled, label, prompt, maxLength, wide
     const all = ws.every((w) => picked.includes(w));
     setPicked(all ? picked.filter((w) => !ws.includes(w)) : [...picked, ...ws.filter((w) => !picked.includes(w))]);
   };
-  const commit = (ws: string[]) => {
+  const commit = (ws: string[], target?: string) => {
     const clean = ws.map((w) => w.trim()).filter(Boolean);
-    if (clean.length) onAdd(clean);
+    if (clean.length) onAdd(clean, target);
     setText(""); setPicked([]); setOpen(false);
   };
   return (
@@ -277,13 +269,18 @@ function AddPick({ groups, have, onAdd, disabled, label, prompt, maxLength, wide
         role="combobox" aria-expanded={open} autoComplete="off"
         onFocus={() => setOpen(true)} onChange={(e) => { setText(e.target.value); setOpen(true); }}
         onKeyDown={(e) => {
-          if (e.key === "Enter") { e.preventDefault(); commit(picked.length ? picked : [text]); }
+          if (e.key === "Enter") { e.preventDefault(); if (picked.length) commit(picked); else if (!targets) commit([text]); }
           else if (e.key === "Escape") { setText(""); setPicked([]); setOpen(false); }
         }} />
       {open && !disabled && (shown.length > 0 || q) && (
         <div className="addpick-menu" role="listbox" aria-multiselectable="true" tabIndex={-1}>
-          {q && !flat.includes(q) && !picked.length && (
+          {q && !flat.includes(q) && !picked.length && !targets && (
             <button type="button" className="addpick-own" onMouseDown={(e) => e.preventDefault()} onClick={() => commit([text])}>Add “{text.trim()}”</button>
+          )}
+          {q && !flat.includes(q) && !picked.length && targets && (
+            <div className="addpick-targets">Add “{text.trim()}” to
+              {targets.map(([t, l]) => <button type="button" key={t} onMouseDown={(e) => e.preventDefault()} onClick={() => commit([text], t)}>{l}</button>)}
+            </div>
           )}
           <div className="addpick-list">
             {shown.map(([g, ws]) => (
@@ -330,11 +327,6 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
   const changed = key(words, out) !== key(saved, savedOut);
   const isDefault = key(words, out) === key(defaults, []);
   const norm = (t: string) => t.trim().toLowerCase().replace(/\s+/g, " ");
-  const addWord = (c: string, ts: string[]) => {
-    const have = words[c] ?? [];
-    const add = ts.map(norm).filter((w, i, a) => w && a.indexOf(w) === i && !have.includes(w));
-    if (add.length) setWords({ ...words, [c]: [...have, ...add] });
-  };
   const remove = (c: string, w: string) => setWords({ ...words, [c]: (words[c] ?? []).filter((x) => x !== w) });
   const addClass = (ts: string[]) => {
     setErr(null);
@@ -358,6 +350,20 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
     catch (e) { setErr((e as ApiError).message); }
     finally { setSaving(false); }
   };
+  // One search for all classes: each suggestion is listed under "Class · group" and lands in that class.
+  const searchGroups: Groups = classes.flatMap((c): Groups => (SUGGESTED_WORDS[c] ?? (CLASS_WORDS[c] ? [["Suggested", CLASS_WORDS[c]]] : []))
+    .map(([g, ws]) => [`${classTitle(c)} · ${g}`, ws]));
+  const wordClass: Record<string, string> = Object.fromEntries(searchGroups.flatMap(([g, ws]) =>
+    ws.map((w) => [w, classes.find((c) => g.startsWith(classTitle(c) + " · "))!])));
+  const addFound = (ws: string[], target?: string) => {
+    const next = { ...words };
+    for (const t of ws) {
+      const w = norm(t), c = target ?? wordClass[w];
+      if (!w || !c || (next[c] ?? []).includes(w)) continue;
+      next[c] = [...(next[c] ?? []), w];
+    }
+    setWords(next);
+  };
   const classGroups: Groups = SUGGESTED_CLASSES.map(([g, cs]) => [g, cs.map(([c]) => c)]);
   return (
     <div className="samwords">
@@ -374,6 +380,11 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
         </p>
       )}
       {open && <>
+        <div className="samwords-search">
+          <AddPick wide groups={searchGroups} have={used} disabled={busy} label="Find words to add"
+            prompt="Search words to add, e.g. trailer, bus, emergency…" maxLength={40}
+            targets={classes.map((c) => [c, classTitle(c)])} onAdd={addFound} />
+        </div>
         <table className="samwords-table">
           <thead><tr><th>Class</th><th>Search words</th><th title="Counted as a vehicle">Counted</th><th /></tr></thead>
           <tbody>
@@ -390,8 +401,6 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
                         </span>
                       ))}
                       {(words[c] ?? []).length === 0 && <span className="muted">not looked for</span>}
-                      <AddPick groups={groupsFor(c)} have={used} disabled={busy} label={`Add a word for ${c}`} prompt="+ type a word"
-                        maxLength={40} onAdd={(ws) => addWord(c, ws)} />
                     </div>
                   </td>
                   <td className="ctr">

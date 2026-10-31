@@ -410,18 +410,25 @@ button.linkish:hover:not(:disabled) { background: none; text-decoration: underli
 .wordchip button { min-height: 0; padding: 0 6px; border: 0; background: transparent; color: var(--text-2); font-size: 14px; line-height: 1; }
 .wordchip button:hover { color: var(--text); }
 .addpick { position: relative; display: inline-block; }
-.addpick input { min-height: 24px; height: 24px; padding: 0 10px; font-size: 12.5px; width: 120px; border-radius: 999px; border-style: dashed; background: transparent; }
-.addpick input:focus { width: 180px; border-style: solid; }
-.addpick.wide input { width: 140px; }
+.addpick > input { min-height: 24px; height: 24px; padding: 0 10px; font-size: 12.5px; width: 120px; border-radius: 999px; border-style: dashed; background: transparent; }
+.addpick > input:focus { width: 180px; border-style: solid; }
+.addpick.wide > input { width: 140px; }
 .addpick-menu { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 220px; padding: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
 .addpick-menu { display: flex; flex-direction: column; overflow: hidden; }
 .addpick-list { overflow-y: auto; max-height: 260px; padding-bottom: 4px; }
 .addpick-group { display: flex; align-items: center; gap: 6px; padding: 7px 12px 3px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); cursor: pointer; }
 .addpick-opt { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 22px; font-size: 13px; cursor: pointer; }
 .addpick-opt:hover { background: var(--accent-soft); }
-.addpick-menu input[type=checkbox] { width: 13px; height: 13px; min-height: 0; margin: 0; }
+.addpick-menu input[type=checkbox] { width: 13px; height: 13px; min-height: 0; margin: 0; flex: none; }
 .addpick-own { display: block; width: 100%; text-align: left; min-height: 0; padding: 6px 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; font-size: 13px; font-weight: 600; }
 .addpick-own:hover { background: var(--accent-soft); }
 .addpick-foot { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 6px 10px; border-top: 1px solid var(--line); }
 .addpick-foot button { min-height: 26px; padding: 0 12px; font-size: 12.5px; }
 .addpick-foot .linkish { padding: 0; }
+.samwords-search { margin: 8px 0 4px; }
+.samwords-search .addpick { display: block; }
+.samwords-search .addpick > input, .samwords-search .addpick > input:focus { width: 100%; height: 32px; min-height: 32px; border-radius: 6px; border-style: solid; padding: 0 12px; font-size: 13px; }
+.samwords-search .addpick-menu { right: 0; }
+.samwords-search .addpick-list { max-height: 320px; }
+.addpick-targets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; font-size: 13px; border-bottom: 1px solid var(--line); }
+.addpick-targets button { min-height: 22px; padding: 0 10px; font-size: 12px; border-radius: 999px; }
