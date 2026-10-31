@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, Box, Candidate, Item, Obj, post, REVIEW_LABEL } from "../api";
 import { go } from "../router";
+import { useZoom } from "../components/zoom";
 import { loadQuery } from "./Mission";
 
 const CLASSES = ["car", "truck", "bus", "motorcycle", "bicycle"];
@@ -46,6 +47,11 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
   const [plateBox, setPlateBox] = useState<number[] | null>(null);
   const [plateText, setPlateText] = useState("");
   const svgRef = useRef<SVGSVGElement>(null);
+  // Space held down turns any drag on the image into panning, as in most image tools.
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const [panning, setPanning] = useState(false);
+  const panRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const { stageRef, view, size, zoomAt, panBy, centerOn, fit } = useZoom(item != null);
   const q = loadQuery(missionId);
 
   const load = useCallback(async () => {
@@ -60,7 +66,7 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
       setPlates(Object.fromEntries(r.plates.map((p: any) => [p.object_uid, p])));
     } catch { setPlates({}); }        // not a plate recognition mission
   }, [missionId, versionId]);
-  useEffect(() => { setSel(null); setPickedLights([]); load(); loadPlates(); }, [load, loadPlates]);
+  useEffect(() => { setSel(null); setPickedLights([]); setDrag(null); fit(); load(); loadPlates(); }, [load, loadPlates, fit]);
   useEffect(() => {
     setDrawPlate(false); setPlateBox(null); setPlateText("");
     // Bring the selected object's panel into view when it was picked from a long list or the image.
@@ -84,14 +90,19 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!item || (e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "SELECT") return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (!item || tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || e.ctrlKey || e.metaKey || e.altKey) return;
       const k = e.key.toLowerCase();
-      if (k === "j" && item.position.next) go(`/m/${missionId}/i/${item.position.next}`);
+      if (k === " ") { if (!e.repeat) setSpaceHeld(true); }
+      else if (k === "+" || k === "=") zoomAt(1.5);
+      else if (k === "-" || k === "_") zoomAt(1 / 1.5);
+      else if (k === "0") fit();
+      else if (k === "j" && item.position.next) go(`/m/${missionId}/i/${item.position.next}`);
       else if (k === "k" && item.position.prev) go(`/m/${missionId}/i/${item.position.prev}`);
       else if (k === "a") approve();
       else if (k === "b") setDrawing((d) => !d);
       else if (k === "h") setOverlays((o) => !o);
-      else if (k === "escape") { setDrawing(false); setDrawPlate(false); setPlateBox(null); setSel(null); setPickedLights([]); setHelp(false); }
+      else if (k === "escape") { setDrag(null); setDrawing(false); setDrawPlate(false); setPlateBox(null); setSel(null); setPickedLights([]); setHelp(false); }
       else if (k === "?") setHelp((h) => !h);
       else if ((k === "delete" || k === "backspace") && selObj) objAct(selObj.uid, { action: selObj.status === "removed" ? "restore" : "remove" });
       else if ((k === "delete" || k === "backspace") && selCand) candAct(selCand.uid, { action: "reject" });
@@ -104,23 +115,47 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
       } else return;
       e.preventDefault();
     };
+    const onKeyUp = (e: KeyboardEvent) => { if (e.key === " ") setSpaceHeld(false); };
+    const onBlur = () => setSpaceHeld(false);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 
-  const toImage = (e: React.MouseEvent) => {
-    const svg = svgRef.current!;
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const p = pt.matrixTransform(svg.getScreenCTM()!.inverse());
-    return { x: Math.max(0, Math.min(item!.width!, p.x)), y: Math.max(0, Math.min(item!.height!, p.y)) };
+  // Screen point to image pixels. Works out the letterboxed, zoomed image area from the drawn size of the layer.
+  const toImage = (e: React.PointerEvent) => {
+    const r = svgRef.current!.getBoundingClientRect();
+    const iw = item!.width ?? 1280, ih = item!.height ?? 720;
+    const s = Math.min(r.width / iw, r.height / ih);
+    const x = (e.clientX - r.left - (r.width - iw * s) / 2) / s, y = (e.clientY - r.top - (r.height - ih * s) / 2) / s;
+    return { x: Math.max(0, Math.min(iw, x)), y: Math.max(0, Math.min(ih, y)) };
   };
 
   if (err && !item) return <div className="page"><div className="msg err">{err}</div></div>;
   if (!item) return <div className="page muted">Loading…</div>;
   const W = item.width ?? 1280, H = item.height ?? 720;
-  const sw = Math.max(1.5, W / 640);
+  // Line widths and labels keep their size on screen at every zoom, so a close look shows the pixels, not thicker lines.
+  const sw = Math.max(1.5, W / 640) / view.z;
+  const zoomed = view.z > 1.001;
+  const canPan = spaceHeld || (zoomed && !drawAny);
+  // The image area inside the stage at fit, and what part of it is on screen now, both in image pixels.
+  const fitScale = size.w && size.h ? Math.min(size.w / W, size.h / H) : 1;
+  const imgLeft = (size.w - W * fitScale) / 2, imgTop = (size.h - H * fitScale) / 2;
+  const seen = {
+    x0: Math.max(0, (-view.tx / view.z - imgLeft) / fitScale), y0: Math.max(0, (-view.ty / view.z - imgTop) / fitScale),
+    x1: Math.min(W, ((size.w - view.tx) / view.z - imgLeft) / fitScale), y1: Math.min(H, ((size.h - view.ty) / view.z - imgTop) / fitScale),
+  };
+  const finishDrag = () => {
+    if (!drag) return;
+    const box = [Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1), Math.max(drag.x0, drag.x1), Math.max(drag.y0, drag.y1)];
+    setDrag(null);
+    // The smallest box is measured on screen, so a tiny vehicle can be drawn when zoomed in.
+    const min = 3 / view.z;
+    if (drawPlate) { if (box[2] - box[0] > min && box[3] - box[1] > min / 3) { setPlateBox(box.map((v) => Math.round(v * 10) / 10)); setDrawPlate(false); } }
+    else if (box[2] - box[0] > min && box[3] - box[1] > min) run(() => post(`${base}/objects`, { box: box.map((v) => Math.round(v * 10) / 10), cls: drawCls }));
+  };
+
   const counted = item.objects.filter((o) => o.counted).length + item.candidates.filter((c) => c.status === "confirmed").length;
   const open = item.candidates.filter((c) => c.status === "unresolved");
   const cmin = open.reduce((a, c) => a + c.count_min, 0), cmax = open.reduce((a, c) => a + c.count_max, 0);
@@ -144,8 +179,8 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
         </div>
         <div className="row">
           <button className={drawing ? "primary" : ""} onClick={() => setDrawing(!drawing)}>{drawing ? "Drawing: drag a box" : "Draw missed vehicle"} <kbd>B</kbd></button>
-          <select value={drawCls} onChange={(e) => setDrawCls(e.target.value)}>{CLASSES.map((c, i) => <option key={c} value={c}>{i + 1} {c}</option>)}</select>
-          <button onClick={() => setOverlays(!overlays)}>{overlays ? "Hide" : "Show"} overlays <kbd>H</kbd></button>
+          <select value={drawCls} onChange={(e) => { setDrawCls(e.target.value); e.target.blur(); }}>{CLASSES.map((c, i) => <option key={c} value={c}>{i + 1} {c}</option>)}</select>
+          <button aria-pressed={!overlays} title="Show or hide the marks on the image: vehicles, candidates, plates, regions and distance bands" onClick={() => setOverlays(!overlays)}>{overlays ? "Hide" : "Show"} results <kbd>H</kbd></button>
           <button className="primary" onClick={approve} disabled={item.processing_state !== "done"}
             title="Approve means every vehicle inside the included regions is marked correctly. The image can then train and test models, and unmarked areas count as road with no vehicle.">Approve <kbd>A</kbd></button>
           <button onClick={() => setHelp(true)}><kbd>?</kbd></button>
@@ -153,21 +188,43 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
       </div>
       {err && <div className="msg err">{err}</div>}
       <div className="inv">
-        <div className="stage">
+        <div ref={stageRef} className={`stage zoomable${canPan ? " can-pan" : ""}${spaceHeld ? " space" : ""}${panning ? " panning" : ""}`}>
+          <div className="stage-layer" style={{ transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.z})` }}>
           <img src={`/api/missions/${missionId}/images/${versionId}`} alt={item.file} draggable={false} />
           <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
-            style={{ cursor: drawAny ? "crosshair" : "default" }}
-            onMouseDown={(e) => { if (drawAny) { const p = toImage(e); setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y }); } }}
-            onMouseMove={(e) => { if (drag) { const p = toImage(e); setDrag({ ...drag, x1: p.x, y1: p.y }); } }}
-            onMouseUp={() => {
-              if (drag) {
-                const box = [Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1), Math.max(drag.x0, drag.x1), Math.max(drag.y0, drag.y1)];
-                setDrag(null);
-                if (drawPlate) { if (box[2] - box[0] > 3 && box[3] - box[1] > 1) { setPlateBox(box.map((v) => Math.round(v * 10) / 10)); setDrawPlate(false); } }
-                else if (box[2] - box[0] > 3 && box[3] - box[1] > 3) run(() => post(`${base}/objects`, { box, cls: drawCls }));
+            style={{ cursor: canPan ? undefined : drawAny ? "crosshair" : "default" }}
+            onPointerDown={(e) => {
+              // Pointer capture keeps the drag ours until the button is released, even outside the image,
+              // and preventDefault stops the browser from selecting box labels as text and then dragging that text.
+              const background = e.target === e.currentTarget || (e.target as Element).tagName === "polygon";
+              if (e.button === 1 || (e.button === 0 && (spaceHeld || (zoomed && !drawAny && background)))) {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                panRef.current = { x: e.clientX, y: e.clientY, moved: false };
+                setPanning(true);
+              } else if (e.button === 0 && drawAny) {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                const p = toImage(e);
+                setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
               }
             }}
-            onClick={() => !drawAny && setSel(null)}>
+            onPointerMove={(e) => {
+              const pan = panRef.current;
+              if (pan) {
+                const dx = e.clientX - pan.x, dy = e.clientY - pan.y;
+                if (Math.abs(dx) + Math.abs(dy) > 2) pan.moved = true;
+                panRef.current = { ...pan, x: e.clientX, y: e.clientY };
+                panBy(dx, dy);
+              } else if (drag) { const p = toImage(e); setDrag({ ...drag, x1: p.x, y1: p.y }); }
+            }}
+            onPointerUp={() => { if (panRef.current) setPanning(false); else finishDrag(); }}
+            onPointerCancel={() => { panRef.current = null; setPanning(false); setDrag(null); }}
+            onClick={() => {
+              const pan = panRef.current;
+              panRef.current = null;
+              if (!drawAny && !pan?.moved) setSel(null);
+            }}>
             <defs>
               <pattern id="hatch" width={10 * sw} height={10 * sw} patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
                 <line x1="0" y1="0" x2="0" y2={10 * sw} stroke="var(--exclude)" strokeWidth={sw} />
@@ -215,6 +272,41 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
             {drag && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)} height={Math.abs(drag.y1 - drag.y0)}
               fill={drawPlate ? "rgba(255,216,77,.15)" : "rgba(90,208,138,.15)"} stroke={drawPlate ? "var(--plate)" : "var(--human)"} strokeWidth={sw} strokeDasharray={`${8 * sw} ${4 * sw}`} />}
           </svg>
+          </div>
+          {!overlays && <div className="stage-note quiet" role="status">Results hidden <span className="muted">press</span> <kbd>H</kbd> <span className="muted">to show</span></div>}
+          {zoomed && size.w > 0 && (
+            <div className="minimap" title="Where you are in the image. Click to move there."
+              style={{ width: 168, height: 168 * H / W }}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                const r = e.currentTarget.getBoundingClientRect();
+                const ix = (e.clientX - r.left) / r.width * W, iy = (e.clientY - r.top) / r.height * H;
+                centerOn(imgLeft + ix * fitScale, imgTop + iy * fitScale);
+              }}>
+              <img src={`/api/missions/${missionId}/images/${versionId}`} alt="" draggable={false} />
+              <div className="minimap-view" style={{
+                left: `${seen.x0 / W * 100}%`, top: `${seen.y0 / H * 100}%`,
+                width: `${Math.max(0, seen.x1 - seen.x0) / W * 100}%`, height: `${Math.max(0, seen.y1 - seen.y0) / H * 100}%`,
+              }} />
+            </div>
+          )}
+          <div className="zoombar" role="toolbar" aria-label="Zoom">
+            <button className="icon" onClick={() => zoomAt(1 / 1.5)} disabled={!zoomed} title="Zoom out (−)" aria-label="Zoom out">
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+            </button>
+            <button className="zoom-level" onClick={fit} disabled={!zoomed} title="Fit the whole image (0)">{Math.round(view.z * 100)}%</button>
+            <button className="icon" onClick={() => zoomAt(1.5)} disabled={view.z >= 9.99} title="Zoom in (+)" aria-label="Zoom in">
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 8h10M8 3v10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+            </button>
+            <span className="zoombar-sep" aria-hidden="true" />
+            <button className={`icon${overlays ? "" : " off"}`} onClick={() => setOverlays(!overlays)} aria-pressed={!overlays}
+              title={`${overlays ? "Hide" : "Show"} results (H)`} aria-label={`${overlays ? "Hide" : "Show"} results`}>
+              {overlays
+                ? <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8Z" fill="none" stroke="currentColor" strokeWidth="1.4" /><circle cx="8" cy="8" r="2" fill="currentColor" /></svg>
+                : <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8Z" fill="none" stroke="currentColor" strokeWidth="1.4" /><path d="M2.5 13.5l11-11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>}
+            </button>
+          </div>
+          {zoomed && !panning && <div className="zoom-hint muted">{drawAny ? <>Hold <kbd>Space</kbd> and drag to move</> : <>Drag to move, scroll to zoom</>}</div>}
         </div>
         <aside className="side">
           <div className="card">
@@ -255,7 +347,7 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
               {selObj.machine_cls && selObj.machine_cls !== selObj.cls && <div className="muted">{selObj.origin === "change" ? "Found as" : "Detector said"} {selObj.machine_cls}</div>}
               {selObj.origin === "change" && <div className="muted">This part of the road differs from the view's empty background{selObj.machine_cls === "vehicle" ? "; SAM 3.1 did not tell its type, so choose one if you can" : ""}.</div>}
               <div className="row" style={{ marginTop: 6 }}>
-                <select value={selObj.cls} onChange={(e) => objAct(selObj.uid, { action: "reclass", cls: e.target.value })}>{CLASSES.map((c) => <option key={c}>{c}</option>)}</select>
+                <select value={selObj.cls} onChange={(e) => { objAct(selObj.uid, { action: "reclass", cls: e.target.value }); e.target.blur(); }}>{CLASSES.map((c) => <option key={c}>{c}</option>)}</select>
                 <button className="danger" onClick={() => objAct(selObj.uid, { action: selObj.status === "removed" ? "restore" : "remove" })}>
                   {selObj.status === "removed" ? "Restore" : "Not a vehicle"} <kbd>Del</kbd></button>
               </div>
@@ -353,7 +445,8 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
             <table className="t"><tbody>
               {[["J / K", "Next / previous image"], ["A", "Approve this image"], ["B", "Draw a box for a missed vehicle"], ["Del", "Reject the selected object or candidate"],
                 ["C", "Confirm the selected candidate as a vehicle"], ["G", "Group the chosen lights into one candidate"], ["1–5", "Set class: " + CLASSES.join(", ")],
-                ["H", "Hide or show overlays"], ["Esc", "Cancel drawing or selection"], ["?", "This help"]].map(([k, v]) => <tr key={k}><td><kbd>{k}</kbd></td><td>{v}</td></tr>)}
+                ["H", "Hide or show results on the image"], ["Scroll, + / −", "Zoom in or out around the pointer"], ["0", "Fit the whole image"],
+                ["Space + drag", "Move around when zoomed in (or drag with the middle button)"], ["Esc", "Cancel drawing or selection"], ["?", "This help"]].map(([k, v]) => <tr key={k}><td><kbd>{k}</kbd></td><td>{v}</td></tr>)}
             </tbody></table>
           </div>
         </div>
