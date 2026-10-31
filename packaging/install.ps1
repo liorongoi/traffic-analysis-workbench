@@ -375,7 +375,12 @@ $hasTask = $false
 try { $hasTask = [bool](Get-ScheduledTask -TaskName "Traffic Analysis Workbench" -ErrorAction SilentlyContinue) } catch { }
 $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
 $running = $false
-try { $null = $wc.DownloadString("http://127.0.0.1:$Port/api/health"); $running = $true } catch { }
+try { $null = $wc.DownloadString("http://127.0.0.1:$Port/api/health"); $running = $true } catch {
+  # The first builds had no /api/health: an HTTP answer (404) still means a server is running there.
+  $e = $_.Exception
+  while ($e -and -not ($e -is [System.Net.WebException])) { $e = $e.InnerException }
+  if ($e -and $e.Response) { $running = $true }
+}
 if ($hasLink -or $hasTask) {
   & $auto -Mode restart -Target $Target -Port $Port
 } elseif ($running) {

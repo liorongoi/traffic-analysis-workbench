@@ -53,6 +53,13 @@ function Get-Port {
   return 8765
 }
 
+# True when the error is an HTTP answer (the first builds had no /api/health and answer 404): a server is there.
+function Test-HttpAnswer($err) {
+  $e = $err.Exception
+  while ($e -and -not ($e -is [System.Net.WebException])) { $e = $e.InnerException }
+  return [bool]($e -and $e.Response)
+}
+
 function Test-Server([int]$p) {
   # Straight to this computer: never through a proxy.
   try {
@@ -60,7 +67,7 @@ function Test-Server([int]$p) {
     $wc.Proxy = $null
     $null = $wc.DownloadString("http://127.0.0.1:$p/api/health")
     return $true
-  } catch { return $false }
+  } catch { return (Test-HttpAnswer $_) }
 }
 
 function Write-Runner {
@@ -153,7 +160,7 @@ function Get-RunningInstall([int]$p) {
     $wc.Proxy = $null
     $h = $wc.DownloadString("http://127.0.0.1:$p/api/health") | ConvertFrom-Json
     if ($h.install) { return [string]$h.install } else { return "" }
-  } catch { return $null }
+  } catch { if (Test-HttpAnswer $_) { return "" } else { return $null } }
 }
 
 if ($Mode -eq "open") {

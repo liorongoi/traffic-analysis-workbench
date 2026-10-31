@@ -9,7 +9,15 @@ $dir = "$env:LOCALAPPDATA\TrafficWorkbench"
 $data = "$env:USERPROFILE\TrafficData"
 $menu = Join-Path ([Environment]::GetFolderPath("Programs")) "LanePulse.lnk"
 $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
-function Get-Health { try { return ($wc.DownloadString("http://127.0.0.1:8765/api/health") | ConvertFrom-Json) } catch { return $null } }
+function Get-Health {
+  try { return ($wc.DownloadString("http://127.0.0.1:8765/api/health") | ConvertFrom-Json) } catch {
+    # The first builds had no /api/health (404): a server is running, of an unknown older build.
+    $e = $_.Exception
+    while ($e -and -not ($e -is [System.Net.WebException])) { $e = $e.InnerException }
+    if ($e -and $e.Response) { return [pscustomobject]@{ version = "older (no /api/health)"; install = "" } }
+    return $null
+  }
+}
 function Wait-Health {
   for ($i = 0; $i -lt 60; $i++) { $h = Get-Health; if ($h) { return $h }; Start-Sleep -Seconds 2 }
   Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 30 | Out-Host
