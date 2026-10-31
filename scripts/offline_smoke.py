@@ -111,7 +111,14 @@ def sam_check() -> dict:
     return out
 
 
+def step(name: str) -> None:
+    """Says on stderr which part of the check runs, so a check that stops says where."""
+    print(f"check: {name}", file=sys.stderr, flush=True)
+
+
 def main(argv=None) -> int:
+    import faulthandler
+    faulthandler.enable()   # a crash inside a compiled library still prints where it happened
     from trafficwb import safe_console
     safe_console()
     ap = argparse.ArgumentParser()
@@ -151,21 +158,27 @@ def main(argv=None) -> int:
         cv2.imwrite(str(p), img)
         os.utime(p, (old, old))
     t0 = time.time()
+    step("mission, scan and detect")
     assert mission_cli(["create", "--data", str(data), "--name", "Offline check – בדיקה", "--country", "IL",
                         "--zone", "Asia/Jerusalem", "--source", str(src), "--output", str(out)]) == 0
     mid = DataRoot(data).missions()[0]["id"]
     assert mission_cli(["scan", "--data", str(data), "--mission", mid, "--stability", "0"]) == 0
     assert mission_cli(["detect", "--data", str(data), "--mission", mid]) == 0
+    step("export")
     assert mission_cli(["export", "--data", str(data), "--mission", mid, "--formats", "csv,xlsx"]) == 0
     exported = sorted(p.name for p in out.rglob("*") if p.is_file())
     assert any(n.endswith(".csv") for n in exported) and any(n.endswith(".xlsx") for n in exported), exported
+    step("backup")
     b = admin.backup(data, bk, "smoke")
     assert admin.verify(b) == []
+    step("web server")
     page, health = web_check(data)
     assert '<div id="root">' in page and health.get("status") == "ok"
     from trafficwb.models import find
     from trafficwb.runtime import make_session
+    step("vehicle detector")
     _, info = make_session(find("yolox-s").weights)
+    step("SAM 3.1")
     sam = sam_check()
     from trafficwb.store import DataRoot as _DR
     m = _DR(data).open_mission(mid)

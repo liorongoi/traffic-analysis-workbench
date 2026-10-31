@@ -185,6 +185,89 @@ jobs:
             powershell -NoProfile -ExecutionPolicy Bypass -File C:\check\bare_windows_check.ps1
           if ($LASTEXITCODE -ne 0) { throw "LanePulse did not install or run on bare Windows" }
 
+  windows-failures:
+    # What can go wrong while installing on Windows: too little disk space (first install, update, unpacking Setup),
+    # Setup stopped part way (first install, and an update while LanePulse runs), files cut short by an interrupted
+    # copy; each followed by Setup again, then uninstall. See .github/scripts/windows_failures.ps1.
+    needs: bundle
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: LanePulse-Setup-*
+          path: setup
+          merge-multiple: true
+      - name: Install with things going wrong
+        shell: pwsh
+        env:
+          PIP_NO_INDEX: "1"
+          HTTPS_PROXY: http://127.0.0.1:9
+          HTTP_PROXY: http://127.0.0.1:9
+        run: |
+          # As on a workstation without Python.
+          $env:PATH = ($env:PATH -split ";" | Where-Object { $_ -notmatch "Python" }) -join ";"
+          foreach ($f in "py.exe", "pyw.exe") { if (Test-Path "C:\Windows\$f") { Rename-Item "C:\Windows\$f" "$f.hidden" } }
+          $exe = (Get-ChildItem setup -Filter *.exe | Select-Object -First 1).FullName
+          $ver = $exe -replace '.*LanePulse-Setup-(.+)\.exe$', '$1'
+          & .github\scripts\windows_failures.ps1 -Setup $exe -Version $ver
+
+  older-builds:
+    # Every earlier build from main whose Setup is still downloadable, for windows-update-from-older.
+    runs-on: ubuntu-latest
+    outputs:
+      runs: ${{ steps.find.outputs.runs }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs="$(gh run list -R "${{ github.repository }}" --workflow bundle.yml --branch main --status success -L 200 --json databaseId -q '.[].databaseId')"
+          out="[]"
+          for r in $runs; do
+            name="$(gh api "repos/${{ github.repository }}/actions/runs/$r/artifacts" --jq '[.artifacts[] | select((.name | test("-Setup-")) and (.expired | not))][0].name // empty')"
+            if [ -n "$name" ]; then out="$(echo "$out" | jq -c --arg r "$r" --arg n "$name" '. + [{run: $r, name: $n}]')"; fi
+          done
+          echo "$out" | jq .
+          echo "runs=$out" >> "$GITHUB_OUTPUT"
+
+  windows-update-from-older:
+    # This build's Setup over each earlier build from main while it runs: data and a model trained there kept, the
+    # earlier version kept for rollback, the new one running; then uninstall.
+    needs: [bundle, older-builds]
+    if: needs.older-builds.outputs.runs != '[]'
+    runs-on: windows-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        old: ${{ fromJSON(needs.older-builds.outputs.runs) }}
+    name: update from ${{ matrix.old.name }} (run ${{ matrix.old.run }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: LanePulse-Setup-*
+          path: setup
+          merge-multiple: true
+      - name: The earlier build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download ${{ matrix.old.run }} -R "${{ github.repository }}" -n "${{ matrix.old.name }}" -D old
+      - name: Update from it
+        shell: pwsh
+        env:
+          PIP_NO_INDEX: "1"
+          HTTPS_PROXY: http://127.0.0.1:9
+          HTTP_PROXY: http://127.0.0.1:9
+        run: |
+          $new = (Get-ChildItem setup -Filter *.exe | Select-Object -First 1).FullName
+          $old = (Get-ChildItem old -Recurse -Filter *.exe | Select-Object -First 1).FullName
+          $ver = $new -replace '.*LanePulse-Setup-(.+)\.exe$', '$1'
+          & .github\scripts\windows_update_from.ps1 -Old $old -New $new -Version $ver
+
   training-kit:
     # The kit for training the vehicle detector on an Apple-silicon Mac or an NVIDIA computer: the LanePulse wheel,
     # the two setup scripts and TRAINING.txt. Tried here on an Apple-silicon runner (its GPU is not available to
