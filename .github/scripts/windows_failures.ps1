@@ -21,7 +21,7 @@ function Step([string]$s) { Write-Host ""; Write-Host "===== $s" }
 function Get-Health { try { return ($wc.DownloadString("http://127.0.0.1:8765/api/health") | ConvertFrom-Json) } catch { return $null } }
 function Wait-Health([string]$what) {
   for ($i = 0; $i -lt 60; $i++) { $h = Get-Health; if ($h) { return $h }; Start-Sleep -Seconds 2 }
-  Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 30
+  Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 30 | Out-Host
   throw "$($what): the server did not answer"
 }
 function Start-App([string]$what) {
@@ -35,8 +35,8 @@ function Stop-App {
 }
 function Current { return (Get-Content "$dir\current.txt" -Raw).Trim() }
 function Show-Log([string]$what) {
-  Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 25
-  Get-Content "$env:RUNNER_TEMP\setup-$what.log" -ErrorAction SilentlyContinue | Select-Object -Last 25
+  Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 25 | Out-Host
+  Get-Content "$env:RUNNER_TEMP\setup-$what.log" -ErrorAction SilentlyContinue | Select-Object -Last 25 | Out-Host
 }
 function Invoke-Setup([string]$what, [int]$minutes = 20) {
   $p = Start-Process -PassThru $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/LOG=$env:RUNNER_TEMP\setup-$what.log"

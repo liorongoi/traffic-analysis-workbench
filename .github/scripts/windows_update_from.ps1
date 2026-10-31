@@ -12,14 +12,14 @@ $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
 function Get-Health { try { return ($wc.DownloadString("http://127.0.0.1:8765/api/health") | ConvertFrom-Json) } catch { return $null } }
 function Wait-Health {
   for ($i = 0; $i -lt 60; $i++) { $h = Get-Health; if ($h) { return $h }; Start-Sleep -Seconds 2 }
-  Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 30
+  Get-Content "$dir\logs\server.log" -ErrorAction SilentlyContinue | Select-Object -Last 30 | Out-Host
   return $null
 }
 function Invoke-Setup([string]$exe, [string]$what) {
   $p = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/LOG=$env:RUNNER_TEMP\setup-$what.log"
   $done = $p.WaitForExit(25 * 60 * 1000)
-  Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 15
-  if (-not $done) { Get-Content "$env:RUNNER_TEMP\setup-$what.log" | Select-Object -Last 30; throw "$($what): Setup did not finish" }
+  Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 15 | Out-Host
+  if (-not $done) { Get-Content "$env:RUNNER_TEMP\setup-$what.log" | Select-Object -Last 30 | Out-Host; throw "$($what): Setup did not finish" }
   return $p.ExitCode
 }
 
