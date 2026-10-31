@@ -63,6 +63,10 @@ The words SAM 3.1 is asked for are set per mission on the Overview (the defaults
 bicycle). Each word belongs to one of the five vehicle classes; a class with no words is not looked for. The same
 words type the vehicles found against empty-road backgrounds.
 
+SAM 3.1 has no fixed list of classes to choose from: it was trained on millions of short phrases and looks for any
+phrase it is given. Each "add a word" box therefore offers a drop-down of suggested road words (semi-trailer truck,
+lorry, minibus, ambulance, …) and still takes any word typed.
+
 A mission can also add up to eight classes of its own (a pedestrian or a tractor, say), each with at least one word.
 They are offered in review like the vehicle classes and exported under their own name. Each has a "counts as a
 vehicle" switch, off for a new class: when off, its objects are reviewed and exported but left out of the vehicle
