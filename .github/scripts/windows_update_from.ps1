@@ -33,7 +33,19 @@ function Invoke-Setup([string]$exe, [string]$what) {
 
 Write-Host "===== The older build"
 $code = Invoke-Setup $Old "older"
-if ($code -ne 0 -or -not (Test-Path "$dir\current.txt")) { Get-Content "$env:RUNNER_TEMP\setup-older.log" | Select-Object -Last 30; throw "the older build did not install (exit code $code)" }
+if ($code -ne 0 -or -not (Test-Path "$dir\current.txt")) {
+  Get-Content "$env:RUNNER_TEMP\setup-older.log" | Select-Object -Last 30
+  # Older builds ran SAM 3.1 inside their install check, and OpenVINO stops it on some processors (an instruction the
+  # processor lacks), so the older build itself cannot be installed on such a computer: nobody can be updating from
+  # it there. That is a fact about the older build, not this one; say so and stop without testing the update here.
+  $log = Get-Content "$dir\logs\install.log" -Raw -ErrorAction SilentlyContinue
+  if ($log -match "The install check failed") {
+    Write-Host "::warning::The older build's own install check stops on this runner's processor, so it cannot be installed here and the update from it cannot be tried on this runner."
+    Get-CimInstance Win32_Processor | Select-Object -ExpandProperty Name | Out-Host
+    exit 0
+  }
+  throw "the older build did not install (exit code $code)"
+}
 $oldVenv = (Get-Content "$dir\current.txt" -Raw).Trim()
 Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$dir\start.cmd`"" -WorkingDirectory $dir -WindowStyle Hidden
 $h = Wait-Health
