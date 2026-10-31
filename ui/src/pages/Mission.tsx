@@ -204,7 +204,7 @@ const SUGGESTED_WORDS: Record<string, Groups> = {
   car: [["Passenger cars", ["car", "taxi", "police car", "station wagon", "suv"]],
     ["Vans and pickups", ["van", "minivan", "pickup truck", "camper van", "motorhome"]],
     ["Emergency", ["ambulance"]]],
-  truck: [["Semi-trailers and full trailers", ["semi-trailer truck", "tractor-trailer", "articulated lorry", "truck with trailer", "trailer", "car transporter"]],
+  truck: [["Semi-trailers and full trailers", ["semi-trailer truck", "tractor-trailer", "articulated lorry", "truck with trailer", "car transporter"]],
     ["Rigid trucks", ["truck", "lorry", "box truck", "delivery truck"]],
     ["Special trucks", ["dump truck", "tanker truck", "fire truck", "garbage truck", "tow truck", "snow plough"]]],
   bus: [["Buses", ["bus", "minibus", "coach", "double-decker bus", "articulated bus", "school bus"]]],
