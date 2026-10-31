@@ -218,10 +218,14 @@ jobs:
           retention-days: 90
 
   mac-app:
-    # LanePulse.app for Apple-silicon Macs, with its own Python, packaged as a .dmg; then tried: offline check,
-    # start from the app, stop, start again.
+    # LanePulse.app for Apple-silicon Macs, an online installer packaged as a small .dmg: the first time it is opened
+    # it downloads its own Python, the packages and the models (each pinned to its SHA-256) into ~/LanePulse/runtime.
+    # Then tried: update over the previous build from main while it runs, an update with unchanged packages, a clean
+    # first install, the offline check with the internet blocked, start, stop, start again offline.
     runs-on: macos-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
+    env:
+      PYURL: https://github.com/astral-sh/python-build-standalone/releases/download/20250409/cpython-3.12.10+20250409-aarch64-apple-darwin-install_only.tar.gz
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -233,16 +237,16 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: python scripts/build_ui.py
-      - run: python -m pip install -e .
-      - run: python scripts/fetch_models.py
       - name: Python for the app (python-build-standalone, checked against its SHA-256)
         run: |
-          curl -fsSL -o "$RUNNER_TEMP/python.tar.gz" "https://github.com/astral-sh/python-build-standalone/releases/download/20250409/cpython-3.12.10+20250409-aarch64-apple-darwin-install_only.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/python.tar.gz" "$PYURL"
           echo "2d6477ecd10191675b7e7979e4b9e811fef36833ef3a7f3aa445eec305ce59a2  $RUNNER_TEMP/python.tar.gz" | shasum -a 256 -c
       - name: Build LanePulse.app and the .dmg
         id: mac
         run: |
-          packaging/mac/build_app.sh "$RUNNER_TEMP/python.tar.gz" dist-mac
+          packaging/mac/build_app.sh "$RUNNER_TEMP/python.tar.gz" "$PYURL" dist-mac
+          cat dist-mac/LanePulse.app/Contents/Resources/setup/packages.lock | cut -d' ' -f1-3 | sed 's|https://files.pythonhosted.org/packages/[^ ]*/||'
+          ls -la dist-mac
           echo "version=$(cat dist-mac/LanePulse.app/Contents/Resources/version.txt)" >> "$GITHUB_OUTPUT"
       - name: The previous build from main, to test updating over it
         env:
@@ -252,11 +256,10 @@ jobs:
           test -n "$run" || { echo "No earlier successful build on main to update from."; exit 1; }
           gh run download "$run" -R "${{ github.repository }}" -p "LanePulse-Mac-*" -D prev
           ls -lR prev
-      - name: Update over the previous build while it runs, then check training is ready
+      - name: Update over the previous build while it runs (sets up online), then an update with unchanged packages
         env:
           LANEPULSE_HOME: ${{ runner.temp }}/LanePulse
           LANEPULSE_NO_BROWSER: "1"
-          PIP_NO_INDEX: "1"
         run: |
           set -x
           hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/old" "$(ls prev/*/*.dmg | head -1)"
@@ -264,6 +267,7 @@ jobs:
           hdiutil detach "$RUNNER_TEMP/old"
           "$RUNNER_TEMP/LanePulse.app/Contents/MacOS/LanePulse"
           curl -fsS http://127.0.0.1:8765/api/health; echo
+          mkdir -p "$LANEPULSE_HOME/data/keep-me"
           # As Finder does when you drag the new app over the old one.
           rm -rf "$RUNNER_TEMP/LanePulse.app"
           hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/new" dist-mac/LanePulse-*.dmg
@@ -272,33 +276,47 @@ jobs:
           "$RUNNER_TEMP/LanePulse.app/Contents/MacOS/LanePulse"
           v="$(curl -fsS http://127.0.0.1:8765/api/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
           test "$v" = "${{ steps.mac.outputs.version }}" || { echo "the old server is still running ($v)"; exit 1; }
-          PY="$RUNNER_TEMP/LanePulse.app/Contents/Resources/python/bin/python3"
+          test -d "$LANEPULSE_HOME/data/keep-me"
+          PY="$LANEPULSE_HOME/runtime/python/bin/python3"
           "$PY" -c "from trafficwb import training_env as t; s = t.status(wait=True); print(s); assert s['state'] == 'ready' and s['coco_weights'], s"
+          # A newer build with the same packages: only LanePulse itself is installed again.
+          echo "${{ steps.mac.outputs.version }}-next" > "$RUNNER_TEMP/LanePulse.app/Contents/Resources/build.txt"
+          "$RUNNER_TEMP/LanePulse.app/Contents/MacOS/LanePulse"
+          grep -q "packages it uses are unchanged" "$LANEPULSE_HOME/logs/setup.log"
+          test "$(cat "$LANEPULSE_HOME/runtime/.build")" = "${{ steps.mac.outputs.version }}-next"
+          test "$(cat "$LANEPULSE_HOME/.server-version")" = "${{ steps.mac.outputs.version }}-next"
+          curl -fsS http://127.0.0.1:8765/api/health; echo
           "$LANEPULSE_HOME/Stop LanePulse.command"
           rm -rf "$RUNNER_TEMP/LanePulse.app" "$LANEPULSE_HOME"
-      - name: Try the app from the .dmg (offline check, start, stop, start)
+      - name: Try the app from the .dmg (clean first install, offline check, start, stop, start offline)
         env:
           LANEPULSE_HOME: ${{ runner.temp }}/LanePulse
           LANEPULSE_NO_BROWSER: "1"
-          PIP_NO_INDEX: "1"
         run: |
+          set -x
           hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/dmg" dist-mac/LanePulse-*.dmg
           cp -R "$RUNNER_TEMP/dmg/LanePulse.app" "$RUNNER_TEMP/LanePulse.app"
           hdiutil detach "$RUNNER_TEMP/dmg"
           APP="$RUNNER_TEMP/LanePulse.app"
           codesign --verify --deep "$APP"
-          PY="$APP/Contents/Resources/python/bin/python3"
           # Hide the runner's Python so only the app's own is used.
           export PATH="$(echo "$PATH" | tr ':' '\n' | grep -vi python | paste -sd: -)"
-          HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 "$PY" scripts/offline_smoke.py --work "$RUNNER_TEMP/check" --models "$APP/Contents/Resources/models"
+          "$APP/Contents/MacOS/LanePulse"
+          curl -fsS http://127.0.0.1:8765/api/health
+          "$LANEPULSE_HOME/Stop LanePulse.command"
+          PY="$LANEPULSE_HOME/runtime/python/bin/python3"
+          ls "$LANEPULSE_HOME/models" "$LANEPULSE_HOME/runtime/python/share/lanepulse"
+          export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
+          HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 "$PY" scripts/offline_smoke.py --work "$RUNNER_TEMP/check" --models "$LANEPULSE_HOME/models"
           "$APP/Contents/MacOS/LanePulse"
           curl -fsS http://127.0.0.1:8765/api/health
           test -x "$LANEPULSE_HOME/Stop LanePulse.command" && test -x "$LANEPULSE_HOME/Import Model.command"
-          ls "$LANEPULSE_HOME/models"
+          grep -q 'runtime/python/bin/python3' "$LANEPULSE_HOME/Import Model.command"
           "$LANEPULSE_HOME/Stop LanePulse.command"
           for i in $(seq 30); do curl -fsS -m 2 http://127.0.0.1:8765/api/health >/dev/null 2>&1 || break; sleep 1; done
           if curl -fsS -m 2 http://127.0.0.1:8765/api/health; then echo "server still running after stop"; exit 1; fi
-          "$APP/Contents/MacOS/LanePulse"
+          # Opened again with the internet blocked: nothing is downloaded, it starts.
+          HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 "$APP/Contents/MacOS/LanePulse"
           curl -fsS http://127.0.0.1:8765/api/health
           "$LANEPULSE_HOME/Stop LanePulse.command"
           tail -20 "$LANEPULSE_HOME/logs/server.log"
