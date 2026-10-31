@@ -2,6 +2,7 @@
 chosen there (not greyed out), as a person would see it. Saves a screenshot.
     python mac_sam_screen.py <url> <screenshot.png>
 """
+import re
 import sys
 
 from playwright.sync_api import sync_playwright
@@ -11,7 +12,8 @@ with sync_playwright() as p:
     b = p.chromium.launch()
     page = b.new_page(viewport={"width": 1280, "height": 1000})
     page.goto(url.rstrip("/") + "/#/new")
-    choice = page.locator("label.choice", has_text="SAM 3.1")
+    # The "Both" option mentions SAM 3.1 too, so match the option whose text starts with it.
+    choice = page.locator("label.choice", has_text=re.compile(r"^\s*SAM 3\.1"))
     choice.wait_for(timeout=30000)
     page.screenshot(path=shot, full_page=True)
     text = choice.inner_text()
