@@ -197,22 +197,52 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
 
 const CLASS_LABEL: Record<string, string> = { car: "Car", truck: "Truck", bus: "Bus", motorcycle: "Motorcycle", bicycle: "Bicycle" };
 
-/** Road words offered in the drop-down beside each "add a word" box. SAM 3.1 has no fixed class list (it looks
- *  for whatever phrase it is given), so these are only suggestions; any word can be typed. */
-const SUGGESTED_WORDS: Record<string, string[]> = {
-  car: ["car", "van", "pickup truck", "suv", "taxi", "police car", "ambulance", "station wagon", "minivan", "camper van", "motorhome"],
-  truck: ["truck", "lorry", "semi-trailer truck", "tractor-trailer", "articulated lorry", "truck with trailer", "trailer",
-    "box truck", "dump truck", "tanker truck", "fire truck", "garbage truck", "tow truck", "car transporter", "delivery truck"],
-  bus: ["bus", "minibus", "coach", "double-decker bus", "articulated bus", "school bus"],
-  motorcycle: ["motorcycle", "scooter", "moped", "motorbike"],
-  bicycle: ["bicycle", "cyclist", "electric scooter", "cargo bike"],
+/** Road words offered in the drop-down beside each "add a word" box, grouped under the class they belong to. SAM 3.1
+ *  has no fixed class list (it looks for whatever phrase it is given), so these are only suggestions. */
+type Groups = [string, string[]][];
+const SUGGESTED_WORDS: Record<string, Groups> = {
+  car: [["Passenger cars", ["car", "taxi", "police car", "station wagon", "suv"]],
+    ["Vans and pickups", ["van", "minivan", "pickup truck", "camper van", "motorhome"]],
+    ["Emergency", ["ambulance"]]],
+  truck: [["Semi-trailers and full trailers", ["semi-trailer truck", "tractor-trailer", "articulated lorry", "truck with trailer", "trailer", "car transporter"]],
+    ["Rigid trucks", ["truck", "lorry", "box truck", "delivery truck"]],
+    ["Special trucks", ["dump truck", "tanker truck", "fire truck", "garbage truck", "tow truck", "snow plough"]]],
+  bus: [["Buses", ["bus", "minibus", "coach", "double-decker bus", "articulated bus", "school bus"]]],
+  motorcycle: [["Motorcycles", ["motorcycle", "motorbike", "scooter", "moped"]]],
+  bicycle: [["Bicycles", ["bicycle", "cyclist", "cargo bike", "electric scooter"]]],
 };
-const SUGGESTED_CLASSES: Record<string, string[]> = {
-  pedestrian: ["pedestrian", "person"], tractor: ["tractor"], trailer: ["trailer", "caravan"],
-  "farm machinery": ["combine harvester", "tractor"], "construction vehicle": ["excavator", "wheel loader", "road roller"],
-  tram: ["tram"], "emergency vehicle": ["ambulance", "fire truck", "police car"], animal: ["deer", "moose", "dog", "horse"], "snow plough": ["snow plough", "snowplow"],
-};
-const ALL_SUGGESTED = [...new Set([...Object.values(SUGGESTED_WORDS).flat(), ...Object.values(SUGGESTED_CLASSES).flat()])];
+/** Classes a mission may add, grouped, each with the words to start from. */
+const SUGGESTED_CLASSES: [string, [string, string[]][]][] = [
+  ["Other road users", [["pedestrian", ["pedestrian", "person"]]]],
+  ["Farm and work vehicles", [["tractor", ["tractor"]], ["farm machinery", ["combine harvester", "tractor"]],
+    ["construction vehicle", ["excavator", "wheel loader", "road roller"]], ["snow plough", ["snow plough", "snowplow"]]]],
+  ["Emergency", [["emergency vehicle", ["ambulance", "fire truck", "police car"]]]],
+  ["Trailers on their own", [["trailer", ["trailer", "caravan"]]]],
+  ["Rail", [["tram", ["tram"]]]],
+  ["Animals", [["animal", ["deer", "moose", "dog", "horse"]]]],
+];
+const CLASS_WORDS: Record<string, string[]> = Object.fromEntries(SUGGESTED_CLASSES.flatMap(([, cs]) => cs));
+/** The groups offered for a class: its own first, then the rest under "Other". */
+function groupsFor(c: string): Groups {
+  const own: Groups = SUGGESTED_WORDS[c] ?? (CLASS_WORDS[c] ? [["Suggested", CLASS_WORDS[c]]] : []);
+  const ownWords = new Set(own.flatMap(([, ws]) => ws));
+  const others: Groups = Object.entries(SUGGESTED_WORDS).filter(([k]) => k !== c)
+    .map(([k, gs]) => [`Other: ${CLASS_LABEL[k] ?? k}`, gs.flatMap(([, ws]) => ws).filter((w) => !ownWords.has(w))]);
+  return [...own, ...others];
+}
+
+/** A drop-down that adds the picked word at once; it shows a class's own groups first. */
+function WordPick({ groups, have, onPick, disabled, label }: { groups: Groups; have: string[]; onPick: (w: string) => void; disabled: boolean; label: string }) {
+  return (
+    <select aria-label={label} value="" disabled={disabled} onChange={(e) => { if (e.target.value) onPick(e.target.value); }}>
+      <option value="">pick a word…</option>
+      {groups.map(([g, ws]) => {
+        const left = ws.filter((w) => !have.includes(w));
+        return left.length ? <optgroup key={g} label={g}>{left.map((w) => <option key={w} value={w}>{w}</option>)}</optgroup> : null;
+      })}
+    </select>
+  );
+}
 
 /** The words SAM 3.1 is asked for, per class: each word found counts as that class. Classes of the mission's own
  *  (e.g. pedestrian, tractor) can be added, and left out of the vehicle count. */
@@ -245,7 +275,7 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
     if (!name) return;
     setErr(null);
     if (classes.includes(name)) { setErr(`There is already a class called ${name}.`); return; }
-    setWords({ ...words, [name]: [w] });
+    setWords({ ...words, [name]: newCls.word ? [w] : (CLASS_WORDS[name] ?? [w]) });
     setOut([...out, name]);  // a new class is not a vehicle until said so
     setNewCls({ name: "", word: "" });
   };
@@ -264,7 +294,7 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
   return (
     <div className="samwords">
       <h3>Words SAM 3.1 looks for</h3>
-      <p className="muted">Each word is asked on every image; what it finds counts as that class. SAM 3.1 has no fixed list of classes: it looks for whatever words you give it. Pick a suggestion from a box's list or type your own; remove a class's words to stop looking for it. Each word adds about half a second per image.</p>
+      <p className="muted">Each word is asked on every image; what it finds counts as that class. SAM 3.1 has no fixed list of classes: it looks for whatever words you give it. Pick a word from a class's list, grouped by kind, or type your own; remove a class's words to stop looking for it. Each word adds about half a second per image.</p>
       {classes.map((c) => {
         const mine = own.includes(c);
         return (
@@ -290,12 +320,10 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
               {(words[c] ?? []).length === 0 && <span className="muted">{mine ? "needs at least one word" : "not looked for"}</span>}
             </div>
             <form className="row" onSubmit={(e) => { e.preventDefault(); add(c); }}>
-              <input aria-label={`Add a word for ${c}`} placeholder="add a word, or pick one" value={draft[c] ?? ""} maxLength={40} disabled={busy}
-                list={`samwords-${c}`} onChange={(e) => setDraft({ ...draft, [c]: e.target.value })} />
-              <datalist id={`samwords-${c}`}>
-                {[...(SUGGESTED_WORDS[c] ?? SUGGESTED_CLASSES[c] ?? []), ...ALL_SUGGESTED]
-                  .filter((w, i, a) => a.indexOf(w) === i && !(words[c] ?? []).includes(w)).map((w) => <option key={w} value={w} />)}
-              </datalist>
+              <WordPick groups={groupsFor(c)} have={Object.values(words).flat()} disabled={busy} label={`Pick a word for ${c}`}
+                onPick={(w) => setWords({ ...words, [c]: [...(words[c] ?? []), w] })} />
+              <input aria-label={`Add a word for ${c}`} placeholder="or type one" value={draft[c] ?? ""} maxLength={40} disabled={busy}
+                onChange={(e) => setDraft({ ...draft, [c]: e.target.value })} />
               <button type="submit" disabled={busy || !(draft[c] ?? "").trim()}>Add</button>
             </form>
           </div>
@@ -303,17 +331,20 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
       })}
       <form className="row samwords-new" onSubmit={(e) => { e.preventDefault(); addClass(); }}>
         <b>New class</b>
-        <input aria-label="New class name" placeholder="name, e.g. pedestrian, or pick one" value={newCls.name} maxLength={24} disabled={busy}
-          list="samwords-newclass" onChange={(e) => {
-            const name = e.target.value, first = SUGGESTED_CLASSES[norm(name)]?.[0];
-            setNewCls({ name, word: first && !newCls.word ? first : newCls.word });
-          }} />
-        <datalist id="samwords-newclass">
-          {Object.keys(SUGGESTED_CLASSES).filter((c) => !classes.includes(c)).map((c) => <option key={c} value={c} />)}
-        </datalist>
+        <select aria-label="Pick a new class" value="" disabled={busy} onChange={(e) => {
+          const name = e.target.value;
+          if (name) setNewCls({ name, word: "" });  // no word typed: the class starts with all its suggested words
+        }}>
+          <option value="">pick a class…</option>
+          {SUGGESTED_CLASSES.map(([g, cs]) => {
+            const left = cs.filter(([c]) => !classes.includes(c));
+            return left.length ? <optgroup key={g} label={g}>{left.map(([c]) => <option key={c} value={c}>{c}</option>)}</optgroup> : null;
+          })}
+        </select>
+        <input aria-label="New class name" placeholder="or type a name" value={newCls.name} maxLength={24} disabled={busy}
+          onChange={(e) => setNewCls({ ...newCls, name: e.target.value })} />
         <input aria-label="First word for the new class" placeholder="word SAM looks for (optional)" value={newCls.word} maxLength={40} disabled={busy}
-          list="samwords-all" onChange={(e) => setNewCls({ ...newCls, word: e.target.value })} />
-        <datalist id="samwords-all">{ALL_SUGGESTED.map((w) => <option key={w} value={w} />)}</datalist>
+          onChange={(e) => setNewCls({ ...newCls, word: e.target.value })} />
         <button type="submit" disabled={busy || !newCls.name.trim()}>Add class</button>
       </form>
       <p className="muted">A class of your own appears in review and export. Untick “a vehicle” to keep it out of the vehicle count. It is not used to train the standard detector.</p>

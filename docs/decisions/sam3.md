@@ -64,8 +64,11 @@ bicycle). Each word belongs to one of the five vehicle classes; a class with no 
 words type the vehicles found against empty-road backgrounds.
 
 SAM 3.1 has no fixed list of classes to choose from: it was trained on millions of short phrases and looks for any
-phrase it is given. Each "add a word" box therefore offers a drop-down of suggested road words (semi-trailer truck,
-lorry, minibus, ambulance, …) and still takes any word typed.
+phrase it is given. Each class therefore offers a drop-down of suggested road words, grouped by kind: under Truck
+first "Semi-trailers and full trailers", "Rigid trucks" and "Special trucks", then the other classes' words. Words
+already used by any class are not offered again, so one word never counts as two classes. Any word can still be
+typed. The "New class" drop-down offers classes grouped the same way (other road users, farm and work vehicles,
+emergency, rail, animals), each starting with its suggested words.
 
 A mission can also add up to eight classes of its own (a pedestrian or a tractor, say), each with at least one word.
 They are offered in review like the vehicle classes and exported under their own name. Each has a "counts as a
