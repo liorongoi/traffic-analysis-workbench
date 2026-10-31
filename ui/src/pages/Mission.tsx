@@ -197,57 +197,102 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
 
 const CLASS_LABEL: Record<string, string> = { car: "Car", truck: "Truck", bus: "Bus", motorcycle: "Motorcycle", bicycle: "Bicycle" };
 
-/** The words SAM 3.1 is asked for, per vehicle class: each word found counts as that class. */
+/** The words SAM 3.1 is asked for, per class: each word found counts as that class. Classes of the mission's own
+ *  (e.g. pedestrian, tractor) can be added, and left out of the vehicle count. */
 function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<string, string[]>; busy: boolean; reload: () => void }) {
   const saved: Record<string, string[]> = m.config.sam3_words ?? defaults;
+  const savedOut: string[] = m.config.sam3_uncounted ?? [];
   const [words, setWords] = useState<Record<string, string[]>>(saved);
+  const [out, setOut] = useState<string[]>(savedOut);
   const [draft, setDraft] = useState<Record<string, string>>({});
+  const [newCls, setNewCls] = useState({ name: "", word: "" });
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  useEffect(() => { setWords(m.config.sam3_words ?? defaults); }, [m.config.sam3_words]);
-  const classes = Object.keys(defaults);
-  const changed = JSON.stringify(classes.map((c) => words[c] ?? [])) !== JSON.stringify(classes.map((c) => saved[c] ?? []));
-  const isDefault = JSON.stringify(classes.map((c) => words[c] ?? [])) === JSON.stringify(classes.map((c) => defaults[c]));
+  useEffect(() => { setWords(m.config.sam3_words ?? defaults); setOut(m.config.sam3_uncounted ?? []); }, [m.config.sam3_words, m.config.sam3_uncounted]);
+  const builtIn = Object.keys(defaults);
+  const own = Object.keys(words).filter((c) => !builtIn.includes(c));
+  const classes = [...builtIn, ...own];
+  const key = (w: Record<string, string[]>, o: string[]) => JSON.stringify([Object.keys(w).sort().map((c) => [c, w[c]]), [...o].sort()]);
+  const changed = key(words, out) !== key(saved, savedOut);
+  const isDefault = key(words, out) === key(defaults, []);
+  const norm = (t: string) => t.trim().toLowerCase().replace(/\s+/g, " ");
   const add = (c: string) => {
-    const w = (draft[c] ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+    const w = norm(draft[c] ?? "");
     if (!w) return;
     if (!(words[c] ?? []).includes(w)) setWords({ ...words, [c]: [...(words[c] ?? []), w] });
     setDraft({ ...draft, [c]: "" });
   };
   const remove = (c: string, w: string) => setWords({ ...words, [c]: (words[c] ?? []).filter((x) => x !== w) });
-  const save = async (body: Record<string, string[]> | null) => {
+  const addClass = () => {
+    const name = norm(newCls.name), w = norm(newCls.word) || name;
+    if (!name) return;
+    setErr(null);
+    if (classes.includes(name)) { setErr(`There is already a class called ${name}.`); return; }
+    setWords({ ...words, [name]: [w] });
+    setOut([...out, name]);  // a new class is not a vehicle until said so
+    setNewCls({ name: "", word: "" });
+  };
+  const dropClass = (c: string) => {
+    const { [c]: _, ...rest } = words;
+    setWords(rest);
+    setOut(out.filter((x) => x !== c));
+  };
+  const save = async (body: Record<string, string[]> | null, uncounted: string[]) => {
     setErr(null);
     setSaving(true);
-    try { await api(`/missions/${m.id}/sam3-words`, { method: "PUT", body: { words: body } }); reload(); }
+    try { await api(`/missions/${m.id}/sam3-words`, { method: "PUT", body: { words: body, uncounted } }); reload(); }
     catch (e) { setErr((e as ApiError).message); }
     finally { setSaving(false); }
   };
   return (
     <div className="samwords">
       <h3>Words SAM 3.1 looks for</h3>
-      <p className="muted">Each word is asked on every image; what it finds counts as that class. Add words such as “police car” or “tractor”, or remove a class's words to stop looking for it. Each word adds about half a second per image.</p>
-      {classes.map((c) => (
-        <div key={c} className="samwords-row">
-          <b>{CLASS_LABEL[c] ?? c}</b>
-          <div className="chips">
-            {(words[c] ?? []).map((w) => (
-              <span key={w} className="wordchip">{w}
-                <button aria-label={`Remove ${w}`} disabled={busy} onClick={() => remove(c, w)}>×</button>
-              </span>
-            ))}
-            {(words[c] ?? []).length === 0 && <span className="muted">not looked for</span>}
+      <p className="muted">Each word is asked on every image; what it finds counts as that class. Add words such as “police car”, or remove a class's words to stop looking for it. Each word adds about half a second per image.</p>
+      {classes.map((c) => {
+        const mine = own.includes(c);
+        return (
+          <div key={c} className="samwords-row">
+            <div>
+              <b>{CLASS_LABEL[c] ?? c}</b>
+              {mine && (
+                <div className="samwords-own">
+                  <label title="Count what this class finds as vehicles">
+                    <input type="checkbox" checked={!out.includes(c)} disabled={busy}
+                      onChange={(e) => setOut(e.target.checked ? out.filter((x) => x !== c) : [...out, c])} /> a vehicle
+                  </label>
+                  <button className="linkish" disabled={busy} onClick={() => dropClass(c)}>remove class</button>
+                </div>
+              )}
+            </div>
+            <div className="chips">
+              {(words[c] ?? []).map((w) => (
+                <span key={w} className="wordchip">{w}
+                  <button aria-label={`Remove ${w}`} disabled={busy} onClick={() => remove(c, w)}>×</button>
+                </span>
+              ))}
+              {(words[c] ?? []).length === 0 && <span className="muted">{mine ? "needs at least one word" : "not looked for"}</span>}
+            </div>
+            <form className="row" onSubmit={(e) => { e.preventDefault(); add(c); }}>
+              <input aria-label={`Add a word for ${c}`} placeholder="add a word" value={draft[c] ?? ""} maxLength={40} disabled={busy}
+                onChange={(e) => setDraft({ ...draft, [c]: e.target.value })} />
+              <button type="submit" disabled={busy || !(draft[c] ?? "").trim()}>Add</button>
+            </form>
           </div>
-          <form className="row" onSubmit={(e) => { e.preventDefault(); add(c); }}>
-            <input aria-label={`Add a word for ${c}`} placeholder="add a word" value={draft[c] ?? ""} maxLength={40} disabled={busy}
-              onChange={(e) => setDraft({ ...draft, [c]: e.target.value })} />
-            <button type="submit" disabled={busy || !(draft[c] ?? "").trim()}>Add</button>
-          </form>
-        </div>
-      ))}
+        );
+      })}
+      <form className="row samwords-new" onSubmit={(e) => { e.preventDefault(); addClass(); }}>
+        <b>New class</b>
+        <input aria-label="New class name" placeholder="name, e.g. pedestrian" value={newCls.name} maxLength={24} disabled={busy}
+          onChange={(e) => setNewCls({ ...newCls, name: e.target.value })} />
+        <input aria-label="First word for the new class" placeholder="word SAM looks for (optional)" value={newCls.word} maxLength={40} disabled={busy}
+          onChange={(e) => setNewCls({ ...newCls, word: e.target.value })} />
+        <button type="submit" disabled={busy || !newCls.name.trim()}>Add class</button>
+      </form>
+      <p className="muted">A class of your own appears in review and export. Untick “a vehicle” to keep it out of the vehicle count. It is not used to train the standard detector.</p>
       <div className="row" style={{ marginTop: 8 }}>
-        {changed && <button className="primary" disabled={busy || saving} onClick={() => save(words)}>{saving ? "Saving…" : "Use these words"}</button>}
-        {changed && <button onClick={() => setWords(saved)}>Cancel</button>}
-        {!isDefault && !changed && <button className="linkish" disabled={busy || saving} onClick={() => save(null)}>Back to the default words</button>}
+        {changed && <button className="primary" disabled={busy || saving} onClick={() => save(words, out)}>{saving ? "Saving…" : "Use these words"}</button>}
+        {changed && <button onClick={() => { setWords(saved); setOut(savedOut); }}>Cancel</button>}
+        {!isDefault && !changed && <button className="linkish" disabled={busy || saving} onClick={() => save(null, [])}>Back to the default words</button>}
       </div>
       {changed && <p className="muted">Images already processed keep their detections; the words apply to the next run.</p>}
       {err && <div className="msg err" role="alert">{err}</div>}

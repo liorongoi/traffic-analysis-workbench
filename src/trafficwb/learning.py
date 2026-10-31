@@ -106,6 +106,11 @@ class LearningService:
             for o in self.rs.objects(vid, include_removed=False):
                 if kind == "partial" and o.correction in (None, "none"):
                     continue            # untouched machine output is not a label in a partial review
+                if o.cls not in VEHICLE_CLASSES:
+                    # a class of the mission's own: the standard detector has no such class, and the area must not
+                    # be taught as background either
+                    ignore.append([round(float(v), 2) for v in o.box])
+                    continue
                 pos.append({"box": [round(float(v), 2) for v in o.box], "cls": o.cls, "uid": o.uid,
                             "source": "human" if o.origin == "human" or o.correction not in (None, "none") else "machine"})
             for c in self.rs.candidates(vid):

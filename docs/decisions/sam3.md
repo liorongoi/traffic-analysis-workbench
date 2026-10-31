@@ -60,9 +60,16 @@ kept. Each detection is stored with the model that found it; one found by both w
 both, so the export's model column shows where each vehicle came from. It takes about as long as SAM 3.1 alone.
 
 The words SAM 3.1 is asked for are set per mission on the Overview (the defaults: car, van, truck, bus, motorcycle,
-bicycle). Each word belongs to one of the five vehicle classes; a class with no words is not looked for. New classes
-of their own (a pedestrian, say) would also need review, export and training changes, so they are not offered yet.
-The same words type the vehicles found against empty-road backgrounds.
+bicycle). Each word belongs to one of the five vehicle classes; a class with no words is not looked for. The same
+words type the vehicles found against empty-road backgrounds.
+
+A mission can also add up to eight classes of its own (a pedestrian or a tractor, say), each with at least one word.
+They are offered in review like the vehicle classes and exported under their own name. Each has a "counts as a
+vehicle" switch, off for a new class: when off, its objects are reviewed and exported but left out of the vehicle
+count. They are not used to train the standard detector, whose classes are fixed; on the learning page they become
+"ignore" areas, so a reviewed pedestrian neither teaches nor penalises it.
+
+![Words and classes of your own](../sam3/13-own-classes.jpg)
 
 SAM 3.1 itself cannot be trained in LanePulse: the shipped export is for inference only, and training needs Meta's
 full-precision weights and a large NVIDIA GPU. Images reviewed in a SAM 3.1 or "Both" mission do train the standard

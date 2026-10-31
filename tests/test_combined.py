@@ -79,7 +79,9 @@ def test_words_to_look_for_are_checked_and_used():
     w = vehicle_prompts({"car": ["Car", " police  car ", "car"], "truck": ["truck", "tractor"]})
     assert w["car"] == ("car", "police car") and w["truck"] == ("truck", "tractor") and w["bus"] == ("bus",)
     assert vehicle_prompts({"bicycle": []})["bicycle"] == ()
-    for bad in ({"tank": ["tank"]}, {"car": ["x" * 41]}, {"car": ["van"], "truck": ["van"]},
+    own = vehicle_prompts({"pedestrian": ["person", "Pedestrian"]})
+    assert own["pedestrian"] == ("person", "pedestrian") and own["car"] == ("car", "van")
+    for bad in ({"Tank!": ["tank"]}, {"tractor": []}, {"car": ["x" * 41]}, {"car": ["van"], "truck": ["van"]},
                 {c: [] for c in VEHICLE_PROMPTS}):
         with pytest.raises(ValueError):
             vehicle_prompts(bad)
@@ -91,8 +93,8 @@ def test_mission_words_reach_sam(api, tmp_path):
     r = c.put(f"/api/missions/{mid}/sam3-words", json={"words": {"truck": ["truck", "tractor"]}}, headers=H1)
     assert r.status_code == 200 and r.json()["words"]["truck"] == ["truck", "tractor"] and not r.json()["default"]
     assert c.get(f"/api/missions/{mid}").json()["config"]["sam3_words"]["truck"] == ["truck", "tractor"]
-    bad = c.put(f"/api/missions/{mid}/sam3-words", json={"words": {"tank": ["tank"]}}, headers=H1)
-    assert bad.status_code == 400 and "tank" in bad.json()["message"]
+    bad = c.put(f"/api/missions/{mid}/sam3-words", json={"words": {"Tank!": ["tank"]}}, headers=H1)
+    assert bad.status_code == 400 and "Tank!" in bad.json()["message"]
     c.post(f"/api/missions/{mid}/job", headers=H1)
     assert wait(c, f"/api/missions/{mid}", key="job")["state"] == "finished"
     from trafficwb.store import DataRoot
@@ -102,3 +104,34 @@ def test_mission_words_reach_sam(api, tmp_path):
     m.con.close()
     r = c.put(f"/api/missions/{mid}/sam3-words", json={"words": None}, headers=H1)
     assert r.json()["default"] and c.get(f"/api/missions/{mid}").json()["config"]["sam3_words"] is None
+
+
+def test_a_class_of_your_own_is_found_reviewed_and_not_counted_when_so_set(api, tmp_path):
+    c, body, state = api
+    mid = c.post("/api/missions", json={**body, "detector": "sam3"}, headers=H1).json()["id"]
+    # the stand-in SAM outlines the bright road for every word; "pedestrian" takes over everything it finds
+    words = {"car": [], "truck": [], "bus": [], "motorcycle": [], "bicycle": [], "pedestrian": ["person"]}
+    bad = c.put(f"/api/missions/{mid}/sam3-words", json={"words": words, "uncounted": ["car"]}, headers=H1)
+    assert bad.status_code == 400
+    r = c.put(f"/api/missions/{mid}/sam3-words", json={"words": words, "uncounted": ["pedestrian"]}, headers=H1).json()
+    assert r["own_classes"] == ["pedestrian"] and r["uncounted"] == ["pedestrian"]
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    assert wait(c, f"/api/missions/{mid}", key="job")["state"] == "finished"
+    rows = c.post(f"/api/missions/{mid}/results", json={}, headers=H1).json()["rows"]
+    vid = rows[0]["source_version_id"]
+    item = c.post(f"/api/missions/{mid}/items/{vid}", json={}, headers=H1).json()
+    assert item["classes"][-1] == "pedestrian" and item["uncounted_classes"] == ["pedestrian"]
+    peds = [o for o in item["objects"] if o["cls"] == "pedestrian"]
+    assert peds and not any(o["counted"] for o in peds)
+    assert all(r["vehicle_count"] == 0 for r in rows)                      # listed, not counted
+    # reclassing to a class of the mission's own works; an unknown class is refused
+    uid = peds[0]["uid"]
+    assert c.patch(f"/api/missions/{mid}/items/{vid}/objects/{uid}", json={"action": "reclass", "cls": "bus"},
+                   headers=H1).status_code == 200
+    counts = {r["source_version_id"]: r["vehicle_count"]
+              for r in c.post(f"/api/missions/{mid}/results", json={}, headers=H1).json()["rows"]}
+    assert counts[vid] == 1                                               # now a bus: counted
+    assert c.patch(f"/api/missions/{mid}/items/{vid}/objects/{uid}", json={"action": "reclass", "cls": "pedestrian"},
+                   headers=H1).status_code == 200
+    assert c.patch(f"/api/missions/{mid}/items/{vid}/objects/{uid}", json={"action": "reclass", "cls": "dragon"},
+                   headers=H1).status_code == 400

@@ -53,21 +53,27 @@ VEHICLE_PROMPTS: dict[str, tuple[str, ...]] = {
 }
 assert set(VEHICLE_PROMPTS) == set(COCO_VEHICLES.values())
 MAX_WORDS = 12                 # per class; each word is one more pass of the prompt decoder (about half a second)
+MAX_OWN_CLASSES = 8            # classes a mission adds of its own (a pedestrian, a tractor)
+_CLASS_NAME = __import__("re").compile(r"^[a-z][a-z -]{1,23}$")
 
 
 def vehicle_prompts(words: dict | None) -> dict[str, tuple[str, ...]]:
-    """The words a mission asks SAM 3.1 for, per vehicle class (None: the defaults above). A class left out keeps
-    its default words; an empty list means that class is not looked for. Raises ValueError on bad input."""
+    """The words a mission asks SAM 3.1 for, per class (None: the defaults above). A vehicle class left out keeps
+    its default words; an empty list means that class is not looked for. Other keys are classes of the mission's
+    own (lower-case letters, 2 to 24 characters), each with at least one word. Raises ValueError on bad input."""
     if words is None:
         return dict(VEHICLE_PROMPTS)
     if not isinstance(words, dict):
-        raise ValueError("Words must be given per vehicle class.")
-    unknown = set(words) - set(VEHICLE_PROMPTS)
-    if unknown:
-        raise ValueError(f"Unknown vehicle class {', '.join(sorted(unknown))}; use {', '.join(VEHICLE_PROMPTS)}.")
+        raise ValueError("Words must be given per class.")
+    own = [k for k in words if k not in VEHICLE_PROMPTS]
+    for k in own:
+        if not isinstance(k, str) or not _CLASS_NAME.match(k):
+            raise ValueError(f"'{k}' is not a usable class name: use 2 to 24 lower-case letters, spaces or hyphens.")
+    if len(own) > MAX_OWN_CLASSES:
+        raise ValueError(f"At most {MAX_OWN_CLASSES} classes of your own.")
     out = {}
-    for cls, default in VEHICLE_PROMPTS.items():
-        ws = words.get(cls, list(default))
+    for cls in [*VEHICLE_PROMPTS, *own]:
+        ws = words.get(cls, list(VEHICLE_PROMPTS.get(cls, ())))
         if not isinstance(ws, (list, tuple)):
             raise ValueError(f"Words for {cls} must be a list.")
         clean = []
@@ -81,6 +87,8 @@ def vehicle_prompts(words: dict | None) -> dict[str, tuple[str, ...]]:
                 clean.append(w)
         if len(clean) > MAX_WORDS:
             raise ValueError(f"At most {MAX_WORDS} words per class ({cls} has {len(clean)}).")
+        if cls in own and not clean:
+            raise ValueError(f"Give at least one word for {cls}.")
         out[cls] = tuple(clean)
     seen: dict[str, str] = {}
     for cls, ws in out.items():
@@ -419,7 +427,7 @@ class Sam3Detector:
         dets = []
         for cls, score, box in raw:
             # What each class said about this box, as YOLOX's class scores do; the box's own class is its score.
-            cs = {c: 0.0 for c in VEHICLE_CLASSES}
+            cs = {c: 0.0 for c in self.prompts}
             for c2, s2, b2 in raw:
                 if _iou(box, b2) >= 0.5:
                     cs[c2] = max(cs[c2], round(s2, 4))

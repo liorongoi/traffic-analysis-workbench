@@ -903,7 +903,8 @@ class MissionConfig:
     longitude: float | None = None
     monitoring_enabled: bool = field(default=False)
     detector: str = "standard"
-    sam3_words: dict | None = None   # words SAM 3.1 looks for, per vehicle class; None: the defaults
+    sam3_words: dict | None = None   # words SAM 3.1 looks for, per class (the five, and any of the mission's own)
+    sam3_uncounted: list | None = None   # the mission's own classes listed and exported but not counted as vehicles
 
 
 @dataclass
@@ -961,6 +962,11 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
             vehicle_prompts(cfg.sam3_words)
         except ValueError as exc:
             v.errors.append(f"Words for SAM 3.1: {exc}")
+    if cfg.sam3_uncounted:
+        from .detect import VEHICLE_CLASSES
+        own = set(cfg.sam3_words or {}) - set(VEHICLE_CLASSES)
+        if not set(cfg.sam3_uncounted) <= own:
+            v.errors.append("Only a class of the mission's own can be left out of the vehicle count.")
 
     src = Path(cfg.source_dir)
     if not src.is_dir():

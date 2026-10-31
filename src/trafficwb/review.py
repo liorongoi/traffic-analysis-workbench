@@ -42,10 +42,11 @@ class Obj:
     score: float | None = None
     correction: str = "none"        # none | reclassed | moved | reclassed_moved | removed | added
     run_item_id: int | None = None
+    vehicle: bool = True            # False: a class of the mission's own that is not counted (a pedestrian)
 
     @property
     def counted(self) -> bool:
-        return self.status == "present" and self.in_region != 0
+        return self.status == "present" and self.in_region != 0 and self.vehicle
 
 
 @dataclass
@@ -169,7 +170,20 @@ class ReviewService:
                 o.correction = {(True, True): "reclassed_moved", (True, False): "reclassed",
                                 (False, True): "moved"}.get((o.cls != o.machine_cls, moved), "none")
         out = list(objs.values())
+        uncounted = self.uncounted()
+        for o in out:
+            o.vehicle = o.cls not in uncounted
         return out if include_removed else [o for o in out if o.status == "present"]
+
+    def classes(self) -> list[str]:
+        """The vehicle classes, then the classes of the mission's own (words for SAM 3.1)."""
+        own = [k for k in (getattr(self.m.config(), "sam3_words", None) or {}) if k not in VEHICLE_CLASSES]
+        return [*VEHICLE_CLASSES, *own]
+
+    def uncounted(self) -> set[str]:
+        cfg = self.m.config()
+        own = set(getattr(cfg, "sam3_words", None) or {}) - set(VEHICLE_CLASSES)
+        return set(getattr(cfg, "sam3_uncounted", None) or []) & own
 
     @staticmethod
     def _run_of(item) -> int | None:
@@ -217,10 +231,10 @@ class ReviewService:
         self._revise(version_id, uid, None, "added", "present", self._check_box(version_id, box), cls, author, note)
         return uid
 
-    @staticmethod
-    def _check_cls(cls: str) -> None:
-        if cls not in VEHICLE_CLASSES:
-            raise ValueError(f"Unknown class '{cls}'. Use one of: {', '.join(VEHICLE_CLASSES)}.")
+    def _check_cls(self, cls: str) -> None:
+        classes = self.classes()
+        if cls not in classes:
+            raise ValueError(f"Unknown class '{cls}'. Use one of: {', '.join(classes)}.")
 
     def _check_box(self, version_id: int, box) -> tuple:
         x1, y1, x2, y2 = map(float, box)
