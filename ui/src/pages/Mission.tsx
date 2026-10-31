@@ -203,6 +203,7 @@ type Groups = [string, string[]][];
 const SUGGESTED_WORDS: Record<string, Groups> = {
   car: [["Passenger cars", ["car", "taxi", "police car", "station wagon", "suv"]],
     ["Vans and pickups", ["van", "minivan", "pickup truck", "camper van", "motorhome"]],
+    ["Cars with trailers", ["car with trailer", "car towing a caravan"]],
     ["Emergency", ["ambulance"]]],
   truck: [["Semi-trailers and full trailers", ["semi-trailer truck", "tractor-trailer", "articulated lorry", "truck with trailer", "car transporter"]],
     ["Rigid trucks", ["truck", "lorry", "box truck", "delivery truck"]],
@@ -211,6 +212,19 @@ const SUGGESTED_WORDS: Record<string, Groups> = {
   motorcycle: [["Motorcycles", ["motorcycle", "motorbike", "scooter", "moped"]]],
   bicycle: [["Bicycles", ["bicycle", "cyclist", "cargo bike", "electric scooter"]]],
 };
+/** Extra search words, so typing "hgv", "semi" or "camper" also finds a suggestion. */
+const KEYWORDS: Record<string, string[]> = {
+  "truck": ["hgv", "heavy"], "lorry": ["hgv", "heavy"], "semi-trailer truck": ["semi", "hgv", "articulated", "heavy"],
+  "tractor-trailer": ["semi", "18-wheeler", "hgv", "heavy"], "articulated lorry": ["semi", "hgv", "heavy"],
+  "truck with trailer": ["full trailer", "drawbar", "hgv", "heavy"], "car transporter": ["trailer", "hgv"],
+  "tanker truck": ["hgv"], "car with trailer": ["trailer", "towing"], "car towing a caravan": ["trailer", "towing", "camper"],
+  "camper van": ["camper", "rv"], "motorhome": ["camper", "rv"], "pickup truck": ["pickup"],
+  "ambulance": ["emergency"], "police car": ["emergency"], "fire truck": ["emergency"],
+  "coach": ["bus"], "minibus": ["bus"], "moped": ["two-wheeler"], "scooter": ["two-wheeler"], "motorcycle": ["two-wheeler", "mc"],
+  "bicycle": ["bike", "two-wheeler"], "cyclist": ["bike"], "suv": ["jeep"], "taxi": ["cab"],
+};
+const matches = (w: string, q: string) => w.includes(q) || (KEYWORDS[w] ?? []).some((k) => k.includes(q));
+
 /** Classes a mission may add, grouped, each with the words to start from. */
 const SUGGESTED_CLASSES: [string, [string, string[]][]][] = [
   ["Other road users", [["pedestrian", ["pedestrian", "person"]]]],
@@ -233,41 +247,64 @@ function groupsFor(c: string): Groups {
 
 const classTitle = (c: string) => CLASS_LABEL[c] ?? c[0].toUpperCase() + c.slice(1);
 
-/** A type-in box: type any word and press Enter, or pick one of the suggestions, which are grouped by kind and
- *  narrowed to what has been typed. */
+/** A type-in box: type a leading word and every related suggestion is listed, grouped by kind (a group whose name
+ *  matches is shown whole, so "trailer" lists all trailer combinations). Tick one or several and add them together,
+ *  or press Enter to add the typed word itself. */
 function AddPick({ groups, have, onAdd, disabled, label, prompt, maxLength, wide }:
-  { wide?: boolean; groups: Groups; have: string[]; onAdd: (w: string) => void; disabled: boolean; label: string; prompt: string; maxLength: number }) {
+  { wide?: boolean; groups: Groups; have: string[]; onAdd: (ws: string[]) => void; disabled: boolean; label: string; prompt: string; maxLength: number }) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
-  const [hi, setHi] = useState(-1);
+  const [picked, setPicked] = useState<string[]>([]);
   const q = text.trim().toLowerCase();
-  const shown: Groups = groups.map(([g, ws]): [string, string[]] => [g, ws.filter((w) => !have.includes(w) && (!q || w.includes(q)))])
-    .filter(([, ws]) => ws.length);
+  const shown: Groups = groups.map(([g, ws]): [string, string[]] => {
+    const left = ws.filter((w) => !have.includes(w));
+    return [g, !q || g.toLowerCase().includes(q) ? left : left.filter((w) => matches(w, q))];
+  }).filter(([, ws]) => ws.length);
   const flat = shown.flatMap(([, ws]) => ws);
-  const pick = (w: string) => { if (w.trim()) onAdd(w); setText(""); setHi(-1); };
+  const toggle = (w: string) => setPicked(picked.includes(w) ? picked.filter((x) => x !== w) : [...picked, w]);
+  const toggleGroup = (ws: string[]) => {
+    const all = ws.every((w) => picked.includes(w));
+    setPicked(all ? picked.filter((w) => !ws.includes(w)) : [...picked, ...ws.filter((w) => !picked.includes(w))]);
+  };
+  const commit = (ws: string[]) => {
+    const clean = ws.map((w) => w.trim()).filter(Boolean);
+    if (clean.length) onAdd(clean);
+    setText(""); setPicked([]); setOpen(false);
+  };
   return (
     <div className={wide ? "addpick wide" : "addpick"} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false); }}>
       <input aria-label={label} placeholder={prompt} value={text} maxLength={maxLength} disabled={disabled}
         role="combobox" aria-expanded={open} autoComplete="off"
-        onFocus={() => setOpen(true)} onChange={(e) => { setText(e.target.value); setOpen(true); setHi(-1); }}
+        onFocus={() => setOpen(true)} onChange={(e) => { setText(e.target.value); setOpen(true); }}
         onKeyDown={(e) => {
-          if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHi(Math.min(hi + 1, flat.length - 1)); }
-          else if (e.key === "ArrowUp") { e.preventDefault(); setHi(Math.max(hi - 1, -1)); }
-          else if (e.key === "Enter") { e.preventDefault(); pick(hi >= 0 ? flat[hi] : text); }
-          else if (e.key === "Escape") { setText(""); setOpen(false); }
+          if (e.key === "Enter") { e.preventDefault(); commit(picked.length ? picked : [text]); }
+          else if (e.key === "Escape") { setText(""); setPicked([]); setOpen(false); }
         }} />
       {open && !disabled && (shown.length > 0 || q) && (
-        <div className="addpick-menu" role="listbox">
-          {q && !flat.includes(q) && <button type="button" className="addpick-own" onMouseDown={(e) => e.preventDefault()} onClick={() => pick(text)}>Add “{text.trim()}”</button>}
-          {shown.map(([g, ws]) => (
-            <div key={g}>
-              <div className="addpick-group">{g}</div>
-              {ws.map((w) => (
-                <button type="button" key={w} role="option" aria-selected={flat[hi] === w} className={flat[hi] === w ? "on" : ""}
-                  onMouseDown={(e) => e.preventDefault()} onClick={() => pick(w)}>{w}</button>
-              ))}
+        <div className="addpick-menu" role="listbox" aria-multiselectable="true" tabIndex={-1}>
+          {q && !flat.includes(q) && !picked.length && (
+            <button type="button" className="addpick-own" onMouseDown={(e) => e.preventDefault()} onClick={() => commit([text])}>Add “{text.trim()}”</button>
+          )}
+          <div className="addpick-list">
+            {shown.map(([g, ws]) => (
+              <div key={g}>
+                <label className="addpick-group" onMouseDown={(e) => e.preventDefault()}>
+                  <input type="checkbox" checked={ws.every((w) => picked.includes(w))} onChange={() => toggleGroup(ws)} /> {g}
+                </label>
+                {ws.map((w) => (
+                  <label key={w} className="addpick-opt" role="option" aria-selected={picked.includes(w)} onMouseDown={(e) => e.preventDefault()}>
+                    <input type="checkbox" checked={picked.includes(w)} onChange={() => toggle(w)} /> {w}
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+          {picked.length > 0 && (
+            <div className="addpick-foot">
+              <button type="button" className="linkish" onMouseDown={(e) => e.preventDefault()} onClick={() => setPicked([])}>Clear</button>
+              <button type="button" className="primary" onMouseDown={(e) => e.preventDefault()} onClick={() => commit(picked)}>Add {picked.length}</button>
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -293,17 +330,21 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
   const changed = key(words, out) !== key(saved, savedOut);
   const isDefault = key(words, out) === key(defaults, []);
   const norm = (t: string) => t.trim().toLowerCase().replace(/\s+/g, " ");
-  const addWord = (c: string, t: string) => {
-    const w = norm(t);
-    if (w && !(words[c] ?? []).includes(w)) setWords({ ...words, [c]: [...(words[c] ?? []), w] });
+  const addWord = (c: string, ts: string[]) => {
+    const have = words[c] ?? [];
+    const add = ts.map(norm).filter((w, i, a) => w && a.indexOf(w) === i && !have.includes(w));
+    if (add.length) setWords({ ...words, [c]: [...have, ...add] });
   };
   const remove = (c: string, w: string) => setWords({ ...words, [c]: (words[c] ?? []).filter((x) => x !== w) });
-  const addClass = (t: string) => {
-    const name = norm(t);
+  const addClass = (ts: string[]) => {
     setErr(null);
-    if (classes.includes(name)) { setErr(`There is already a class called ${name}.`); return; }
-    setWords({ ...words, [name]: CLASS_WORDS[name] ?? [name] });
-    setOut([...out, name]);  // a new class is not a vehicle until said so
+    const names = ts.map(norm).filter((n, i, a) => n && a.indexOf(n) === i);
+    const dup = names.filter((n) => classes.includes(n));
+    if (dup.length) { setErr(`There is already a class called ${dup.join(", ")}.`); return; }
+    const next = { ...words };
+    for (const n of names) next[n] = CLASS_WORDS[n] ?? [n];
+    setWords(next);
+    setOut([...out, ...names]);  // a new class is not a vehicle until said so
   };
   const dropClass = (c: string) => {
     const { [c]: _, ...rest } = words;
@@ -350,7 +391,7 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
                       ))}
                       {(words[c] ?? []).length === 0 && <span className="muted">not looked for</span>}
                       <AddPick groups={groupsFor(c)} have={used} disabled={busy} label={`Add a word for ${c}`} prompt="+ type a word"
-                        maxLength={40} onAdd={(w) => addWord(c, w)} />
+                        maxLength={40} onAdd={(ws) => addWord(c, ws)} />
                     </div>
                   </td>
                   <td className="ctr">

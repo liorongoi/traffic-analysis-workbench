@@ -65,8 +65,9 @@ words type the vehicles found against empty-road backgrounds.
 
 SAM 3.1 has no fixed list of classes to choose from: it was trained on millions of short phrases and looks for any
 phrase it is given. The words are kept in a small table (class, search words, counted), folded to a one-line summary
-until opened. Each class has a type-in box: type any word and press Enter, or pick one of the suggestions shown as
-you type, grouped by kind (under Truck first "Semi-trailers and full trailers", "Rigid trucks", "Special trucks").
+until opened. Each class has a type-in box: type a leading word ("trailer", "emergency", "hgv") and every related
+suggestion is listed, grouped by kind (under Truck first "Semi-trailers and full trailers", "Rigid trucks", "Special
+trucks"); tick one, several or a whole group and add them together, or press Enter to add the typed word itself.
 Words already used by a class are not offered again, so one word never counts as two classes. Classes are added
 the same way, from suggestions grouped as other road users, farm and work vehicles, emergency, rail and animals.
 
