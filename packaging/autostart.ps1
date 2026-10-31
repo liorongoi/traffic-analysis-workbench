@@ -146,7 +146,10 @@ function Stop-Server {
   # wait, so their files are not locked when an update or uninstall replaces them.
   $root = (Resolve-Path $Target -ErrorAction SilentlyContinue).Path
   if ($root) {
-    $mine = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($root + "\", [StringComparison]::OrdinalIgnoreCase) -and $_.Id -ne $PID })
+    # A process can end while this looks at it (its path then reads as empty): read the path once, and skip it.
+    $mine = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+      $path = $null; try { $path = [string]$_.Path } catch { }
+      $path -and $path.StartsWith($root + "\", [StringComparison]::OrdinalIgnoreCase) -and $_.Id -ne $PID })
     foreach ($proc in $mine) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
     foreach ($proc in $mine) { try { $null = $proc.WaitForExit(10000) } catch { } }
   }

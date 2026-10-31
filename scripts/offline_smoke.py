@@ -67,12 +67,48 @@ def web_check(data: Path) -> tuple[str, dict]:
 SAM3_MIN_FREE = 8.5e9     # one SAM 3.1 image peaks at about 7 GB of memory
 
 
+ILLEGAL_INSTRUCTION = (0xC000001D, -4)      # Windows STATUS_ILLEGAL_INSTRUCTION; SIGILL elsewhere
+
+
 def sam_check() -> dict:
-    """SAM 3.1, when its pack is installed: load it and, with enough free memory, outline a road on a synthetic street.
+    """SAM 3.1, when its pack is installed, checked in a separate process so that a crash inside OpenVINO (seen on
+    processors without an instruction it uses) cannot stop the install check. The result is kept for this processor:
+    where SAM 3.1 stopped, the screens say it does not run here instead of offering it.
 
     A failure is reported, not fatal: LanePulse works without SAM 3.1, and the screens say why it is unavailable.
-    With TWB_REQUIRE_SAM3=1 (the build machine's tests) any failure fails the check.
+    With TWB_REQUIRE_SAM3=1 (the build machine's tests) a failure fails the check, except a processor that cannot run
+    OpenVINO's code at all, which is reported.
     """
+    import subprocess
+
+    from trafficwb import sam3
+    if not sam3.available()["pack"]:
+        return {"installed": False}
+    p = subprocess.run([sys.executable, os.path.abspath(__file__), "--sam3-only"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    if p.stderr.strip():
+        print(p.stderr.strip(), file=sys.stderr)
+    if p.returncode == 0:
+        out = json.loads(p.stdout.strip().splitlines()[-1])
+        sam3.save_cpu_check(True, None)
+        return out
+    code = p.returncode & 0xFFFFFFFF if p.returncode > 0 else p.returncode
+    if p.returncode in ILLEGAL_INSTRUCTION or code in ILLEGAL_INSTRUCTION:
+        why = ("SAM 3.1 does not run on this computer's processor (it stopped on an instruction this processor does "
+               "not have). Everything else in LanePulse works.")
+        sam3.save_cpu_check(False, why)
+        print(f"warning: {why}", file=sys.stderr)
+        return {"installed": True, "ok": False, "error": f"illegal instruction (exit code 0x{code & 0xFFFFFFFF:08X})"}
+    if os.environ.get("TWB_REQUIRE_SAM3") == "1":
+        raise RuntimeError(f"the SAM 3.1 check stopped (exit code {p.returncode})")
+    why = f"SAM 3.1 stopped while it was checked on this computer (exit code {p.returncode})."
+    sam3.save_cpu_check(False, why)
+    print(f"warning: {why}", file=sys.stderr)
+    return {"installed": True, "ok": False, "error": why}
+
+
+def sam_check_here() -> dict:
+    """SAM 3.1: load it and, with enough free memory, outline a road on a synthetic street (in this process)."""
     import cv2
     import numpy as np
     import psutil
@@ -122,12 +158,18 @@ def main(argv=None) -> int:
     from trafficwb import safe_console
     safe_console()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--work", required=True)
+    ap.add_argument("--sam3-only", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--work")
     ap.add_argument("--models")
     ap.add_argument("--images", help="use these images (names with UTC times) instead of synthetic ones")
     a = ap.parse_args(argv)
     if a.models:
         os.environ["TWB_MODELS"] = a.models
+    if a.sam3_only:          # the separate process sam_check() starts
+        print(json.dumps(sam_check_here(), ensure_ascii=False))
+        return 0
+    if not a.work:
+        ap.error("--work is required")
     import cv2
     import numpy as np
 
