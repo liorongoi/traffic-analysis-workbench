@@ -298,14 +298,21 @@ function Install-Env([string]$build) {
       throw "$why The install check failed; the previous version stays in use."
     }
   }
-  $work = Join-Path $env:TEMP ("twb-check-" + [guid]::NewGuid())
-  # Its messages and any error go to the log too, so a failed check says why.
-  $errFile = "$work.err.txt"
-  $lines = & $script:VPy (Join-Path $Bundle "offline_smoke.py") --work $work --models $Models 2> $errFile
-  $code = $LASTEXITCODE
-  $lines | ForEach-Object { Write-Host $_ }
-  Get-Content $errFile -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\s*$' } | ForEach-Object { Write-Host $_ }
-  Remove-Item $errFile -Force -ErrorAction SilentlyContinue
+  # Its messages and any error go to the log too, so a failed check says why. A check that stops is tried once more
+  # (a compiled library can fail once, for example while the running older version is busy), and the log says so.
+  for ($try = 1; $try -le 2; $try++) {
+    $work = Join-Path $env:TEMP ("twb-check-" + [guid]::NewGuid())
+    $errFile = "$work.err.txt"
+    $lines = & $script:VPy (Join-Path $Bundle "offline_smoke.py") --work $work --models $Models 2> $errFile
+    $code = $LASTEXITCODE
+    $lines | ForEach-Object { Write-Host $_ }
+    Get-Content $errFile -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\s*$' } | ForEach-Object { Write-Host $_ }
+    Remove-Item $errFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+    if ($code -eq 0) { break }
+    Write-Host ("The install check stopped (exit code {0}, 0x{0:X8})." -f $code)
+    if ($try -eq 1) { Write-Host "Trying the install check again." }
+  }
   if ($code -ne 0) { throw "The install check failed; the previous version stays in use." }
   $result = ($lines | Select-Object -Last 1) | ConvertFrom-Json
   return $result.accelerator.accelerator

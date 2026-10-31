@@ -49,6 +49,8 @@ if ($code -ne 0) {
   Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 250 | Out-Host
   throw "the update failed (exit code $code)"
 }
+# The install check is tried twice when it stops; show why the first try stopped.
+Select-String -Path "$dir\logs\install.log" -Pattern "The install check stopped" -Context 40, 1 | Out-Host
 $venv = (Get-Content "$dir\current.txt" -Raw).Trim()
 if ($venv -eq $oldVenv) { throw "the update did not switch to the new version" }
 if ((Get-Content "$dir\previous.txt" -Raw).Trim() -ne $oldVenv) { throw "the older version is not kept for rollback" }
