@@ -22,7 +22,7 @@ function Test-Uninstall([string]$Dir, [string]$Data, [string]$KeepModel = "") {
   if ($KeepModel -and -not (Test-Path (Join-Path (Join-Path $Dir $KeepModel) "model.json"))) { $problems += "the model trained on this computer was deleted" }
 
   # Nothing still running from the install folder, and the server is stopped.
-  $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($Dir + "\", [StringComparison]::OrdinalIgnoreCase) })
+  $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $path = $null; try { $path = [string]$_.Path } catch { }; $path -and $path.StartsWith($Dir + "\", [StringComparison]::OrdinalIgnoreCase) })
   if ($running) { $problems += "still running: $(($running | ForEach-Object { "$($_.ProcessName) $($_.Id)" }) -join ', ')" }
   # Also a command window still running the restart loop (cmd.exe itself lives in System32).
   $loops = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -like "*$Dir*" -and $_.ProcessId -ne $PID })
