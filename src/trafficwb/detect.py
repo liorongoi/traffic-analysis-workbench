@@ -27,6 +27,7 @@ class Detection:
     cls: str
     score: float
     class_scores: dict[str, float]
+    found_by: str | None = None             # with two detectors: "standard", "sam3" or "both"
 
 
 @dataclass

@@ -135,6 +135,8 @@ export type Item = {
   bands: NightBands | null;
   regions: Region[];
   position: { index: number | null; total: number; prev: number | null; next: number | null };
+  classes?: string[];
+  uncounted_classes?: string[];
 };
 
 export type Job = {

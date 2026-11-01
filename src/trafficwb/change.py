@@ -294,8 +294,9 @@ def overlaps(a, b, share: float = 0.5) -> bool:
     return small > 0 and ix * iy / small >= share
 
 
-def sam_check(engine, img_bgr: np.ndarray, c: Change, p: ChangeParams) -> None:
-    """Ask SAM 3.1 about a zoomed-in crop around the change; type the vehicle when it sees one there."""
+def sam_check(engine, img_bgr: np.ndarray, c: Change, p: ChangeParams, words: dict | None = None) -> None:
+    """Ask SAM 3.1 about a zoomed-in crop around the change; type the vehicle when it sees one there.
+    ``words``: the mission's words per vehicle class (None: the defaults)."""
     from .sam3 import VEHICLE_PROMPTS
     h, w = img_bgr.shape[:2]
     x1, y1, x2, y2 = c.box
@@ -305,7 +306,7 @@ def sam_check(engine, img_bgr: np.ndarray, c: Change, p: ChangeParams) -> None:
     cx1, cy1 = int(max(0, x1 - mx)), int(max(0, y1 - my))
     cx2, cy2 = int(min(w, x2 + mx)), int(min(h, y2 + my))
     crop = img_bgr[cy1:cy2, cx1:cx2]
-    prompts = {q: cls for cls, qs in VEHICLE_PROMPTS.items() for q in qs}
+    prompts = {q: cls for cls, qs in (words or VEHICLE_PROMPTS).items() for q in qs}
     found = engine.segment(crop, list(prompts), p.sam_threshold)
     best = None
     for q, insts in found.items():
@@ -333,6 +334,13 @@ class ChangeService:
         self.m = mission
         self.con: sqlite3.Connection = mission.con
         self.p = params or ChangeParams()
+
+    def _words(self) -> dict | None:
+        from .sam3 import vehicle_prompts
+        try:
+            return vehicle_prompts(getattr(self.m.config(), "sam3_words", None))
+        except ValueError:
+            return None
 
     def describe(self) -> dict:
         return {"algo": ALGO, "params": self.p.record(), "conditions": list(CONDITIONS),
@@ -584,7 +592,7 @@ class ChangeService:
                 continue          # already counted; SAM is not asked
             if engine is not None:
                 try:
-                    sam_check(engine, img, c, self.p)
+                    sam_check(engine, img, c, self.p, self._words())
                 except Exception as exc:  # a SAM failure must not lose the change
                     c.flags.append(f"sam_failed: {type(exc).__name__}")
             else:

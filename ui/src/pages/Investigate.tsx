@@ -4,7 +4,7 @@ import { go } from "../router";
 import { useZoom } from "../components/zoom";
 import { loadQuery } from "./Mission";
 
-const CLASSES = ["car", "truck", "bus", "motorcycle", "bicycle"];
+const VEHICLE_CLASSES = ["car", "truck", "bus", "motorcycle", "bicycle"];
 type Sel = { kind: "obj" | "cand"; uid: string } | null;
 
 // Machine, human and candidate marks differ by line style and label, not by colour alone (UX-01).
@@ -83,6 +83,7 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
   const markEmpty = (empty: boolean) => run(() => api(`${base}/empty`, { method: "PUT", body: { empty } }));
   const plateAct = (pid: number, body: object) => run(async () => { await post(`/missions/${missionId}/plates/${pid}/revise`, body); await loadPlates(); });
 
+  const CLASSES = item?.classes ?? VEHICLE_CLASSES;
   const selObj = item?.objects.find((o) => sel?.kind === "obj" && o.uid === sel.uid);
   const selCand = item?.candidates.find((c) => sel?.kind === "cand" && c.uid === sel.uid);
   const selPlate = selObj ? plates[selObj.uid] : undefined;
@@ -108,7 +109,7 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
       else if ((k === "delete" || k === "backspace") && selCand) candAct(selCand.uid, { action: "reject" });
       else if (k === "c" && selCand) candAct(selCand.uid, { action: "confirm", cls: drawCls });
       else if (k === "g" && pickedLights.length) run(() => post(`${base}/regroup`, { light_ids: pickedLights })).then(() => setPickedLights([]));
-      else if (/^[1-5]$/.test(k)) {
+      else if (/^[1-9]$/.test(k) && Number(k) <= CLASSES.length) {
         const cls = CLASSES[Number(k) - 1];
         setDrawCls(cls);
         if (selObj && selObj.cls !== cls) objAct(selObj.uid, { action: "reclass", cls });
@@ -444,7 +445,7 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
             <h2>Keyboard shortcuts</h2>
             <table className="t"><tbody>
               {[["J / K", "Next / previous image"], ["A", "Approve this image"], ["B", "Draw a box for a missed vehicle"], ["Del", "Reject the selected object or candidate"],
-                ["C", "Confirm the selected candidate as a vehicle"], ["G", "Group the chosen lights into one candidate"], ["1–5", "Set class: " + CLASSES.join(", ")],
+                ["C", "Confirm the selected candidate as a vehicle"], ["G", "Group the chosen lights into one candidate"], ["1–" + CLASSES.length, "Set class: " + CLASSES.join(", ")],
                 ["H", "Hide or show results on the image"], ["Scroll, + / −", "Zoom in or out around the pointer"], ["0", "Fit the whole image"],
                 ["Space + drag", "Move around when zoomed in (or drag with the middle button)"], ["Esc", "Cancel drawing or selection"], ["?", "This help"]].map(([k, v]) => <tr key={k}><td><kbd>{k}</kbd></td><td>{v}</td></tr>)}
             </tbody></table>

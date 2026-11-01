@@ -68,10 +68,16 @@ class MissionBody(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     detector: str = "standard"
+    sam3_words: dict[str, list[str]] | None = None
 
 
 class DetectorBody(BaseModel):
     detector: str
+
+
+class WordsBody(BaseModel):
+    words: dict[str, list[str]] | None = None     # None: back to the default words
+    uncounted: list[str] = Field(default_factory=list)   # classes of the mission's own not counted as vehicles
 
 
 class FindAreasBody(BaseModel):
@@ -416,7 +422,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
 
     @app.post("/api/missions")
     def mission_create(body: MissionBody, u: User = Depends(user)):
-        if body.detector == "sam3" and not sam_info()["installed"]:
+        if body.detector in ("sam3", "both") and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""),
                            "Choose the standard detector, or install the full LanePulse package.")
         try:
@@ -467,15 +473,37 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         jobs.set_monitoring(m.id, body.enabled)
         return {"enabled": body.enabled}
 
+    @app.put("/api/missions/{mission_id}/sam3-words")
+    def sam3_words_set(body: WordsBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        from ..sam3 import VEHICLE_PROMPTS, vehicle_prompts
+        try:
+            prompts = vehicle_prompts(body.words)
+        except ValueError as exc:
+            raise ApiError(400, "invalid", str(exc)) from None
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "Processing is running. Change the words when it has finished or is cancelled.")
+        words = None if prompts == dict(VEHICLE_PROMPTS) else {k: list(v) for k, v in prompts.items()}
+        own = [k for k in prompts if k not in VEHICLE_PROMPTS]
+        bad = sorted(set(body.uncounted) - set(own))
+        if bad:
+            raise ApiError(400, "invalid", f"Only a class of your own can be left out of the vehicle count, not {', '.join(bad)}.")
+        uncounted = sorted(set(body.uncounted)) or None
+        cfg = m.config()
+        if words != getattr(cfg, "sam3_words", None) or uncounted != getattr(cfg, "sam3_uncounted", None):
+            m.update_config(u.username, "words for SAM 3.1 changed" if words else "words for SAM 3.1 back to the defaults",
+                            sam3_words=words, sam3_uncounted=uncounted)
+        return {"words": {k: list(v) for k, v in prompts.items()}, "default": words is None,
+                "own_classes": own, "uncounted": uncounted or []}
+
     @app.put("/api/missions/{mission_id}/detector")
     def detector_set(body: DetectorBody, m: Mission = Depends(mission), u: User = Depends(user)):
         from ..store import DETECTORS
         cfg = m.config()
         if body.detector not in DETECTORS:
             raise ApiError(400, "invalid", f"Detector must be one of {sorted(DETECTORS)}.")
-        if body.detector == "sam3" and cfg.input_type != "images":
+        if body.detector in ("sam3", "both") and cfg.input_type != "images":
             raise ApiError(400, "invalid", "SAM 3.1 detection is for still images; video missions use the standard detector.")
-        if body.detector == "sam3" and not sam_info()["installed"]:
+        if body.detector in ("sam3", "both") and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""))
         if jobs.busy(m.id):
             raise ApiError(409, "busy", "Processing is running. Change the detector when it has finished or is cancelled.")
@@ -554,6 +582,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             "review_status": rs.review_status(version_id),
             "empty_background": ChangeService(m).is_marked(version_id),
             "objects": [{**o.__dict__, "counted": o.counted} for o in rs.objects(version_id)],
+            "classes": rs.classes(),
+            "uncounted_classes": sorted(rs.uncounted()),
             "candidates": [c.__dict__ for c in rs.candidates(version_id)],
             "lights": [li.__dict__ for li in NightService(m).lights(version_id)],
             "bands": NightService(m).bands(view_id) if cond and cond["condition"] in ("night", "dusk") else None,

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trafficwb"
-version = "0.2.3"
+version = "0.2.4"
 description = "Offline road-traffic image and video analysis (foundations)"
 requires-python = ">=3.11"
 # tzdata ships the IANA database so zoneinfo works on Windows without network access.

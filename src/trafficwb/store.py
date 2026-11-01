@@ -32,8 +32,8 @@ MODES = {
 }
 EXPORT_FORMATS = {"xlsx", "csv"}
 # Vehicle detector of a still-image mission: YOLOX-s (or the model promoted on the learning page), or SAM 3.1,
-# which finds vehicles by name: slower, and stronger on unusual views. Video always uses the standard detector.
-DETECTORS = {"standard", "sam3"}
+# which finds vehicles by name: slower, and stronger on unusual views; or both, merged. Video always uses the standard detector.
+DETECTORS = {"standard", "sam3", "both"}
 
 CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -903,6 +903,8 @@ class MissionConfig:
     longitude: float | None = None
     monitoring_enabled: bool = field(default=False)
     detector: str = "standard"
+    sam3_words: dict | None = None   # words SAM 3.1 looks for, per class (the five, and any of the mission's own)
+    sam3_uncounted: list | None = None   # the mission's own classes listed and exported but not counted as vehicles
 
 
 @dataclass
@@ -952,8 +954,19 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         v.errors.append("Export formats must be xlsx, csv, or both.")
     if cfg.detector not in DETECTORS:
         v.errors.append(f"Detector must be one of {sorted(DETECTORS)}.")
-    elif cfg.detector == "sam3" and cfg.input_type == "video":
+    elif cfg.detector in ("sam3", "both") and cfg.input_type == "video":
         v.errors.append("SAM 3.1 detection is for still images; video missions use the standard detector.")
+    if cfg.sam3_words is not None:
+        from .sam3 import vehicle_prompts
+        try:
+            vehicle_prompts(cfg.sam3_words)
+        except ValueError as exc:
+            v.errors.append(f"Words for SAM 3.1: {exc}")
+    if cfg.sam3_uncounted:
+        from .detect import VEHICLE_CLASSES
+        own = set(cfg.sam3_words or {}) - set(VEHICLE_CLASSES)
+        if not set(cfg.sam3_uncounted) <= own:
+            v.errors.append("Only a class of the mission's own can be left out of the vehicle count.")
 
     src = Path(cfg.source_dir)
     if not src.is_dir():
