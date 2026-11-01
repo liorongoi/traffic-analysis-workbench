@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY,
   at TEXT NOT NULL,
   author TEXT NOT NULL,
-  action TEXT NOT NULL,             -- mission_deleted | backup | backup_failed | restore
+  action TEXT NOT NULL,             -- mission_deleted | backup | backup_failed | restore | filename_formats_saved
   detail TEXT NOT NULL              -- JSON
 );
 -- Promotions and rollbacks of production models. Append-only; replaying it gives the model in use. Never written automatically.
@@ -1002,6 +1002,8 @@ class DataRoot:
         self.con.executescript(CONTROL_SCHEMA)
         if self.con.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0:
             self.con.execute("INSERT INTO schema_version VALUES (?)", (SCHEMA_VERSION,))
+        from .name_formats import register
+        register(self.path)  # the operator's filename formats, for every scan in this process
 
     def missions(self) -> list[sqlite3.Row]:
         return self.con.execute("SELECT * FROM mission ORDER BY created_at").fetchall()

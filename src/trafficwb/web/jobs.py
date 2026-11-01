@@ -412,6 +412,7 @@ class JobManager:
         if not _training_lock.acquire(blocking=False):
             raise RuntimeError("Another training is running on this computer. Wait for it to finish.")
         work = None
+        final = None                                  # set on the job only after the temporary copy is removed
         try:
             job.control.stage = "loading PyTorch"
             from .. import train as tr
@@ -471,17 +472,17 @@ class JobManager:
                 except Exception as exc:              # the model is installed; evaluating it can be redone by hand
                     from ..process import RunCancelled
                     if isinstance(exc, RunCancelled):
-                        job.state = "cancelled"
+                        final = "cancelled"
                         return
                     job.result["evaluation_error"] = f"{type(exc).__name__}: {exc}"
-            job.state = "finished"
+            final = "finished"
         except Exception as exc:
             try:
                 from ..train import TrainCancelled
             except Exception:                         # PyTorch missing: the message below says so
                 TrainCancelled = ()
             if TrainCancelled and isinstance(exc, TrainCancelled):
-                job.state = "cancelled"
+                final = "cancelled"
                 return
             if isinstance(exc, ModuleNotFoundError) and exc.name == "torch":
                 raise RuntimeError("PyTorch is not part of this installation, so it cannot train. Install the current "
@@ -491,6 +492,8 @@ class JobManager:
             _training_lock.release()
             if work is not None:
                 shutil.rmtree(work, ignore_errors=True)
+            if final:
+                job.state = final
 
     # ---------- monitoring ----------
     def set_monitoring(self, mission_id: str, enabled: bool) -> None:

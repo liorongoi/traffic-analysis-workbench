@@ -311,3 +311,39 @@ def test_scan_that_queues_nothing_says_why(tmp_path):
     scan = job["result"]["scan"]
     assert scan["queued"] == 0 and scan["no_capture_time"] == 3
     assert "IMG_0000.jpg" in scan["notes"][0] and "capture time" in scan["notes"][0]
+
+
+def test_filename_formats_editor_try_save_and_rescan(tmp_path):
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    for k in range(3):
+        p = src / f"shot {21 + k}-10-2026 07-15.jpg"
+        cv2.imwrite(str(p), scene(k))
+        os.utime(p, (OLD, OLD))
+    c = direct_access(client(tmp_path))
+    mid = mission(c, src, out)
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    assert wait_job(c, mid)["result"]["scan"]["no_capture_time"] == 3
+
+    g = c.get("/api/name-formats").json()
+    assert g["formats"] == [] and any(b["name"] == "underscore-iso-camera-id" for b in g["builtin"])
+    sug = c.post("/api/name-formats/suggest", json={"examples": ["shot 21-10-2026 07-15.jpg"]}, headers=H1).json()
+    assert sug["template"] == "shot {DD}-{MM}-{YYYY} {hh}-{mm}"
+    t = c.post("/api/name-formats/try", json={"template": sug["template"], "zone": "Asia/Jerusalem",
+                                               "examples": ["shot 21-10-2026 07-15.jpg", "other.jpg"],
+                                               "folder": str(src)}, headers=H1).json()
+    assert t["ok"] and t["results"][0]["utc"] == "2026-10-21T04:15:00Z" and t["results"][0]["parts"]["day"] == "21"
+    assert not t["results"][1]["ok"]
+    assert t["folder"]["checked"] == 3 and t["folder"]["matched"] == 3
+    bad = c.put("/api/name-formats", json={"formats": [{"name": "x", "template": "{YYYY}"}]}, headers=H1)
+    assert bad.status_code == 400 and "needs" in bad.json()["message"]
+    ok = c.put("/api/name-formats", json={"formats": [{"name": "Shots", "template": sug["template"],
+                                                        "zone": "Asia/Jerusalem"}]}, headers=H1)
+    assert ok.status_code == 200
+    assert (tmp_path / "data" / "filename_formats.json").exists()
+
+    # The same mission, same files: the next scan reads the names again and processes them.
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    job = wait_job(c, mid)
+    assert job["total"] == 3 and job["result"]["scan"]["no_capture_time"] == 0

@@ -87,3 +87,87 @@ def test_underscore_iso_camera_id_impossible_values_rejected(name):
 def test_underscore_iso_camera_id_needs_camera_and_id(name):
     with pytest.raises(MalformedName):
         parse_capture_time(name)
+
+
+# ---------- operator-defined formats ----------
+
+from trafficwb.timeparse import FormatError, compile_template, set_custom_patterns, suggest_template  # noqa: E402
+
+
+def test_template_reads_name_with_any_camera_and_keeps_parts():
+    p = compile_template("Gate", "{camera}-{YYYY}{MM}{DD}-{hh}{mm}{ss}")
+    ct = parse_capture_time("North_Gate-20261021-071528.jpg", (p,))
+    assert ct.utc == datetime(2026, 10, 21, 7, 15, 28, tzinfo=UTC)
+    assert ct.precision is Precision.SECOND and ct.pattern == "Gate"
+    assert ct.fields == {"camera": "North_Gate"}
+
+
+def test_template_without_seconds_is_minute_precision_and_two_digit_year():
+    p = compile_template("Short", "{DD}.{MM}.{YY} {hh}h{mm}")
+    ct = parse_capture_time("21.10.26 07h15.png", (p,))
+    assert ct.utc == datetime(2026, 10, 21, 7, 15, tzinfo=UTC) and ct.precision is Precision.MINUTE
+
+
+def test_template_in_local_time_is_converted_with_the_rules_of_that_date():
+    p = compile_template("IL", "{YYYY}{MM}{DD}_{hh}{mm}{ss}", zone="Asia/Jerusalem")
+    assert parse_capture_time("20260826_031500.jpg", (p,)).utc == datetime(2026, 8, 26, 0, 15, tzinfo=UTC)   # UTC+3
+    assert parse_capture_time("20260115_031500.jpg", (p,)).utc == datetime(2026, 1, 15, 1, 15, tzinfo=UTC)   # UTC+2
+
+
+def test_template_local_time_that_does_not_exist_is_malformed():
+    p = compile_template("EU", "{YYYY}{MM}{DD}_{hh}{mm}", zone="Europe/Riga")
+    with pytest.raises(MalformedName) as e:
+        parse_capture_time("20260329_0330.jpg", (p,))   # clocks go from 03:00 to 04:00
+    assert "does not exist" in e.value.reason
+
+
+@pytest.mark.parametrize("tpl,why", [
+    ("{YYYY}{MM}{DD}", "needs"), ("{YYYY}{MM}{DD}{hh}{mm}{foo}", "not a known part"),
+    ("{YYYY}{YY}{MM}{DD}{hh}{mm}", "not both"), ("{YYYY}{MM}{DD}{hh}{mm}_{camera}{id}", "something between"),
+    ("{YYYY}{MM}{DD}{hh}{mm}{mm}", "more than once"), ("{YYYY}{MM}{DD}{hh}{mm}}", "Braces"), ("", "empty"),
+])
+def test_bad_templates_say_why(tpl, why):
+    with pytest.raises(FormatError) as e:
+        compile_template("x", tpl)
+    assert why in str(e.value)
+
+
+def test_bad_zone_rejected():
+    with pytest.raises(FormatError):
+        compile_template("x", "{YYYY}{MM}{DD}{hh}{mm}", zone="Mars/Base")
+
+
+def test_custom_patterns_are_used_by_default_parse():
+    p = compile_template("Mine", "shot {DD}-{MM}-{YYYY} {hh}-{mm}")
+    with pytest.raises(MalformedName):
+        parse_capture_time("shot 21-10-2026 07-15.jpg")
+    set_custom_patterns([p])
+    try:
+        assert parse_capture_time("shot 21-10-2026 07-15.jpg").pattern == "Mine"
+    finally:
+        set_custom_patterns([])
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("2026_08_26T00_00_18_home_578695735485d7f4.jpg", "{YYYY}_{MM}_{DD}T{hh}_{mm}_{ss}_{camera}_{id}"),
+    ("CAM3-20261021-071528.jpg", "{camera}-{YYYY}{MM}{DD}-{hh}{mm}{ss}"),
+    ("IMG_20261021_071528.jpg", "IMG_{YYYY}{MM}{DD}_{hh}{mm}{ss}"),
+    ("17052026-1604-xyz.jpg", "{DD}{MM}{YYYY}-{hh}{mm}-{id}"),
+    ("photo.jpg", ""),
+])
+def test_suggested_templates_read_their_own_example(name, expected):
+    tpl = suggest_template(name)
+    assert tpl == expected
+    if tpl:
+        parse_capture_time(name, (compile_template("s", tpl),))
+
+
+def test_operator_format_wins_over_a_builtin_that_also_matches():
+    p = compile_template("Local", "{YYYY}_{MM}_{DD}T{hh}_{mm}_{ss}_{camera}_{id}", zone="Asia/Jerusalem")
+    name = "2026_08_26T03_00_18_home_578695735485d7f4.jpg"
+    assert parse_capture_time(name).utc == datetime(2026, 8, 26, 3, 0, 18, tzinfo=UTC)   # built-in, UTC
+    set_custom_patterns([p])
+    try:
+        assert parse_capture_time(name).utc == datetime(2026, 8, 26, 0, 0, 18, tzinfo=UTC)
+    finally:
+        set_custom_patterns([])
