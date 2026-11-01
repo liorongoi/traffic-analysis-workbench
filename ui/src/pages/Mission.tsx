@@ -93,6 +93,7 @@ function JobCard({ job, mid, reload, unit }: { job: Job | null; mid: string; rel
             <div className={job.result.scan.queued ? "muted" : "msg err"}>
               <b>Scan: {job.result.scan.queued} file(s) queued.</b>
               <ul style={{ margin: "4px 0 0" }}>{job.result.scan.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
+              {!!job.result.scan.no_capture_time && <a className="btn" href="#/formats">Show the app how your files are named</a>}
             </div>
           )}
         </>

@@ -210,6 +210,24 @@ class MonitoringBody(BaseModel):
     enabled: bool
 
 
+class FormatItem(BaseModel):
+    name: str = ""
+    template: str = ""
+    zone: str = "UTC"
+
+
+class FormatsBody(BaseModel):
+    formats: list[FormatItem]
+
+
+class FormatTryBody(BaseModel):
+    template: str = ""
+    zone: str = "UTC"
+    examples: list[str] = []
+    folder: str | None = None       # also try every image or video name in this folder (first 5000)
+    include_subdirs: bool = True
+
+
 class PreviewBody(BaseModel):
     source_dir: str
     include_subdirs: bool = True
@@ -401,6 +419,54 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             if len(out) >= body.limit:
                 break
         return {"files": out}
+
+    # ---------- filename formats ----------
+    @app.get("/api/name-formats")
+    def name_formats_get(_u: User = Depends(user)):
+        from ..name_formats import load
+        from ..timeparse import DEFAULT_PATTERNS, TOKEN_LABELS
+        return {"formats": load(data_root),
+                "builtin": [{"name": p.name, "description": p.description} for p in DEFAULT_PATTERNS],
+                "tokens": [{"token": "{" + t + "}", "label": lbl} for t, lbl in TOKEN_LABELS.items()]}
+
+    @app.post("/api/name-formats/suggest")
+    def name_formats_suggest(body: FormatTryBody, _u: User = Depends(user)):
+        from ..timeparse import suggest_template
+        name = (body.examples or [""])[0]
+        return {"template": suggest_template(name)}
+
+    @app.post("/api/name-formats/try")
+    def name_formats_try(body: FormatTryBody, _u: User = Depends(user)):
+        from ..inventory import IMAGE_EXT, VIDEO_EXT
+        from ..name_formats import try_format
+        out = try_format(body.template, body.zone, [e for e in body.examples if e.strip()])
+        if body.folder and out["ok"]:
+            root = Path(body.folder)
+            if not root.is_dir():
+                out["folder"] = {"error": f"{root} is not a folder on this workstation."}
+            else:
+                names = []
+                for p in (root.rglob("*") if body.include_subdirs else root.glob("*")):
+                    if p.is_file() and p.suffix.lower() in IMAGE_EXT | VIDEO_EXT:
+                        names.append(p.name)
+                        if len(names) >= 5000:
+                            break
+                rows = try_format(body.template, body.zone, names)["results"]
+                bad = [r for r in rows if not r["ok"]]
+                out["folder"] = {"checked": len(rows), "matched": len(rows) - len(bad),
+                                 "not_matched_examples": [r["name"] for r in bad[:10]],
+                                 "matched_examples": [r for r in rows if r["ok"]][:3]}
+        return out
+
+    @app.put("/api/name-formats")
+    def name_formats_put(body: FormatsBody, u: User = Depends(user)):
+        from ..name_formats import save
+        from ..timeparse import FormatError
+        try:
+            saved = save(DataRoot(data_root), [f.model_dump() for f in body.formats], u.username)
+        except FormatError as exc:
+            raise ApiError(400, "bad_format", str(exc))
+        return {"formats": saved}
 
     # ---------- missions ----------
     @app.get("/api/missions")

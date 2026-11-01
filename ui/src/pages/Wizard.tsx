@@ -172,6 +172,10 @@ export default function Wizard() {
                 </table>
               </div>
             )}
+            {preview?.some((p) => !p.ok) && (
+              <div className="msg warn">Some names have no capture time the app can read, so those files would be skipped.{" "}
+                <a href="#/formats" target="_blank" rel="noreferrer">Show the app how your files are named</a> (opens in a new tab), then press Preview file names again.</div>
+            )}
           </>
         )}
         {step === 3 && (

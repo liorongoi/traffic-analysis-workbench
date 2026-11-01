@@ -16,6 +16,26 @@ The first comes from the specification. The second was observed in the Fintraffi
 
 - Each scan re-reads the names of files recorded as malformed, so a pattern added later picks up files already in the source folder.
 
+## Formats defined by the operator
+
+The **Filename formats** screen (top menu) lets the operator describe how their camera names files. A format is a template: text the names always contain, and parts in braces.
+
+| Part | Meaning |
+|---|---|
+| `{YYYY}` `{YY}` | year, 4 or 2 digits (`YY` is 20YY) |
+| `{MM}` `{DD}` | month, day |
+| `{hh}` `{mm}` `{ss}` | hour (00-23), minute, second (optional: without it the time has minute precision) |
+| `{camera}` | camera name, any text, kept (it groups the inventory by camera) |
+| `{id}` | id or other text, kept |
+| `{any}` | any text, ignored |
+
+Example: `{YYYY}_{MM}_{DD}T{hh}_{mm}_{ss}_{camera}_{id}` reads `2026_08_26T00_00_18_gate7_a1b2c3.jpg`. The extension is not part of the format.
+
+- The screen guesses a format from a pasted name, shows the parts and the time it reads for each pasted name, and can check every name in a folder.
+- Each format says whether the names hold UTC or local time in an IANA zone. Local time is converted with the rules in force at that instant; a local time that does not exist (clocks moved forward) is malformed, and a repeated hour (clocks moved back) is read as its first occurrence.
+- Formats are kept in `<data>/filename_formats.json`, apply to every mission, and are tried before the built-in patterns, so the operator's choice wins when a name matches both. Each save is recorded in the audit log (`filename_formats_saved`, with the formats before and after).
+- A format is checked when saved: it needs a year, month, day, hour and minute, each part at most once, known part names, and a separator between two text parts.
+
 - A name that matches a pattern but holds an impossible date or time (31 February, hour 24) is rejected as malformed. It is never coerced.
 - A name that matches no pattern is malformed and is listed, not processed.
 - A capture stated to the minute covers the half-open interval [hh:mm:00, hh:mm+1:00).
