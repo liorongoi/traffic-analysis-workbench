@@ -63,3 +63,27 @@ def test_non_matching_names_are_malformed(name):
 
 def test_leap_day_accepted_in_leap_year():
     assert parse_capture_time("29022028-0101-x.png").utc == datetime(2028, 2, 29, 1, 1, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("camera", ["home", "Gate-3", "north_road_cam"])
+def test_underscore_iso_camera_id_any_camera_name(camera):
+    ct = parse_capture_time(f"2026_08_26T00_00_18_{camera}_578695735485d7f4.jpg")
+    assert ct.utc == datetime(2026, 8, 26, 0, 0, 18, tzinfo=UTC)
+    assert ct.precision is Precision.SECOND
+    assert ct.pattern == "underscore-iso-camera-id"
+    assert ct.fields == {"camera": camera, "suffix": "578695735485d7f4"}
+
+
+@pytest.mark.parametrize(
+    "name", ["2026_02_29T00_00_18_home_abc.jpg", "2026_08_26T24_00_00_home_abc.jpg"]
+)
+def test_underscore_iso_camera_id_impossible_values_rejected(name):
+    with pytest.raises(MalformedName) as e:
+        parse_capture_time(name)
+    assert "invalid" in e.value.reason
+
+
+@pytest.mark.parametrize("name", ["2026_08_26T00_00_18.jpg", "2026_08_26T00_00_18_home.jpg", "2026_08_26_00_00_18_home_x.jpg"])
+def test_underscore_iso_camera_id_needs_camera_and_id(name):
+    with pytest.raises(MalformedName):
+        parse_capture_time(name)

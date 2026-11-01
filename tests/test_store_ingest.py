@@ -189,6 +189,24 @@ def test_malformed_names_recorded_not_queued_and_notified(env):
     assert m.con.execute("SELECT COUNT(*) FROM notification WHERE code='malformed_names'").fetchone()[0] == 1
 
 
+def test_names_recorded_malformed_are_read_again_when_a_pattern_matches(env, monkeypatch):
+    import trafficwb.ingest as ingest
+    from trafficwb.timeparse import DEFAULT_PATTERNS, SPEC_DDMMYYYY_HHMM, parse_capture_time
+    src, out, root = env
+    m = root.create_mission(cfg(src, out, processing="one_time"), "lior")
+    put(src / "2026_08_26T00_00_18_cam7_578695735485d7f4.jpg", jpeg_bytes(64, 48))
+    # First scan with only the old pattern: recorded without a time, no run.
+    monkeypatch.setattr(ingest, "parse_capture_time", lambda n: parse_capture_time(n, (SPEC_DDMMYYYY_HHMM,)))
+    res, run_id = cycle(m, NOW)
+    assert run_id is None and res.malformed
+    # With the pattern available, the unchanged file is read again and queued.
+    monkeypatch.setattr(ingest, "parse_capture_time", lambda n: parse_capture_time(n, DEFAULT_PATTERNS))
+    res, run_id = cycle(m, NOW + timedelta(minutes=1))
+    assert run_id is not None
+    v = versions(m)[0]
+    assert v["parse_status"] == "ok" and v["capture_utc"].startswith("2026-08-26T00:00:18")
+
+
 def test_no_filesystem_time_fallback(env):
     src, out, root = env
     m = root.create_mission(cfg(src, out), "lior")

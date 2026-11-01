@@ -92,6 +92,7 @@ class Ingestor:
             "INSERT INTO scan(started_at,status) VALUES (?, 'running')", (now_s,)
         ).lastrowid
         res = ScanResult(scan_id, "completed")
+        self._reparse_malformed()
         ignored: dict[str, int] = {}
         for root in self.con.execute("SELECT * FROM source_root").fetchall():
             rpath = Path(root["path"])
@@ -136,6 +137,24 @@ class Ingestor:
         self.con.execute("UPDATE scan SET finished_at=?, status=?, summary=? WHERE id=?",
                          (utcnow(), res.status, json.dumps(summary), scan_id))
         return res
+
+    def _reparse_malformed(self) -> int:
+        """Read again the names recorded without a capture time, so a pattern added later picks them up."""
+        rows = self.con.execute(
+            "SELECT v.id, f.rel_path FROM source_version v JOIN source_file f ON f.id=v.source_file_id "
+            "WHERE v.parse_status='malformed' AND v.superseded_by IS NULL").fetchall()
+        fixed = 0
+        for r in rows:
+            try:
+                ct = parse_capture_time(r["rel_path"])
+            except MalformedName:
+                continue
+            self.con.execute(
+                "UPDATE source_version SET capture_utc=?, capture_precision=?, name_pattern=?, name_fields=?, "
+                "parse_status='ok', parse_detail=NULL WHERE id=?",
+                (_iso(ct.utc), ct.precision.value, ct.pattern, json.dumps(ct.fields), r["id"]))
+            fixed += 1
+        return fixed
 
     def _observe(self, root_id: int, rpath: Path, rel: str, path: Path, now: datetime, res: ScanResult) -> None:
         st = path.stat()

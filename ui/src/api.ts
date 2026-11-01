@@ -150,7 +150,7 @@ export type Job = {
   eta_basis: string;
   resource_usage: { process_cpu_percent: number; process_rss_bytes: number; system_memory_available_bytes: number; system_memory_total_bytes: number } | null;
   error: string | null;
-  result?: { search_run?: number };
+  result?: { search_run?: number; scan?: { queued: number; notes: string[] } };
 };
 
 export function fmtDuration(s: number | null | undefined): string {

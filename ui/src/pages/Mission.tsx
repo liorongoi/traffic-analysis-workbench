@@ -89,6 +89,12 @@ function JobCard({ job, mid, reload, unit }: { job: Job | null; mid: string; rel
           <div className="muted">Elapsed {fmtDuration(job.elapsed_s)} · remaining {job.eta_s != null ? `about ${fmtDuration(job.eta_s)}` : "–"} ({job.eta_basis})</div>
           {job.resource_usage && <div className="muted">App usage: {job.resource_usage.process_cpu_percent.toFixed(1)}% CPU · {fmtBytes(job.resource_usage.process_rss_bytes)} RAM · system available {fmtBytes(job.resource_usage.system_memory_available_bytes)} / {fmtBytes(job.resource_usage.system_memory_total_bytes)}</div>}
           {job.error && <div className="msg err">{job.error}</div>}
+          {job.result?.scan && job.result.scan.notes.length > 0 && (
+            <div className={job.result.scan.queued ? "muted" : "msg err"}>
+              <b>Scan: {job.result.scan.queued} file(s) queued.</b>
+              <ul style={{ margin: "4px 0 0" }}>{job.result.scan.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
+            </div>
+          )}
         </>
       )}
       <div className="row" style={{ marginTop: 10 }}>

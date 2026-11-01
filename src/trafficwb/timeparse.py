@@ -56,7 +56,20 @@ PRESET_ISO_BASIC_UTC = FilenamePattern(
     description="<camera>_YYYYMMDDTHHMMSSZ, UTC, second precision; camera id kept verbatim",
 )
 
-DEFAULT_PATTERNS: tuple[FilenamePattern, ...] = (SPEC_DDMMYYYY_HHMM, PRESET_ISO_BASIC_UTC)
+# YYYY_MM_DDTHH_MM_SS_<camera>_<id>, e.g. 2026_08_26T00_00_18_home_578695735485d7f4 (camera "home").
+# The camera part is any text (it may hold underscores); the id is the last underscore-free part.
+# The name has no zone marker; like every pattern here it is read as UTC.
+UNDERSCORE_ISO_CAMERA_ID = FilenamePattern(
+    name="underscore-iso-camera-id",
+    regex=re.compile(
+        r"(?P<year>\d{4})_(?P<month>\d{2})_(?P<day>\d{2})T(?P<hour>\d{2})_(?P<minute>\d{2})_(?P<second>\d{2})"
+        r"_(?P<camera>.+)_(?P<suffix>[^_]+)"
+    ),
+    precision=Precision.SECOND,
+    description="YYYY_MM_DDTHH_MM_SS_<camera>_<id>, UTC, second precision; camera and id kept verbatim",
+)
+
+DEFAULT_PATTERNS: tuple[FilenamePattern, ...] = (SPEC_DDMMYYYY_HHMM, PRESET_ISO_BASIC_UTC, UNDERSCORE_ISO_CAMERA_ID)
 
 
 @dataclass(frozen=True)

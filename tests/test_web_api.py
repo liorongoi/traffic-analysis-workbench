@@ -293,3 +293,21 @@ def test_system_backup_and_delete_mission(env):
     assert c.get("/api/system").json()["audit"][0]["action"] == "mission_deleted"
     assert len(list(src.glob("*.jpg"))) == 7
 
+
+
+def test_scan_that_queues_nothing_says_why(tmp_path):
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    for k in range(3):
+        p = src / f"IMG_{k:04d}.jpg"
+        cv2.imwrite(str(p), scene(k))
+        os.utime(p, (OLD, OLD))
+    c = direct_access(client(tmp_path))
+    mid = mission(c, src, out)
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    job = wait_job(c, mid)
+    assert job["state"] == "finished" and job["total"] == 0
+    scan = job["result"]["scan"]
+    assert scan["queued"] == 0 and scan["no_capture_time"] == 3
+    assert "IMG_0000.jpg" in scan["notes"][0] and "capture time" in scan["notes"][0]

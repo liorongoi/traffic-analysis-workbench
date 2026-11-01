@@ -42,6 +42,38 @@ def _resource_usage() -> dict | None:
         return None
 
 
+def scan_summary(m, res, queued: int) -> dict:
+    """What a scan found, and in plain words why files were not queued, for the Processing card."""
+    q = lambda sql: m.con.execute(sql).fetchone()[0]
+    cur = "FROM source_version v JOIN source_file f ON f.id=v.source_file_id WHERE v.superseded_by IS NULL"
+    no_time = 0 if m.input_type == "video" else q(f"SELECT COUNT(*) {cur} AND v.parse_status='malformed'")
+    examples = [r[0] for r in m.con.execute(
+        f"SELECT f.rel_path {cur} AND v.parse_status='malformed' ORDER BY f.rel_path LIMIT 5")] if no_time else []
+    damaged = q(f"SELECT COUNT(*) {cur} AND v.integrity IN ('corrupt','unsupported')")
+    ignored = sum((res.ignored_by_extension or {}).values())
+    notes = []
+    if res.status == "skipped_one_time_complete":
+        notes.append("This is a one-time mission and its run has already happened, so the folder was not scanned "
+                      "again. Create a new mission for images added later.")
+    if res.status == "source_unavailable":
+        notes.append("The source folder could not be reached.")
+    if no_time:
+        notes.append(f"{no_time} file(s) were skipped because their names hold no capture time this app can read "
+                     f"(for example {', '.join(examples[:3])}).")
+    if res.waiting_for_stability:
+        notes.append(f"{res.waiting_for_stability} file(s) changed less than a minute ago and are waiting until they "
+                     "stop changing. Scan again in a minute.")
+    if damaged:
+        notes.append(f"{damaged} file(s) are damaged or not a supported image.")
+    if ignored:
+        notes.append(f"{ignored} file(s) are not {'videos' if m.input_type == 'video' else 'images'} and were ignored.")
+    if not queued and not notes:
+        notes.append("No new files: everything in the source folder has already been processed.")
+    return {"queued": queued, "no_capture_time": no_time, "no_capture_time_examples": examples,
+            "waiting_for_stability": res.waiting_for_stability, "damaged": damaged, "ignored": ignored,
+            "status": res.status, "notes": notes}
+
+
 @dataclass
 class Job:
     mission_id: str
@@ -248,9 +280,11 @@ class JobManager:
                 return
             if job.kind == "scan_and_process":
                 job.control.stage = "scanning source folder"
-                cycle(m, stability_seconds=self.stability)
+                res, _ = cycle(m, stability_seconds=self.stability)
             job.total = m.con.execute(
                 "SELECT COUNT(*) FROM run_item WHERE processing_state IN ('queued','running')").fetchone()[0]
+            if job.kind == "scan_and_process":
+                job.result["scan"] = scan_summary(m, res, job.total)
             job.control.stage = "loading model"
             det, card = self.detector_for(m)
             if det.__class__.__name__ == "Sam3Detector":

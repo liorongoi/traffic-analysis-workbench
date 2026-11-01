@@ -10,8 +10,11 @@ Capture time comes only from the filename. Filesystem times are never used as a 
 |---|---|---|---|
 | `ddmmyyyy-hhmm-suffix` | `17052026-1604-dcincincifbvhubuhbv.jpg` → 2026-05-17 16:04 UTC | minute | suffix |
 | `preset-iso-basic-utc` | `C0450701_20261021T071528Z.jpg` → 2026-10-21 07:15:28 UTC | second | camera id |
+| `underscore-iso-camera-id` | `2026_08_26T00_00_18_home_578695735485d7f4.jpg` → 2026-08-26 00:00:18 UTC | second | camera (any name, here `home`), id |
 
-The first comes from the specification. The second was observed in the Fintraffic sample (camera C04507, preset C0450701).
+The first comes from the specification. The second was observed in the Fintraffic sample (camera C04507, preset C0450701). The third carries a camera name (any text) and an id; its names carry no zone marker and are read as UTC like the others.
+
+- Each scan re-reads the names of files recorded as malformed, so a pattern added later picks up files already in the source folder.
 
 - A name that matches a pattern but holds an impossible date or time (31 February, hour 24) is rejected as malformed. It is never coerced.
 - A name that matches no pattern is malformed and is listed, not processed.
