@@ -122,5 +122,8 @@ def installed(task: str | None = None, root: Path | None = None) -> list[dict]:
                     "sha256": card.get("sha256"),
                     # packs written by trafficwb-train carry their PyTorch weights, so training can continue from them
                     "trainable": bool(card.get("torch_weights")) and (card_path.parent / card["torch_weights"]).is_file(),
-                    "trained_on": ((card.get("training") or {}).get("dataset") or {}).get("name")})
+                    "trained_on": ((card.get("training") or {}).get("dataset") or {}).get("name"),
+                    "created_at": card.get("created_at"),
+                    # training and validation loss per epoch, for the loss graph
+                    "history": (card.get("training") or {}).get("history") or []})
     return out

@@ -30,6 +30,25 @@ Unresolved night candidates in a fully reviewed image become "ignore" areas: a d
 - AP cannot see boxes below the detector's own score threshold.
 - A failed or cancelled evaluation keeps its error.
 
+## Several dataset versions together
+
+- Training and evaluation can use several dataset versions at once, from this mission and from any other still-image mission on the computer.
+- Combined, a camera-view-and-day group that is in a test set in any chosen version stays in test; otherwise it takes its split from the newest version that holds it. Identical image bytes count once, with the newest labels, and are test if any copy is.
+- An evaluation records every dataset version it used (`sources`). Two evaluations are on "the same images" only when their versions, split and match rule are the same.
+
+## Training rounds
+
+- Each training on the learning page is a round, recorded with its dataset versions, starting model, epochs, loss per epoch, the new model and its evaluation.
+- After training, the starting model is evaluated on the same test images (or an identical earlier evaluation is reused), then the new model. The round **improved** when the new model's F1 is higher (AP at IoU 0.5 breaks a tie).
+- Rounds that did not improve since the last one that did hand their dataset versions on: the next training and evaluation start with that data plus the newest dataset version. The operator can change the choice.
+- Loss per epoch is shown as a graph (training, validation or both) and as numbers.
+
+## Saved models
+
+- A model can be saved by a name of the operator's choosing, with a description. Saving freezes it: its files are made read-only, its checksum is kept in `control.db`, and it is checked each time the model is loaded; a changed model is not used.
+- Any mission can choose a saved model for its standard detector (wizard, overview or learning page). New images are processed with it; images already processed keep their results.
+- Removing a model from the saved list leaves its files in place.
+
 ## Production model
 
 - The vehicle detector in production use is the last model an administrator **promoted**, or the built-in YOLOX-s when none was.

@@ -201,3 +201,130 @@ def test_promotion_and_rollback(tmp_path):
     with pytest.raises(LearningError):
         reg.rollback("vehicle_detection", "lior")
     assert [h["action"] for h in reg.history("vehicle_detection")] == ["rollback", "rollback", "promote", "promote"]
+
+
+# ---------- several dataset versions, training rounds, saved models ----------
+
+def second_mission(tmp_path, root, days=(0, 1, 2), cam="0099B"):
+    src = tmp_path / f"src-{cam}"
+    src.mkdir()
+    m = root.create_mission(MissionConfig(
+        name=f"Learn {cam}", input_type="images", mode="general_traffic", country="IL", iana_zone="Asia/Jerusalem",
+        source_dir=str(src), include_subdirs=False, processing="continuous", output_dir=str(tmp_path / "out"),
+        export_formats=["csv"]), "test")
+    n = 100
+    for d in days:
+        n += 1
+        write(src, name(d, 0).replace("0045A", cam), frame(n, cars=[(100, 250)], trucks=[]))
+    cycle(m)
+    Processor(m, FakeDetector()).process_all()
+    approve_all_individually(m)
+    return m
+
+
+def test_datasets_of_several_missions_train_and_evaluate_together(mission, tmp_path):
+    m, root, _ = mission
+    approve_all_individually(m)
+    ls = LearningService(m)
+    a = ls.create_dataset("here", "lior", seed=1)
+    m2 = second_mission(tmp_path, root)
+    b = LearningService(m2).create_dataset("there", "lior", ratios=(0, 0, 1))
+    refs = [{"mission_id": m.id, "dataset_id": a["id"]}, {"mission_id": m2.id, "dataset_id": b["id"]}]
+    listed = {(d["mission_id"], d["id"]) for d in ls.all_datasets()}
+    assert {(m.id, a["id"]), (m2.id, b["id"])} <= listed
+    items, sources = ls.combine(refs)
+    assert len(items) == 2 * DAYS + 3 and [s["name"] for s in sources] == ["here", "there"]
+    assert all(i["split"] == "test" for i in items if i["mission_id"] == m2.id)
+    # Exported as one dataset: every image once, ids unique across missions.
+    folder = ls.export_combined(refs, tmp_path / "exp")
+    man = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    assert man["name"] == "here + Learn 0099B: there" and len(man["datasets"]) == 2
+    ids = []
+    for sp in ("train", "val", "test"):
+        coco = json.loads((folder / f"annotations_{sp}.json").read_text(encoding="utf-8"))
+        ids += [im["id"] for im in coco["images"]]
+        assert all((folder / im["file_name"]).exists() for im in coco["images"])
+    assert len(ids) == len(set(ids)) == 2 * DAYS + 3
+    # Evaluated on both test sets together; the views of each mission are kept apart.
+    ev = ls.evaluate(None, FakeDetector(), "lior", datasets=refs)
+    assert ev["state"] == "completed" and ev["dataset_id"] == a["id"] and len(ev["sources"]) == 2
+    assert any(k.startswith("Learn 0099B: ") for k in ev["report"]["by_view"])
+    assert ev["report"]["overall"]["recall"] == 1.0
+    found = ls.find_evaluation("fake", "1", list(reversed(ev["sources"])), "test")
+    assert found is None or found["id"] == ev["id"]          # same images in any order is the same data
+
+
+def test_a_test_group_stays_test_when_versions_are_combined(mission):
+    m, _, _ = mission
+    approve_all_individually(m)
+    ls = LearningService(m)
+    a = ls.create_dataset("a", "lior", seed=1)
+    b = ls.create_dataset("b", "lior", seed=1)
+    # Someone (an older version) had a group in training that the other has in test: test wins.
+    g = m.con.execute("SELECT view_key, block FROM dataset_member WHERE dataset_id=? AND split='test' LIMIT 1",
+                      (a["id"],)).fetchone()
+    m.con.execute("UPDATE dataset_member SET split='train' WHERE dataset_id=? AND view_key=? AND block=?", (b["id"], *g))
+    items, _ = ls.combine([(m.id, a["id"]), (m.id, b["id"])])
+    mine = [i for i in items if (i["row"]["view_key"], i["row"]["block"]) == tuple(g)]
+    assert mine and all(i["split"] == "test" for i in mine)
+    assert len(items) == 2 * DAYS                              # identical images count once
+
+
+def test_rounds_that_did_not_improve_hand_their_data_on(mission):
+    m, _, _ = mission
+    approve_all_individually(m)
+    ls = LearningService(m)
+    a = ls.create_dataset("a", "lior")
+    b = ls.create_dataset("b", "lior")
+    assert ls.carry_over() == {"runs": [], "datasets": []}
+    r1 = ls.start_training_run([(m.id, a["id"])], "coco", 5, "lior")
+    ls.finish_training_run(r1, state="finished", improved=False, history=[{"epoch": 1, "train_loss": 2.0, "val_loss": 2.5}])
+    r2 = ls.start_training_run([(m.id, b["id"])], "coco", 5, "lior")
+    ls.finish_training_run(r2, state="finished", improved=False)
+    co = ls.carry_over()
+    assert co["runs"] == [r1, r2]
+    assert co["datasets"] == [{"mission_id": m.id, "dataset_id": a["id"]}, {"mission_id": m.id, "dataset_id": b["id"]}]
+    r3 = ls.start_training_run([(m.id, a["id"]), (m.id, b["id"])], "coco", 5, "lior")
+    ls.finish_training_run(r3, state="failed")                 # a failed round neither hands on nor resets
+    assert ls.carry_over()["runs"] == [r1, r2]
+    r4 = ls.start_training_run([(m.id, b["id"])], "coco", 5, "lior")
+    ls.finish_training_run(r4, state="finished", improved=True)
+    assert ls.carry_over() == {"runs": [], "datasets": []}
+    runs = ls.training_runs()
+    assert runs[-1]["history"][0]["val_loss"] == 2.5 and runs[0]["improved"] is True and runs[-1]["finished_at"]
+
+
+def test_improved_compares_f1_then_ap():
+    from trafficwb.learning import improved
+    assert improved({"f1": 0.8, "ap50": 0.7}, {"f1": 0.7, "ap50": 0.9}) is True
+    assert improved({"f1": 0.7, "ap50": 0.7}, {"f1": 0.8, "ap50": 0.6}) is False
+    assert improved({"f1": 0.8, "ap50": 0.75}, {"f1": 0.8, "ap50": 0.7}) is True
+    assert improved({"f1": 0.8, "ap50": 0.7}, {"f1": 0.8, "ap50": 0.7}) is False
+    assert improved(None, {"f1": 0.8}) is None
+
+
+def test_saved_models_are_frozen_and_checked(tmp_path):
+    import os
+    from trafficwb.learning import ModelLibrary
+    models = tmp_path / "models"
+    _pack(models, "det", "1")
+    _pack(models, "det", "2")
+    lib = ModelLibrary(tmp_path, models_root=models)
+    s = lib.save("Night cars", "det", "1", "lior", "cars at night, Route 6")
+    assert s["name"] == "Night cars" and s["model_version"] == "1"
+    assert not os.access(models / "det" / "1" / "model.onnx", os.W_OK) or os.name == "nt" or os.geteuid() == 0
+    with pytest.raises(LearningError, match="already called"):
+        lib.save("night CARS", "det", "2", "lior")
+    with pytest.raises(LearningError, match="already saved as"):
+        lib.save("Other", "det", "1", "lior")
+    with pytest.raises(LearningError, match="not installed"):
+        lib.save("Ghost", "det", "9", "lior")
+    assert lib.pack("night cars").version == "1"
+    assert [x["name"] for x in lib.saved()] == ["Night cars"] and lib.saved()[0]["installed"]
+    # The files changed after saving: the model is not used.
+    lib.con.execute("UPDATE saved_model SET sha256=? WHERE name=?", ("0" * 64, "Night cars"))
+    with pytest.raises(LearningError, match="changed"):
+        lib.pack("Night cars")
+    assert not lib.saved()[0]["installed"]
+    lib.remove("Night cars")
+    assert lib.saved() == [] and (models / "det" / "1" / "model.onnx").exists()

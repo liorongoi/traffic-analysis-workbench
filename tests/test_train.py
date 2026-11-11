@@ -215,6 +215,11 @@ def test_train_on_the_learning_page(tmp_path, monkeypatch):
     ev = c.get(f"/api/missions/{mid}/learning/evaluations/{res['evaluation']}").json()
     assert ev["state"] == "completed" and ev["model"]["model"]["version"] == res["model"]["version"]
     assert not (out / ".training").exists() or not any((out / ".training").iterdir())   # temporary copy removed
+    # The round is recorded with its loss per epoch; with no built-in YOLOX-s here there is nothing to compare with.
+    run = s["training_runs"][0]
+    assert run["state"] == "finished" and run["model_version"] == res["model"]["version"] and len(run["history"]) == 1
+    assert run["evaluation_id"] == res["evaluation"] and run["improved"] is None and "baseline_error" in res
+    assert run["sources"] == [{"mission_id": mid, "dataset_id": ds["id"]}]
 
 
 def test_training_can_be_stopped(tmp_path):

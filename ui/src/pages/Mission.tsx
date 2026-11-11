@@ -6,7 +6,8 @@ import EventsTab from "./Events";
 import PlatesTab from "./Plates";
 import LearningTab from "./Learning";
 import NightReviewTab from "./NightReview";
-import { DetectorChoice } from "./Wizard";
+import { DetectorChoice, ModelChoice } from "./Wizard";
+import FolderPicker from "../components/FolderPicker";
 
 export type SavedQuery = { filter: Filter; sort: string; desc: boolean };
 export const queryKey = (mid: string) => `twb-query-${mid}`;
@@ -46,7 +47,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
             <span>{cap(m.config.mode.replace(/_/g, " "))}</span>
             <span>{m.config.iana_zone}</span>
             <span>{m.config.processing === "continuous" ? `Continuous, monitoring ${m.config.monitoring_enabled ? "on" : "off"}` : "One-time"}</span>
-            {!isVideo && <span>{m.config.detector === "sam3" ? "SAM 3.1 detector" : m.config.detector === "both" ? "Standard + SAM 3.1 detectors" : "Standard detector"}</span>}
+            {!isVideo && <span>{m.config.detector === "sam3" ? "SAM 3.1 detector" : m.config.detector === "both" ? "Standard + SAM 3.1 detectors" : "Standard detector"}{m.config.detector !== "sam3" && m.config.vehicle_model ? ` · ${m.config.vehicle_model}` : ""}</span>}
           </div>
         </div>
       </div>
@@ -136,7 +137,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
           <h2>Monitoring</h2>
           {m.config.processing === "continuous" ? (
             <>
-              <p>New files in <span className="mono bidi">{m.config.source_dir}</span> are picked up {m.config.monitoring_enabled ? "automatically" : "only when you start a scan"}.</p>
+              <p>New files in {(m.config.source_dirs ?? [m.config.source_dir]).length > 1 ? "the mission's source folders" : <span className="mono bidi">{m.config.source_dir}</span>} are picked up {m.config.monitoring_enabled ? "automatically" : "only when you start a scan"}.</p>
               <button className={m.config.monitoring_enabled ? "danger" : "primary"} onClick={toggle}>
                 {m.config.monitoring_enabled ? "Stop monitoring" : "Start monitoring"}
               </button>
@@ -145,6 +146,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
           ) : <p className="muted">One-time mission: it processes the files present at its first scan.</p>}
         </div>
         {m.config.input_type === "images" && <DetectorCard m={m} reload={reload} />}
+        <SourcesCard m={m} reload={reload} />
       </div>
       <div className="grid cols-2">
         <div className="card">
@@ -170,12 +172,44 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
   );
 }
 
+function SourcesCard({ m, reload }: { m: any; reload: () => void }) {
+  const have: string[] = m.config.source_dirs ?? [m.config.source_dir];
+  const [add, setAdd] = useState<string[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const save = async () => {
+    setErr(null);
+    try { await post(`/missions/${m.id}/sources`, { add }); setAdd([]); setAdding(false); reload(); }
+    catch (e) { setErr((e as ApiError).message); }
+  };
+  return (
+    <div className="card">
+      <h2>Source folders</h2>
+      <ul className="folderlist">{have.map((f) => <li key={f}><span className="mono bidi">{f}</span></li>)}</ul>
+      <p className="muted">{m.config.include_subdirs ? "Subfolders are included. " : ""}Files are only read, never changed. A folder added here is read at the next scan.</p>
+      {!adding ? <button onClick={() => setAdding(true)}>Add folders…</button> : <>
+        <FolderPicker multiple label="Folders to add" value={add} onChange={setAdd} placeholder="Type a path or press Browse" />
+        <div className="row"><button className="primary" disabled={!add.length} onClick={save}>Add {add.length || ""} folder{add.length === 1 ? "" : "s"}</button>
+          <button onClick={() => { setAdding(false); setAdd([]); setErr(null); }}>Cancel</button></div>
+      </>}
+      {err && <div className="msg err" role="alert">{err}</div>}
+    </div>
+  );
+}
+
 function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
   const [sam, setSam] = useState<any>(null);
   const [value, setValue] = useState<string>(m.config.detector ?? "standard");
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<any[]>([]);
   useEffect(() => { api("/sam3").then(setSam).catch(() => setSam({ installed: false, reason: "Could not check." })); }, []);
+  useEffect(() => { api("/models/saved").then((r) => setSaved(r.saved ?? [])).catch(() => setSaved([])); }, []);
+  const setModel = async (v: string | null) => {
+    setErr(null);
+    try { await api(`/missions/${m.id}/vehicle-model`, { method: "PUT", body: { saved: v } }); reload(); }
+    catch (e) { setErr((e as ApiError).message); }
+  };
   useEffect(() => { setValue(m.config.detector ?? "standard"); }, [m.config.detector]);
   const busy = m.job && ["running", "paused"].includes(m.job.state);
   const changed = value !== (m.config.detector ?? "standard");
@@ -190,6 +224,7 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
     <div className="card">
       <h2>Vehicle detector</h2>
       <DetectorChoice value={value} onChange={setValue} sam={sam ?? undefined} disabled={busy} legend={false} />
+      {value !== "sam3" && <ModelChoice saved={saved} value={m.config.vehicle_model ?? null} onChange={setModel} disabled={busy} />}
       {changed && <p className="muted">Images already processed keep their detections; the change applies to the next run. Each detection records the model that made it.</p>}
       {busy && <p className="muted">The detector can be changed when processing has finished.</p>}
       {changed && <div className="row"><button className="primary" disabled={busy || saving} onClick={saveIt}>{saving ? "Saving…" : "Use this detector"}</button>

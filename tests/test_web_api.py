@@ -347,3 +347,85 @@ def test_filename_formats_editor_try_save_and_rescan(tmp_path):
     c.post(f"/api/missions/{mid}/job", headers=H1)
     job = wait_job(c, mid)
     assert job["total"] == 3 and job["result"]["scan"]["no_capture_time"] == 0
+
+
+def test_folder_picker_lists_subfolders_and_images(env):
+    tmp, src, out = env
+    (src / "day2").mkdir()
+    (src / ".hidden").mkdir()
+    c = direct_access(client(tmp))
+    top = c.get("/api/folders").json()
+    assert top["path"] is None and top["roots"]
+    r = c.get("/api/folders", params={"path": str(src)}).json()
+    assert [f["name"] for f in r["folders"]] == ["day2"] and r["files"] == 7 and r["parent"] == str(src.parent)
+    assert c.get("/api/folders", params={"path": str(src / "nope")}).status_code == 400
+
+
+def test_mission_reads_several_source_folders(env):
+    tmp, src, out = env
+    second = tmp / "src2"
+    second.mkdir()
+    for k in range(6, 9):
+        p = second / f"CAM8_{ts(k)}.jpg"
+        cv2.imwrite(str(p), scene(k), [cv2.IMWRITE_JPEG_QUALITY, 97])
+        os.utime(p, (OLD, OLD))
+    c = direct_access(client(tmp))
+    body = {"name": "Two folders", "country": "IL", "iana_zone": "Asia/Jerusalem", "source_dirs": [str(src), str(second)],
+            "include_subdirs": True, "output_dir": str(out), "export_formats": ["csv"]}
+    nested = dict(body, source_dirs=[str(tmp), str(src)], output_dir=str(out))
+    assert any("inside" in e for e in c.post("/api/missions/validate", json=nested, headers=H1).json()["errors"])
+    twice = dict(body, source_dirs=[str(src), str(src) + os.sep])
+    assert c.post("/api/missions/validate", json=twice, headers=H1).json()["errors"]
+    assert c.post("/api/missions/validate", json=body, headers=H1).json()["errors"] == []
+    mid = c.post("/api/missions", json=body, headers=H1).json()["id"]
+    m = c.get(f"/api/missions/{mid}").json()
+    assert m["config"]["source_dir"] == str(src) and m["config"]["source_dirs"] == [str(src), str(second)]
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    wait_job(c, mid)
+    assert c.get(f"/api/missions/{mid}").json()["processing_counts"]["done"] == 9
+    # A folder added later is read at the next scan.
+    third = tmp / "src3"
+    third.mkdir()
+    p = third / f"CAM9_{ts(20)}.jpg"
+    cv2.imwrite(str(p), scene(20))
+    os.utime(p, (OLD, OLD))
+    assert c.post(f"/api/missions/{mid}/sources", json={"add": [str(src)]}, headers=H1).status_code == 400
+    r = c.post(f"/api/missions/{mid}/sources", json={"add": [str(third)]}, headers=H1).json()
+    assert r["sources"][-1] == str(third)
+
+
+def test_saved_models_process_a_missions_images(env, monkeypatch):
+    import json
+    from trafficwb.models import sha256_file
+    tmp, src, out = env
+    models = tmp / "models"
+    d = models / "night" / "1"
+    d.mkdir(parents=True)
+    (d / "model.onnx").write_bytes(b"night")
+    (d / "model.json").write_text(json.dumps({"name": "night", "version": "1", "task": "vehicle_detection",
+                                              "license": "MIT", "sha256": sha256_file(d / "model.onnx")}))
+    monkeypatch.setenv("TWB_MODELS", str(models))
+    app = create_app(tmp / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
+                     start_monitoring=False, stability_seconds=0, model_loader=lambda n, v: Named(n, v))
+    c = direct_access(TestClient(app))
+    bad = c.post("/api/models/saved", json={"name": "x", "model_name": "night", "model_version": "7"}, headers=H1)
+    assert bad.status_code == 400
+    sv = c.post("/api/models/saved", json={"name": "Night cars", "description": "Route 6 at night", "model_name": "night",
+                                           "model_version": "1"}, headers=H1).json()
+    assert sv["name"] == "Night cars"
+    assert [x["name"] for x in c.get("/api/models/saved").json()["saved"]] == ["Night cars"]
+    body = {"name": "Night run", "country": "IL", "iana_zone": "Asia/Jerusalem", "source_dir": str(src),
+            "include_subdirs": False, "output_dir": str(out), "export_formats": ["csv"], "vehicle_model": "Nope"}
+    assert c.post("/api/missions/validate", json=body, headers=H1).json()["errors"]
+    mid = c.post("/api/missions", json=dict(body, vehicle_model="Night cars"), headers=H1).json()["id"]
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    assert wait_job(c, mid)["state"] == "finished"
+    from trafficwb.store import DataRoot
+    m = DataRoot(tmp / "data").open_mission(mid)
+    assert [r[0] for r in m.con.execute("SELECT DISTINCT mv.name FROM detection d JOIN model_version mv "
+                                        "ON mv.id=d.model_version_id")] == ["night"]
+    s = c.get(f"/api/missions/{mid}/learning").json()
+    assert s["mission_model"] == "Night cars" and s["models"][0]["saved_as"] == "Night cars"
+    assert c.put(f"/api/missions/{mid}/vehicle-model", json={"saved": None}, headers=H1).json()["vehicle_model"] is None
+    assert c.put(f"/api/missions/{mid}/vehicle-model", json={"saved": "Ghost"}, headers=H1).status_code == 400
+    assert c.request("DELETE", "/api/models/saved/Night cars", headers=H1).json()["removed"] == "Night cars"

@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import stat
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -59,6 +61,41 @@ ADAPTERS = [
 ]
 
 SPLITS = ("train", "val", "test")
+
+
+def _refs(refs) -> list[tuple[str, int]]:
+    """Dataset references as (mission_id, dataset_id), in order, each once."""
+    out: list[tuple[str, int]] = []
+    for r in refs or []:
+        if isinstance(r, dict):
+            key = (str(r["mission_id"]), int(r["dataset_id"]))
+        elif hasattr(r, "mission_id"):
+            key = (str(r.mission_id), int(r.dataset_id))
+        else:
+            key = (str(r[0]), int(r[1]))
+        if key not in out:
+            out.append(key)
+    return out
+
+
+def data_key(sources: list[dict], split: str, iou: float) -> str:
+    """Two evaluations with the same key looked at exactly the same images with the same match rule."""
+    return json.dumps([sorted([s["mission_id"], int(s["dataset_id"])] for s in sources), split, round(float(iou), 4)])
+
+
+def improved(new: dict | None, base: dict | None) -> bool | None:
+    """Did the new model do better than the one it started from on the same images? F1 first, then AP at IoU 0.5."""
+    if not new or not base:
+        return None
+    a, b = new.get("f1"), base.get("f1")
+    if a is None or b is None:
+        a, b = new.get("recall"), base.get("recall")
+    if a is None or b is None:
+        return None
+    if abs(a - b) > 1e-4:
+        return a > b
+    ap_a, ap_b = new.get("ap50"), base.get("ap50")
+    return ap_a is not None and ap_b is not None and ap_a > ap_b + 1e-4
 
 
 def _iou(a, b) -> float:
@@ -274,14 +311,101 @@ class LearningService:
             args.append(split)
         return [dict(r) | {"labels": json.loads(r["labels"])} for r in self.con.execute(q + " ORDER BY d.source_version_id", args)]
 
+    # ---------- several dataset versions as one ----------
+    def _open(self, mission_id: str) -> "LearningService":
+        if mission_id == self.m.id:
+            return self
+        cache = self.__dict__.setdefault("_others", {})
+        if mission_id not in cache:
+            try:
+                m = self.m.root.open_mission(mission_id)
+            except KeyError:
+                raise LearningError("A chosen dataset version belongs to a mission that no longer exists.") from None
+            if m.input_type != "images":
+                raise LearningError("Dataset versions come from still-image missions only.")
+            cache[mission_id] = LearningService(m)
+        return cache[mission_id]
+
+    def all_datasets(self) -> list[dict]:
+        """Dataset versions of every still-image mission on this computer, this mission's first."""
+        out = [d | {"mission_id": self.m.id, "mission": self.m.config().name} for d in self.datasets()]
+        for r in self.m.root.missions():
+            if r["id"] == self.m.id or r["input_type"] != "images" or r["state"] != "active":
+                continue
+            try:
+                ls = self._open(r["id"])
+                out += [d | {"mission_id": r["id"], "mission": r["name"]} for d in ls.datasets()]
+            except Exception:          # a mission that cannot be opened just offers nothing
+                continue
+        return out
+
+    def combine(self, refs, split: str | None = None, strict: bool = False) -> tuple[list[dict], list[dict]]:
+        """The members of several dataset versions as one set, with the leakage rules kept across them.
+
+        - A camera-view-and-day group that is in a test set in any chosen version is test in the combination.
+        - Otherwise a group takes its split from the newest chosen version that holds it.
+        - Identical image bytes are one sample, with the labels of the newest version; test if any copy is test.
+        Returns (items, sources): items are {"ls", "row", "split", "mission_id"}.
+        """
+        refs = _refs(refs)
+        if not refs:
+            raise LearningError("Choose at least one dataset version.")
+        rows, sources = [], []
+        for mid, did in refs:
+            ls = self._open(mid)
+            ds = ls.dataset(did)
+            if strict and ds["leakage"]:
+                raise LearningError(f"Dataset version “{ds['name']}” has leakage problems; it cannot be used: "
+                                    + "; ".join(ds["leakage"]))
+            sources.append({"mission_id": mid, "mission": ls.m.config().name, "dataset_id": did, "name": ds["name"]})
+            rows += [(ds["created_at"], mid, did, ls, r) for r in ls.members(did)]
+        rows.sort(key=lambda x: (x[0], x[1], x[2]))       # oldest first: later versions override
+        group: dict[tuple, str] = {}
+        for _, mid, _, _, r in rows:
+            g = (mid, r["view_key"], r["block"])
+            if group.get(g) != "test":
+                group[g] = r["split"]
+        test_sha = {r["sha256"] for _, mid, _, _, r in rows if group[(mid, r["view_key"], r["block"])] == "test"}
+        newest: dict[str, tuple] = {}
+        for item in rows:
+            newest[item[4]["sha256"]] = item
+        items = []
+        for _, mid, _, ls, r in newest.values():
+            sp = "test" if r["sha256"] in test_sha else group[(mid, r["view_key"], r["block"])]
+            if split is None or sp == split:
+                items.append({"ls": ls, "row": r, "split": sp, "mission_id": mid})
+        items.sort(key=lambda it: (it["mission_id"] != self.m.id, it["mission_id"], it["row"]["source_version_id"]))
+        return items, sources
+
+    def export_combined(self, refs, out_dir: Path | None = None) -> Path:
+        """Export several dataset versions as one dataset (for training on all of them together)."""
+        refs = _refs(refs)
+        if len(refs) == 1 and refs[0][0] == self.m.id:
+            return self.export_dataset(refs[0][1], out_dir)
+        items, sources = self.combine(refs, strict=True)
+        name = " + ".join(s["name"] if s["mission_id"] == self.m.id else f"{s['mission']}: {s['name']}" for s in sources)
+        stats = {"images": len(items), "splits": {sp: {"images": sum(1 for i in items if i["split"] == sp),
+                                                       "objects": sum(len(i["row"]["labels"]["positives"]) for i in items
+                                                                      if i["split"] == sp)} for sp in SPLITS}}
+        return self._write_export(items, Path(out_dir or self.m.config().output_dir) / "datasets",
+                                  f"{self.m.config().name}_combined_{len(sources)}",
+                                  {"mission_id": self.m.id, "dataset_id": None, "datasets": sources, "name": name,
+                                   "params": {"combined": True}, "stats": stats, "created_at": utcnow()})
+
     def export_dataset(self, dataset_id: int, out_dir: Path | None = None) -> Path:
         """Write images and COCO-style annotations per split for training on another machine. Never overwrites."""
         ds = self.dataset(dataset_id)
         if ds["leakage"]:
             raise LearningError("This dataset version has leakage problems; it is not exported: " + "; ".join(ds["leakage"]))
-        base = Path(out_dir or self.m.config().output_dir) / "datasets"
+        items = [{"ls": self, "row": r, "split": r["split"], "mission_id": self.m.id} for r in self.members(dataset_id)]
+        return self._write_export(items, Path(out_dir or self.m.config().output_dir) / "datasets",
+                                  f"{self.m.config().name}_ds{dataset_id}_{ds['name']}",
+                                  {"mission_id": self.m.id, "dataset_id": dataset_id, "name": ds["name"],
+                                   "params": ds["params"], "stats": ds["stats"], "created_at": ds["created_at"]})
+
+    def _write_export(self, items: list[dict], base: Path, stem: str, manifest: dict) -> Path:
         base.mkdir(parents=True, exist_ok=True)
-        stem = "".join(c if c.isalnum() or c in "-_." else "_" for c in f"{self.m.config().name}_ds{dataset_id}_{ds['name']}")
+        stem = "".join(c if c.isalnum() or c in "-_." else "_" for c in stem)
         final, n = base / stem, 2
         while final.exists() or final.with_name(final.name + ".partial").exists():
             final, n = base / f"{stem}_{n}", n + 1
@@ -290,36 +414,40 @@ class LearningService:
         cats = [{"id": i + 1, "name": c} for i, c in enumerate(VEHICLE_CLASSES)]
         cid = {c["name"]: c["id"] for c in cats}
         files = []
+        multi = len({it["mission_id"] for it in items}) > 1
+        ann_id = 0
         for split in SPLITS:
             images, anns = [], []
-            for mrow in self.members(dataset_id, split):
+            for it in (i for i in items if i["split"] == split):
+                ls, mrow = it["ls"], it["row"]
                 vid = mrow["source_version_id"]
-                src = self.views._path(vid)
+                img_id = vid if not multi else len(images) + 1 + 10_000_000 * SPLITS.index(split)
+                src = ls.views._path(vid)
                 ext = src.suffix.lower()
-                name = f"{vid}_{mrow['sha256'][:12]}{ext}"
+                name = (f"{ls.m.id[:8]}_" if multi else "") + f"{vid}_{mrow['sha256'][:12]}{ext}"
                 shutil.copy2(src, tmp / "images" / name)
                 img = read_image(src)
-                view = self.views.current_view(vid)
-                regions = RegionSet.load(self.con, view) if view is not None else RegionSet([])
-                images.append({"id": vid, "file_name": f"images/{name}", "width": int(img.shape[1]), "height": int(img.shape[0]),
+                view = ls.views.current_view(vid)
+                regions = RegionSet.load(ls.con, view) if view is not None else RegionSet([])
+                images.append({"id": img_id, "file_name": f"images/{name}", "width": int(img.shape[1]),
+                               "height": int(img.shape[0]), "mission_id": ls.m.id, "source_version_id": vid,
                                "sha256": mrow["sha256"], "source_file": mrow["rel_path"], "view": mrow["view_key"],
                                "date_block": mrow["block"], "condition": mrow["condition"], "review": mrow["review"],
                                "unlabelled_area": "background inside included regions" if mrow["review"] == "full" else "ignore",
                                "include_regions": [r.polygon for r in regions.include],
                                "exclude_regions": [r.polygon for r in regions.exclude],
                                "ignore_boxes": mrow["labels"]["ignore_boxes"]})
-                for k, p in enumerate(mrow["labels"]["positives"]):
+                for p in mrow["labels"]["positives"]:
                     x1, y1, x2, y2 = p["box"]
-                    anns.append({"id": vid * 1000 + k, "image_id": vid, "category_id": cid.get(p["cls"], cid["car"]),
+                    ann_id += 1
+                    anns.append({"id": ann_id, "image_id": img_id, "category_id": cid.get(p["cls"], cid["car"]),
                                  "bbox": [x1, y1, x2 - x1, y2 - y1], "area": (x2 - x1) * (y2 - y1), "iscrowd": 0,
                                  "label_source": p["source"]})
             f = tmp / f"annotations_{split}.json"
             f.write_text(json.dumps({"images": images, "annotations": anns, "categories": cats}, ensure_ascii=False),
                          encoding="utf-8")
             files.append(f.name)
-        manifest = {"mission_id": self.m.id, "dataset_id": dataset_id, "name": ds["name"], "params": ds["params"],
-                    "stats": ds["stats"], "created_at": ds["created_at"], "exported_at": utcnow(), "files": files,
-                    "rules": self.eligibility()["rules"]}
+        manifest = manifest | {"exported_at": utcnow(), "files": files, "rules": self.eligibility()["rules"]}
         (tmp / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
         if final.exists():
             raise LearningError(f"{final.name} appeared while writing; nothing was overwritten.")
@@ -327,27 +455,38 @@ class LearningService:
         return final
 
     # ---------- evaluation ----------
-    def evaluate(self, dataset_id: int, detector, author: str, split: str = "test", iou: float = 0.5,
-                 control: RunControl | None = None, progress: Callable[[int, int], None] | None = None) -> dict:
+    def evaluate(self, dataset_id: int | None, detector, author: str, split: str = "test", iou: float = 0.5,
+                 control: RunControl | None = None, progress: Callable[[int, int], None] | None = None,
+                 datasets=None) -> dict:
+        """Run a detector on one split of one dataset version, or of several together (datasets: references
+        (mission_id, dataset_id), from this mission or others), and score it against the labels."""
         if split not in SPLITS:
             raise LearningError(f"Split must be one of {SPLITS}.")
-        self.dataset(dataset_id)
-        mem = self.members(dataset_id, split)
+        refs = _refs(datasets) if datasets else [(self.m.id, int(dataset_id))]
+        mem, sources = self.combine(refs, split)
         if not mem:
-            raise LearningError(f"The {split} split of this dataset version is empty.")
+            raise LearningError(f"The {split} split of {'this dataset version' if len(sources) == 1 else 'these dataset versions'} "
+                                "is empty.")
+        multi = len({s["mission_id"] for s in sources}) > 1
+        home = next((s["dataset_id"] for s in sources if s["mission_id"] == self.m.id), None)
         control = control or RunControl()
         desc = detector.describe()
-        eid = self.con.execute("INSERT INTO evaluation(dataset_id,split,model,state,author,created_at) VALUES (?,?,?,?,?,?)",
-                               (dataset_id, split, json.dumps(desc), "running", author, utcnow())).lastrowid
+        eid = self.con.execute(
+            "INSERT INTO evaluation(dataset_id,split,model,state,author,created_at,sources) VALUES (?,?,?,?,?,?,?)",
+            (home, split, json.dumps(desc), "running", author, utcnow(),
+             json.dumps([{"mission_id": s["mission_id"], "dataset_id": s["dataset_id"]} for s in sources]))).lastrowid
         per_image = []
         try:
-            for n, mrow in enumerate(mem, 1):
+            for n, it in enumerate(mem, 1):
                 control.checkpoint()
+                ls, mrow = it["ls"], it["row"] | {"split": it["split"]}
+                if multi:
+                    mrow["view_key"] = f"{ls.m.config().name}: {mrow['view_key']}"
                 vid = mrow["source_version_id"]
-                img = read_image(self.views._path(vid))
+                img = read_image(ls.views._path(vid))
                 dets = [(list(map(float, d.box)), d.cls, float(d.score)) for d in detector.detect(img)]
-                view = self.views.current_view(vid)
-                regions = RegionSet.load(self.con, view) if view is not None and self.views.regions_applicable(view) else RegionSet([])
+                view = ls.views.current_view(vid)
+                regions = RegionSet.load(ls.con, view) if view is not None and ls.views.regions_applicable(view) else RegionSet([])
                 per_image.append(self._score_image(mrow, dets, regions, iou))
                 if progress:
                     progress(n, len(mem))
@@ -407,11 +546,69 @@ class LearningService:
             q, a = q + " WHERE dataset_id=?", [dataset_id]
         return [self._ev_row(r) for r in self.con.execute(q + " ORDER BY id DESC", a)]
 
-    @staticmethod
-    def _ev_row(r) -> dict:
-        return {"id": r["id"], "dataset_id": r["dataset_id"], "split": r["split"], "model": json.loads(r["model"]),
-                "state": r["state"], "report": json.loads(r["report"]) if r["report"] else None, "error": r["error"],
-                "author": r["author"], "created_at": r["created_at"], "finished_at": r["finished_at"]}
+    def _ev_row(self, r) -> dict:
+        sources = json.loads(r["sources"]) if r["sources"] else [{"mission_id": self.m.id, "dataset_id": r["dataset_id"]}]
+        report = json.loads(r["report"]) if r["report"] else None
+        return {"id": r["id"], "dataset_id": r["dataset_id"], "sources": sources, "split": r["split"],
+                "model": json.loads(r["model"]), "state": r["state"], "report": report, "error": r["error"],
+                "author": r["author"], "created_at": r["created_at"], "finished_at": r["finished_at"],
+                "data_key": data_key(sources, r["split"], (report or {}).get("iou", 0.5))}
+
+    def find_evaluation(self, name: str, version: str, sources: list[dict], split: str, iou: float = 0.5) -> dict | None:
+        """The newest completed evaluation of this model version on exactly these images, if there is one."""
+        key = data_key(sources, split, iou)
+        for ev in self.evaluations():
+            md = (ev["model"] or {}).get("model") or {}
+            if ev["state"] == "completed" and ev["data_key"] == key and (md.get("name"), md.get("version")) == (name, version):
+                return ev
+        return None
+
+    # ---------- training rounds ----------
+    def start_training_run(self, sources, start_from: str, epochs: int, author: str) -> int:
+        refs = [{"mission_id": m, "dataset_id": d} for m, d in _refs(sources)]
+        return self.con.execute(
+            "INSERT INTO training_run(sources,start_from,epochs,state,author,created_at) VALUES (?,?,?,?,?,?)",
+            (json.dumps(refs), start_from, int(epochs), "running", author, utcnow())).lastrowid
+
+    def finish_training_run(self, run_id: int, **f) -> None:
+        cols = ("state", "model_name", "model_version", "evaluation_id", "baseline_evaluation_id", "improved", "error")
+        sets = {k: f[k] for k in cols if k in f}
+        if "history" in f:
+            sets["history"] = json.dumps(f["history"])
+        if sets.get("state") in ("finished", "failed", "cancelled"):
+            sets["finished_at"] = utcnow()
+        if "improved" in sets and sets["improved"] is not None:
+            sets["improved"] = int(bool(sets["improved"]))
+        if sets:
+            self.con.execute(f"UPDATE training_run SET {', '.join(k + '=?' for k in sets)} WHERE id=?",
+                             (*sets.values(), run_id))
+
+    def training_runs(self) -> list[dict]:
+        out = []
+        for r in self.con.execute("SELECT * FROM training_run ORDER BY id DESC"):
+            d = dict(r)
+            d["sources"] = json.loads(d["sources"])
+            d["history"] = json.loads(d["history"]) if d["history"] else []
+            d["improved"] = None if d["improved"] is None else bool(d["improved"])
+            out.append(d)
+        return out
+
+    def carry_over(self) -> dict:
+        """Rounds since the last one that improved and did not improve: their data goes into the next round too."""
+        runs = []
+        for r in self.training_runs():                    # newest first
+            if r["state"] != "finished":
+                continue
+            if r["improved"]:
+                break
+            if r["improved"] is False:
+                runs.append(r)
+        refs: list[dict] = []
+        for r in reversed(runs):
+            for s in r["sources"]:
+                if s not in refs:
+                    refs.append(s)
+        return {"runs": [r["id"] for r in reversed(runs)], "datasets": refs}
 
     def evaluation(self, eid: int) -> dict:
         r = self.con.execute("SELECT * FROM evaluation WHERE id=?", (eid,)).fetchone()
@@ -507,3 +704,103 @@ class ModelRegistry:
             "VALUES (?,?,?,?,?,?,?,?,?,?)", (task, cur["name"], cur["version"], cur["sha256"], "rollback",
                                              cur["mission_id"], cur["evaluation_id"], author, note, utcnow()))
         return back            # None: the built-in default is back in use
+
+
+# ------------------------------------------------------------------ saved models (control.db)
+
+class ModelLibrary:
+    """Models kept by a name of the operator's choosing, frozen, and usable by any mission.
+
+    Saving freezes the model: its files are made read-only, and its checksum is pinned here and checked every time the
+    model is loaded. Training from a saved model always writes a new model; the saved one never changes.
+    """
+
+    def __init__(self, data_root: Path | str, models_root: Path | None = None):
+        self.con = connect(Path(data_root) / "control.db")
+        self.con.executescript(CONTROL_SCHEMA)
+        self.models_root = models_root
+
+    @staticmethod
+    def _row(r) -> dict:
+        d = dict(r)
+        d["summary"] = json.loads(d["summary"]) if d["summary"] else {}
+        return d
+
+    def saved(self) -> list[dict]:
+        from . import models
+        have = {(m["name"], m["version"]): m for m in models.installed(root=self.models_root)}
+        out = []
+        for r in self.con.execute("SELECT * FROM saved_model ORDER BY created_at DESC, id DESC"):
+            d = self._row(r)
+            card = have.get((d["model_name"], d["model_version"]))
+            d["installed"] = card is not None and card.get("sha256") == d["sha256"]
+            d["history"] = (card or {}).get("history") or []
+            out.append(d)
+        return out
+
+    def get(self, name: str) -> dict | None:
+        r = self.con.execute("SELECT * FROM saved_model WHERE name=? COLLATE NOCASE", (name.strip(),)).fetchone()
+        return self._row(r) if r else None
+
+    def of_pack(self, model_name: str, model_version: str) -> dict | None:
+        r = self.con.execute("SELECT * FROM saved_model WHERE model_name=? AND model_version=?",
+                             (model_name, model_version)).fetchone()
+        return self._row(r) if r else None
+
+    def save(self, name: str, model_name: str, model_version: str, author: str, description: str | None = None,
+             mission_id: str | None = None, evaluation_id: int | None = None, summary: dict | None = None) -> dict:
+        from . import models
+        name = " ".join((name or "").split())
+        if not name:
+            raise LearningError("Give the model a name, for example “Night cars, Route 6”.")
+        if len(name) > 80:
+            raise LearningError("Keep the name under 80 characters.")
+        if self.get(name):
+            raise LearningError(f"A saved model is already called “{name}”. Choose another name.")
+        dup = self.of_pack(model_name, model_version)
+        if dup:
+            raise LearningError(f"{model_name} {model_version} is already saved as “{dup['name']}”.")
+        try:
+            pack = models.find(model_name, model_version, self.models_root)     # verifies the checksum
+        except models.ModelPackError as exc:
+            raise LearningError(str(exc)) from None
+        if pack.card.get("evaluation_only"):
+            raise LearningError(f"{model_name} {model_version} is for evaluation only and cannot be saved for use.")
+        freeze(pack.path)
+        self.con.execute(
+            "INSERT INTO saved_model(name,description,task,model_name,model_version,sha256,mission_id,evaluation_id,summary,"
+            "author,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (name, (description or "").strip() or None, pack.card.get("task") or "vehicle_detection", pack.name, pack.version,
+             pack.sha256, mission_id, evaluation_id, json.dumps(summary or {}), author, utcnow()))
+        return self.get(name)
+
+    def remove(self, name: str) -> None:
+        """Take a model off the saved list. Its files stay where they are (still read-only)."""
+        if not self.get(name):
+            raise LearningError(f"There is no saved model called “{name}”.")
+        self.con.execute("DELETE FROM saved_model WHERE name=? COLLATE NOCASE", (name.strip(),))
+
+    def pack(self, name: str):
+        """The model pack of a saved model, checked against the checksum pinned when it was saved."""
+        from . import models
+        d = self.get(name)
+        if d is None:
+            raise LearningError(f"There is no saved model called “{name}”.")
+        try:
+            pack = models.find(d["model_name"], d["model_version"], self.models_root)
+        except models.ModelPackError as exc:
+            raise LearningError(f"The saved model “{d['name']}” cannot be loaded: {exc}") from None
+        if pack.sha256 != d["sha256"]:
+            raise LearningError(f"The files of the saved model “{d['name']}” changed after it was saved; it is "
+                                "not used. Import the original model again.")
+        return pack
+
+
+def freeze(folder: Path) -> None:
+    """Make a model pack's files read-only (best effort: some file systems keep no such flag)."""
+    for f in Path(folder).iterdir():
+        if f.is_file():
+            try:
+                os.chmod(f, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+            except OSError:
+                pass
