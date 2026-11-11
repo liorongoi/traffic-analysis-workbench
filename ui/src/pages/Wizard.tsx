@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, post } from "../api";
 import { go } from "../router";
 import TimezoneMap from "../components/TimezoneMap";
+import FolderPicker from "../components/FolderPicker";
 
 type Ref = { countries: Record<string, string>; country_zones: Record<string, string>; modes: Record<string, string[]>; zones: string[];
   sam3?: { installed: boolean; reason: string | null; memory_note?: string | null } };
@@ -21,9 +22,11 @@ export default function Wizard() {
   const [cfg, setCfg] = useState({
     name: "", input_type: "images", mode: "general_traffic", country: "IL", iana_zone: "Asia/Jerusalem",
     latitude: null as number | null, longitude: null as number | null,
-    source_dir: "", include_subdirs: true, processing: "one_time", output_dir: "", export_formats: ["xlsx", "csv"],
-    detector: "standard",
+    source_dir: "", source_dirs: [] as string[], include_subdirs: true, processing: "one_time", output_dir: "", export_formats: ["xlsx", "csv"],
+    detector: "standard", vehicle_model: null as string | null,
   });
+  const [saved, setSaved] = useState<any[]>([]);
+  useEffect(() => { api("/models/saved").then((r) => setSaved(r.saved ?? [])).catch(() => setSaved([])); }, []);
   const [zoneFilter, setZoneFilter] = useState("");
   const [utcPreview, setUtcPreview] = useState(() => new Date().toISOString().slice(0, 16));
   const [timePreview, setTimePreview] = useState<{ local: string; offset: string; is_dst: boolean; abbreviation: string } | null>(null);
@@ -63,7 +66,14 @@ export default function Wizard() {
   const loadPreview = async () => {
     setErr(null);
     try {
-      setPreview((await post("/source-preview", { source_dir: cfg.source_dir, include_subdirs: cfg.include_subdirs })).files);
+      // A few names from each chosen folder.
+      const per = Math.max(5, Math.floor(20 / Math.max(cfg.source_dirs.length, 1)));
+      const all: Preview[] = [];
+      for (const d of cfg.source_dirs) {
+        const files: Preview[] = (await post("/source-preview", { source_dir: d, include_subdirs: cfg.include_subdirs, limit: per })).files;
+        all.push(...files.map((f) => cfg.source_dirs.length > 1 ? { ...f, file: `${d.split(/[\\/]/).filter(Boolean).pop()}/${f.file}` } : f));
+      }
+      setPreview(all);
     } catch (e) {
       setPreview(null);
       setErr((e as ApiError).message);
@@ -87,7 +97,7 @@ export default function Wizard() {
     {refError ? <div className="card msg err" role="alert"><b>Setup options could not be loaded.</b><p>{refError}</p><button onClick={() => { setRefError(""); api("/reference").then(setRef).catch((e) => setRefError(e instanceof Error ? e.message : "Could not load setup options.")); }}>Try again</button></div>
       : <p className="muted" role="status" aria-live="polite">Loading setup options…</p>}
   </div>;
-  const canNext = [cfg.name.trim() !== "", !!cfg.iana_zone, cfg.source_dir.trim() !== "", cfg.output_dir.trim() !== "" && cfg.export_formats.length > 0, true][step];
+  const canNext = [cfg.name.trim() !== "", !!cfg.iana_zone, cfg.source_dirs.length > 0, cfg.output_dir.trim() !== "" && cfg.export_formats.length > 0, true][step];
 
   return (
     <div className="page" style={{ maxWidth: 820 }}>
@@ -113,6 +123,7 @@ export default function Wizard() {
             </label>
             <p className="muted">{MODE_HELP[cfg.mode]}</p>
             {cfg.input_type === "images" && <DetectorChoice value={cfg.detector} onChange={(d) => set("detector", d)} sam={ref.sam3} />}
+            {cfg.input_type === "images" && cfg.detector !== "sam3" && <ModelChoice saved={saved} value={cfg.vehicle_model} onChange={(v) => set("vehicle_model", v)} />}
           </>
         )}
         {step === 1 && (
@@ -149,9 +160,9 @@ export default function Wizard() {
         )}
         {step === 2 && (
           <>
-            <label className="field"><span>Source folder on this workstation (read only; files are never changed)</span>
-              <input className="mono" value={cfg.source_dir} onChange={(e) => { set("source_dir", e.target.value); setPreview(null); }} placeholder="D:\Feeds\Route6" />
-            </label>
+            <FolderPicker multiple label="Source folders on this workstation (read only; files are never changed). Add one or several."
+              value={cfg.source_dirs} placeholder="D:\Feeds\Route6, or press Browse"
+              onChange={(v) => { setCfg((c) => ({ ...c, source_dirs: v, source_dir: v[0] ?? "" })); setPreview(null); }} />
             <label className="row"><input type="checkbox" checked={cfg.include_subdirs} onChange={(e) => set("include_subdirs", e.target.checked)} /> Include subfolders</label>
             <label className="field" style={{ marginTop: 10 }}><span>Processing</span>
               <select value={cfg.processing} onChange={(e) => set("processing", e.target.value)}>
@@ -159,7 +170,7 @@ export default function Wizard() {
                 <option value="continuous">Continuous: keep watching for new files</option>
               </select>
             </label>
-            <div className="row"><button onClick={loadPreview} disabled={!cfg.source_dir}>Preview file names</button>
+            <div className="row"><button onClick={loadPreview} disabled={cfg.source_dirs.length === 0}>Preview file names</button>
               <span className="muted">Capture time comes from the file name in UTC. File dates are never used.</span></div>
             {preview && (
               <div className="tablewrap" style={{ marginTop: 10, maxHeight: 260, overflowY: "auto" }}>
@@ -180,9 +191,8 @@ export default function Wizard() {
         )}
         {step === 3 && (
           <>
-            <label className="field"><span>Output folder for exports</span>
-              <input className="mono" value={cfg.output_dir} onChange={(e) => set("output_dir", e.target.value)} placeholder="E:\Exports\Route6" />
-            </label>
+            <FolderPicker label="Output folder for exports" value={cfg.output_dir ? [cfg.output_dir] : []} placeholder="E:\Exports\Route6"
+              onChange={(v) => set("output_dir", v[0] ?? "")} />
             <div className="row">
               {["xlsx", "csv"].map((f) => (
                 <label key={f} className="row"><input type="checkbox" checked={cfg.export_formats.includes(f)}
@@ -196,8 +206,9 @@ export default function Wizard() {
             <table className="t"><tbody>
               {Object.entries({ Name: cfg.name, "Input type": cfg.input_type, Mode: cfg.mode.replace(/_/g, " "), Country: cfg.country, "Time zone": cfg.iana_zone,
                 Location: cfg.latitude === null || cfg.longitude === null ? "Not set" : `${cfg.latitude.toFixed(4)}, ${cfg.longitude.toFixed(4)}`,
-                Source: `${cfg.source_dir}${cfg.include_subdirs ? " (with subfolders)" : ""}`, Processing: cfg.processing.replace("_", "-"), Output: cfg.output_dir, Formats: cfg.export_formats.join(", "),
-                "Vehicle detector": cfg.detector === "sam3" ? "SAM 3.1 (finds vehicles by name)" : cfg.detector === "both" ? "Both: standard and SAM 3.1, merged" : "Standard (YOLOX-s)" })
+                [cfg.source_dirs.length > 1 ? "Sources" : "Source"]: `${cfg.source_dirs.join("; ")}${cfg.include_subdirs ? " (with subfolders)" : ""}`, Processing: cfg.processing.replace("_", "-"), Output: cfg.output_dir, Formats: cfg.export_formats.join(", "),
+                "Vehicle detector": cfg.detector === "sam3" ? "SAM 3.1 (finds vehicles by name)" : cfg.detector === "both" ? "Both: standard and SAM 3.1, merged" : "Standard (YOLOX-s)",
+                ...(cfg.detector !== "sam3" ? { Model: cfg.vehicle_model ? `${cfg.vehicle_model} (saved model)` : "The model in production use" } : {}) })
                 .map(([k, v]) => <tr key={k}><th style={{ width: 140 }}>{k}</th><td className="bidi">{v}</td></tr>)}
             </tbody></table>
             {!check && !err && <p className="muted" role="status" aria-live="polite">Checking folders and settings…</p>}
@@ -247,5 +258,22 @@ export function DetectorChoice({ value, onChange, sam, disabled, legend = true }
       </div>
       {(value === "sam3" || value === "both") && sam?.memory_note && <div className="msg warn">{sam.memory_note}</div>}
     </fieldset>
+  );
+}
+
+/** Which model the standard detector uses: the one in production use, or a model saved by name on a learning page. */
+export function ModelChoice({ saved, value, onChange, disabled }: {
+  saved: any[]; value: string | null; onChange: (v: string | null) => void; disabled?: boolean;
+}) {
+  const usable = saved.filter((x) => x.installed);
+  return (
+    <label className="field"><span>Model for the standard detector</span>
+      <select value={value ?? ""} disabled={disabled} onChange={(e) => onChange(e.target.value || null)}>
+        <option value="">The model in production use</option>
+        {usable.map((x) => <option key={x.id} value={x.name}>{x.name}{x.description ? ` – ${x.description}` : ""}</option>)}
+      </select>
+      <small className="muted" style={{ fontSize: 12.5 }}>{usable.length ? "Saved models are frozen models kept by name on a mission's learning page, for example one trained on cars at night."
+        : "No saved models yet. Train one on a mission's learning page and save it by name to choose it here."}</small>
+    </label>
   );
 }

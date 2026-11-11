@@ -60,7 +60,8 @@ class MissionBody(BaseModel):
     mode: str = "general_traffic"
     country: str
     iana_zone: str
-    source_dir: str
+    source_dir: str = ""
+    source_dirs: list[str] | None = None   # several source folders; source_dir is the first
     include_subdirs: bool = True
     processing: str = "one_time"
     output_dir: str
@@ -69,10 +70,26 @@ class MissionBody(BaseModel):
     longitude: float | None = None
     detector: str = "standard"
     sam3_words: dict[str, list[str]] | None = None
+    vehicle_model: str | None = None       # a saved model's name; None: the model in production use
+
+    def config(self) -> MissionConfig:
+        d = self.model_dump()
+        dirs = [x.strip() for x in (d.pop("source_dirs") or []) if x and x.strip()]
+        first = d["source_dir"].strip() or (dirs[0] if dirs else "")
+        rest = [x for x in dirs if x != first]
+        return MissionConfig(**d | {"source_dir": first, "source_dirs": [first, *rest] if rest else None})
 
 
 class DetectorBody(BaseModel):
     detector: str
+
+
+class VehicleModelBody(BaseModel):
+    saved: str | None = None               # a saved model's name; None: the model in production use
+
+
+class SourcesBody(BaseModel):
+    add: list[str] = Field(min_length=1, max_length=50)
 
 
 class WordsBody(BaseModel):
@@ -243,6 +260,20 @@ class DeleteBody(BaseModel):
     confirm_name: str
 
 
+class DatasetRef(BaseModel):
+    mission_id: str
+    dataset_id: int
+
+
+class SaveModelBody(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str | None = Field(None, max_length=500)
+    model_name: str
+    model_version: str
+    mission_id: str | None = None
+    evaluation_id: int | None = None
+
+
 class DatasetBody(BaseModel):
     name: str
     ratios: list[float] = Field(default_factory=lambda: [0.7, 0.15, 0.15])
@@ -251,7 +282,8 @@ class DatasetBody(BaseModel):
 
 
 class EvaluateBody(BaseModel):
-    dataset_id: int
+    dataset_id: int | None = None
+    datasets: list[DatasetRef] | None = None   # several dataset versions, from this mission or others
     split: str = "test"
     name: str | None = None           # model pack; empty means the model in production use
     version: str | None = None
@@ -259,7 +291,8 @@ class EvaluateBody(BaseModel):
 
 
 class TrainBody(BaseModel):
-    dataset_id: int
+    dataset_id: int | None = None
+    datasets: list[DatasetRef] | None = None   # several dataset versions, from this mission or others
     epochs: int = Field(20, ge=1, le=300)
     start_from: str | None = None     # "coco" (the released YOLOX-s) or "<name>/<version>" of a trained model
 
@@ -276,6 +309,64 @@ class PromoteBody(BaseModel):
 class RollbackBody(BaseModel):
     task: str = "vehicle_detection"
     note: str | None = None
+
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp", ".mp4", ".mkv", ".avi", ".mov", ".ts"}
+
+
+def folder_roots() -> list[dict]:
+    """Where browsing starts: the drives on Windows, the home folder and / elsewhere, and mounted volumes."""
+    out: list[dict] = []
+    if os.name == "nt":
+        import string
+        for letter in string.ascii_uppercase:
+            p = Path(f"{letter}:\\")
+            try:
+                if p.exists():
+                    out.append({"name": f"{letter}:", "path": str(p)})
+            except OSError:
+                pass
+    else:
+        home = Path.home()
+        out.append({"name": "Home", "path": str(home)})
+        for base in (Path("/Volumes"), Path("/mnt"), Path("/media")):
+            try:
+                for d in sorted(base.iterdir()) if base.is_dir() else []:
+                    if d.is_dir() and not d.name.startswith("."):
+                        out.append({"name": d.name, "path": str(d)})
+            except OSError:
+                pass
+        out.append({"name": "/", "path": "/"})
+    return out
+
+
+def list_folders(path: str | None, limit: int = 500) -> dict:
+    """The subfolders of path (hidden ones left out) and how many images or videos sit directly in it."""
+    if not path or not path.strip():
+        return {"path": None, "parent": None, "folders": [], "files": 0, "roots": folder_roots()}
+    p = Path(path.strip()).expanduser()
+    if not p.is_dir():
+        raise ApiError(400, "no_folder", f"{p} is not a folder on this workstation.")
+    folders, files, more = [], 0, False
+    try:
+        entries = sorted(os.scandir(p), key=lambda e: e.name.lower())
+    except OSError as exc:
+        raise ApiError(400, "no_access", f"{p} cannot be opened: {exc.strerror or exc}.") from None
+    for e in entries:
+        if e.name.startswith((".", "$")):
+            continue
+        try:
+            if e.is_dir():
+                if len(folders) < limit:
+                    folders.append({"name": e.name, "path": str(Path(e.path))})
+                else:
+                    more = True
+            elif Path(e.name).suffix.lower() in IMAGE_EXTS:
+                files += 1
+        except OSError:
+            continue
+    parent = str(p.parent) if p.parent != p else None
+    return {"path": str(p), "parent": parent, "folders": folders, "more": more, "files": files, "roots": folder_roots()}
 
 
 def default_detector_factory(data_root: Path | str | None = None):
@@ -420,6 +511,15 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                 break
         return {"files": out}
 
+    def _saved_or_none(name: str):
+        from ..learning import ModelLibrary
+        return ModelLibrary(data_root).get(name)
+
+    @app.get("/api/folders")
+    def folders(path: str | None = None, _u: User = Depends(user)):
+        """Folders on this computer, for the folder picker: the subfolders of path, or the places to start from."""
+        return list_folders(path)
+
     # ---------- filename formats ----------
     @app.get("/api/name-formats")
     def name_formats_get(_u: User = Depends(user)):
@@ -483,7 +583,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
 
     @app.post("/api/missions/validate")
     def mission_validate(body: MissionBody, _u: User = Depends(user)):
-        v = validate(MissionConfig(**body.model_dump()), data_root)
+        v = validate(body.config(), data_root)
+        if body.vehicle_model and not _saved_or_none(body.vehicle_model):
+            v.errors.append(f"There is no saved model named “{body.vehicle_model}”.")
         return {"errors": v.errors, "warnings": v.warnings}
 
     @app.post("/api/missions")
@@ -491,8 +593,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         if body.detector in ("sam3", "both") and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""),
                            "Choose the standard detector, or install the full LanePulse package.")
+        if body.vehicle_model and not _saved_or_none(body.vehicle_model):
+            raise ApiError(400, "invalid", f"There is no saved model named “{body.vehicle_model}”.")
         try:
-            m = DataRoot(data_root).create_mission(MissionConfig(**body.model_dump()), u.username)
+            m = DataRoot(data_root).create_mission(body.config(), u.username)
         except MissionValidationError as exc:
             raise ApiError(400, "invalid", " ".join(exc.validation.errors)) from None
         return {"id": m.id}
@@ -576,6 +680,39 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         if body.detector != getattr(cfg, "detector", "standard"):
             m.update_config(u.username, f"detector set to {body.detector}", detector=body.detector)
         return {"detector": body.detector}
+
+    @app.post("/api/missions/{mission_id}/sources")
+    def sources_add(body: SourcesBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Add source folders to a mission; the next scan reads them too. Folders are never removed."""
+        cfg = m.config()
+        have = cfg.sources()
+        new = [d.strip() for d in body.add if d.strip() and d.strip() not in have]
+        if not new:
+            raise ApiError(400, "invalid", "Those folders are already sources of this mission.")
+        trial = MissionConfig(**asdict(cfg) | {"source_dirs": [*have, *new]})
+        v = validate(trial, data_root, min_free_bytes=0)
+        if v.errors:
+            raise ApiError(400, "invalid", " ".join(v.errors))
+        for d in new:
+            m.con.execute("INSERT OR IGNORE INTO source_root(path,recursive) VALUES (?,?)",
+                          (str(Path(d).resolve()), int(cfg.include_subdirs)))
+        m.update_config(u.username, "source folders added: " + ", ".join(new), source_dirs=[*have, *new])
+        if m.id in jobs.monitors:                     # watch the new folders too
+            jobs.set_monitoring(m.id, False)
+            jobs.set_monitoring(m.id, True)
+        return {"sources": [*have, *new]}
+
+    @app.put("/api/missions/{mission_id}/vehicle-model")
+    def vehicle_model_set(body: VehicleModelBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Which model the standard detector uses for this mission: a saved model, or the one in production use."""
+        if body.saved and not _saved_or_none(body.saved):
+            raise ApiError(400, "invalid", f"There is no saved model named “{body.saved}”.")
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "Processing is running. Change the model when it has finished or is cancelled.")
+        if (body.saved or None) != getattr(m.config(), "vehicle_model", None):
+            m.update_config(u.username, f"model set to {body.saved}" if body.saved else "model set to the one in production use",
+                            vehicle_model=body.saved or None)
+        return {"vehicle_model": body.saved or None}
 
     @app.post("/api/missions/{mission_id}/notifications/ack")
     def ack(m: Mission = Depends(mission)):
@@ -1191,8 +1328,14 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                   ({"name": "yolox-s", "version": default[-1]["version"]} if default else None))
         from .. import training_env
         tj = jobs.training_busy()
+        from ..learning import ModelLibrary
+        saved = ModelLibrary(data_root).saved()
+        by_pack = {(x["model_name"], x["model_version"]): x["name"] for x in saved}
+        installed = [md | {"saved_as": by_pack.get((md["name"], md["version"]))} for md in models.installed("vehicle_detection")]
         return {"in_use": in_use, "eligibility": ls.eligibility(), "datasets": ls.datasets(), "evaluations": ls.evaluations(),
-                "adapters": ADAPTERS, "models": models.installed("vehicle_detection"),
+                "all_datasets": ls.all_datasets(), "training_runs": ls.training_runs(), "carry_over": ls.carry_over(),
+                "saved_models": saved, "mission_model": getattr(m.config(), "vehicle_model", None),
+                "adapters": ADAPTERS, "models": installed,
                 "production": prod, "history": reg.history("vehicle_detection")[:20],
                 "training": {**training_env.status(), "busy_mission": tj.mission_id if tj else None,
                              "job": (lambda j: j.snapshot() if j else None)(jobs.training_job(m.id))}}
@@ -1219,24 +1362,25 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     @app.post("/api/missions/{mission_id}/learning/evaluate")
     def evaluate_start(body: EvaluateBody, m: Mission = Depends(mission), u: User = Depends(user)):
         ls = _learn(m)
-        _learn_call(lambda: ls.dataset(body.dataset_id))
+        refs = _refs_of(m, body.dataset_id, body.datasets)
+        if not _learn_call(lambda: ls.combine(refs, body.split)[0]):
+            raise ApiError(400, "learning", f"The {body.split} split of the chosen dataset versions is empty.")
         if jobs.busy(m.id):
             raise ApiError(409, "busy", "Another job is running for this mission. Wait for it or cancel it first.")
         if bool(body.name) != bool(body.version):
             raise ApiError(400, "model", "Give both the model name and version, or neither for the model in use.")
-        return jobs.start(m.id, kind="evaluate", dataset_id=body.dataset_id, split=body.split, name=body.name,
-                          version=body.version, iou=body.iou, author=u.username).snapshot()
+        return jobs.start(m.id, kind="evaluate", dataset_id=body.dataset_id, datasets=refs, split=body.split,
+                          name=body.name, version=body.version, iou=body.iou, author=u.username).snapshot()
 
     @app.post("/api/missions/{mission_id}/learning/train")
     def train_start(body: TrainBody, m: Mission = Depends(mission), u: User = Depends(user)):
         """Fine-tune the vehicle detector here, on this computer's GPU or CPU. The new model is added, not promoted."""
         from .. import models, training_env
         ls = _learn(m)
-        ds = _learn_call(lambda: ls.dataset(body.dataset_id))
-        if ds["leakage"]:
-            raise ApiError(400, "learning", "This dataset version has leakage problems; it cannot be used for training.")
-        if not ((ds.get("stats") or {}).get("splits") or {}).get("train", {}).get("images"):
-            raise ApiError(400, "learning", "This dataset version has no training images.")
+        refs = _refs_of(m, body.dataset_id, body.datasets)
+        items, _src = _learn_call(lambda: ls.combine(refs, strict=True))
+        if not any(i["split"] == "train" for i in items):
+            raise ApiError(400, "learning", "The chosen dataset versions have no training images.")
         env = training_env.status(wait=True)
         if env["state"] != "ready":
             raise ApiError(400, "no_training", env.get("reason") or "Training is not available here.")
@@ -1265,7 +1409,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             work.mkdir(parents=True, exist_ok=True)
         except OSError:
             work = None
-        return jobs.start(m.id, kind="train", dataset_id=body.dataset_id, epochs=body.epochs, init=init,
+        return jobs.start(m.id, kind="train", dataset_id=body.dataset_id, datasets=refs, epochs=body.epochs, init=init,
                           start_from=start, author=u.username, work_dir=str(work) if work else None).snapshot()
 
     @app.post("/api/missions/{mission_id}/learning/train/{action}")
@@ -1287,6 +1431,48 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def evaluation_get(evaluation_id: int, m: Mission = Depends(mission)):
         ls = _learn(m)
         return _learn_call(lambda: ls.evaluation(evaluation_id))
+
+    def _refs_of(m: Mission, dataset_id: int | None, datasets) -> list[dict]:
+        refs = [{"mission_id": d.mission_id, "dataset_id": d.dataset_id} for d in datasets or []]
+        if not refs and dataset_id is not None:
+            refs = [{"mission_id": m.id, "dataset_id": dataset_id}]
+        if not refs:
+            raise ApiError(400, "learning", "Choose at least one dataset version.")
+        return refs
+
+    # ---------- saved models ----------
+    @app.get("/api/models/saved")
+    def saved_models(_u: User = Depends(user)):
+        from ..learning import ModelLibrary
+        return {"saved": ModelLibrary(data_root).saved()}
+
+    @app.post("/api/models/saved")
+    def saved_model_add(body: SaveModelBody, u: User = Depends(user)):
+        """Keep a model by a name of your own, frozen, so any mission can use it."""
+        from ..learning import LearningService, ModelLibrary
+        summary: dict[str, Any] = {}
+        if body.mission_id and body.evaluation_id:
+            try:
+                ev = LearningService(DataRoot(data_root).open_mission(body.mission_id)).evaluation(body.evaluation_id)
+            except KeyError:
+                raise ApiError(404, "no_mission", "That mission does not exist.") from None
+            md = (ev["model"] or {}).get("model") or {}
+            if (md.get("name"), md.get("version")) == (body.model_name, body.model_version) and ev["report"]:
+                summary = {"overall": ev["report"]["overall"], "split": ev["split"], "sources": ev["sources"]}
+        from .. import models
+        card = next((x for x in models.installed() if (x["name"], x["version"]) == (body.model_name, body.model_version)), None)
+        if card:
+            summary["trained_on"] = card.get("trained_on")
+        return _learn_call(lambda: ModelLibrary(data_root).save(body.name, body.model_name, body.model_version, u.username,
+                                                                 body.description, body.mission_id, body.evaluation_id,
+                                                                 summary))
+
+    @app.delete("/api/models/saved/{name}")
+    def saved_model_remove(name: str, u: User = Depends(user)):
+        from ..learning import ModelLibrary
+        _admin(u)
+        _learn_call(lambda: ModelLibrary(data_root).remove(name))
+        return {"removed": name}
 
     def _admin(u: User):
         if u.role != "admin":

@@ -68,6 +68,22 @@ CREATE TABLE IF NOT EXISTS model_promotion (
   note TEXT,
   created_at TEXT NOT NULL
 );
+-- Models an operator chose to keep, by a name of their own. A saved model is frozen: its files are made read-only,
+-- its checksum is pinned here, and training from it always makes a new model. Any mission can use it to process images.
+CREATE TABLE IF NOT EXISTS saved_model (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  task TEXT NOT NULL,
+  model_name TEXT NOT NULL,
+  model_version TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  mission_id TEXT,                  -- where the evaluation behind it lives
+  evaluation_id INTEGER,
+  summary TEXT,                     -- JSON: the evaluation's overall figures and what it was trained on
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 """
 
 MISSION_SCHEMA = """
@@ -825,6 +841,45 @@ CREATE TABLE change_vehicle (
 );
 CREATE INDEX ix_change_vehicle ON change_vehicle(analysis_id);
 """,
+    16: """
+-- Evaluations over several dataset versions, from this mission or others: sources lists them; dataset_id is the
+-- first one when it belongs to this mission.
+CREATE TABLE evaluation_new (
+  id INTEGER PRIMARY KEY,
+  dataset_id INTEGER REFERENCES training_dataset(id),
+  split TEXT NOT NULL,
+  model TEXT NOT NULL,
+  state TEXT NOT NULL,
+  report TEXT,
+  error TEXT,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  finished_at TEXT,
+  sources TEXT                       -- JSON: [{mission_id, dataset_id}]; NULL for older rows (dataset_id of this mission)
+);
+INSERT INTO evaluation_new(id,dataset_id,split,model,state,report,error,author,created_at,finished_at)
+  SELECT id,dataset_id,split,model,state,report,error,author,created_at,finished_at FROM evaluation;
+DROP TABLE evaluation;
+ALTER TABLE evaluation_new RENAME TO evaluation;
+-- Each training round on the learning page: what it trained on, what it started from, and whether the new model
+-- beat the one it started from on the same test images. Rounds that did not improve hand their data to the next.
+CREATE TABLE training_run (
+  id INTEGER PRIMARY KEY,
+  sources TEXT NOT NULL,             -- JSON: [{mission_id, dataset_id}]
+  start_from TEXT NOT NULL,
+  epochs INTEGER NOT NULL,
+  state TEXT NOT NULL,               -- running | finished | failed | cancelled
+  model_name TEXT, model_version TEXT,
+  evaluation_id INTEGER,             -- the new model on the test images
+  baseline_evaluation_id INTEGER,    -- the starting model on the same test images
+  improved INTEGER,                  -- 1 | 0 | NULL (not known: no test images, or evaluation failed)
+  history TEXT,                      -- JSON: training and validation loss per epoch
+  error TEXT,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  finished_at TEXT
+);
+""",
 }
 
 
@@ -905,6 +960,16 @@ class MissionConfig:
     detector: str = "standard"
     sam3_words: dict | None = None   # words SAM 3.1 looks for, per class (the five, and any of the mission's own)
     sam3_uncounted: list | None = None   # the mission's own classes listed and exported but not counted as vehicles
+    source_dirs: list | None = None   # several source folders; source_dir is the first of them
+    vehicle_model: str | None = None  # a saved model (by its name) instead of the one in production use
+
+    def sources(self) -> list[str]:
+        """Every source folder of the mission, the first being source_dir."""
+        out = [self.source_dir] if self.source_dir else []
+        for d in self.source_dirs or []:
+            if d and d not in out:
+                out.append(d)
+        return out
 
 
 @dataclass
@@ -968,11 +1033,23 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         if not set(cfg.sam3_uncounted) <= own:
             v.errors.append("Only a class of the mission's own can be left out of the vehicle count.")
 
-    src = Path(cfg.source_dir)
-    if not src.is_dir():
-        v.errors.append(f"Source folder {src} does not exist or is not a folder on this workstation.")
-    elif not os.access(src, os.R_OK | os.X_OK):
-        v.errors.append(f"Source folder {src} cannot be read by the application account.")
+    srcs = [Path(d) for d in cfg.sources()]
+    if not srcs:
+        v.errors.append("Choose at least one source folder.")
+    for src in srcs:
+        if not src.is_dir():
+            v.errors.append(f"Source folder {src} does not exist or is not a folder on this workstation.")
+        elif not os.access(src, os.R_OK | os.X_OK):
+            v.errors.append(f"Source folder {src} cannot be read by the application account.")
+    for i, a in enumerate(srcs):
+        for b in srcs[i + 1:]:
+            if a.is_dir() and b.is_dir():
+                if a.resolve() == b.resolve():
+                    v.errors.append(f"{a} is chosen twice.")
+                elif cfg.include_subdirs and (_inside(a, b) or _inside(b, a)):
+                    inner, outer = (a, b) if _inside(a, b) else (b, a)
+                    v.errors.append(f"{inner} is inside {outer} and subfolders are included, so its images would be read "
+                                    "twice. Keep only one of them.")
 
     out = Path(cfg.output_dir)
     if not out.is_dir():
@@ -986,10 +1063,11 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         free = shutil.disk_usage(out).free
         if free < min_free_bytes:
             v.warnings.append(f"Only {free // (1 << 20)} MiB free on the output volume.")
-    if src.is_dir() and out.is_dir() and _inside(out, src) and cfg.include_subdirs:
-        v.errors.append("Output folder is inside the source folder and subfolders are included; exports would be re-ingested.")
-    if src.is_dir() and _inside(data_root, src) and cfg.include_subdirs:
-        v.errors.append("The application data folder is inside the source folder; databases would be re-ingested.")
+    for src in srcs:
+        if src.is_dir() and out.is_dir() and _inside(out, src) and cfg.include_subdirs:
+            v.errors.append("Output folder is inside the source folder and subfolders are included; exports would be re-ingested.")
+        if src.is_dir() and _inside(data_root, src) and cfg.include_subdirs:
+            v.errors.append("The application data folder is inside the source folder; databases would be re-ingested.")
     return v
 
 
@@ -1032,10 +1110,11 @@ class DataRoot:
             "INSERT INTO config_revision(kind,payload,author,created_at,reason) VALUES ('mission',?,?,?,?)",
             (json.dumps(asdict(cfg)), author, now, "mission created"),
         )
-        con.execute(
-            "INSERT INTO source_root(path,recursive) VALUES (?,?)",
-            (str(Path(cfg.source_dir).resolve()), int(cfg.include_subdirs)),
-        )
+        for d in cfg.sources():
+            con.execute(
+                "INSERT INTO source_root(path,recursive) VALUES (?,?)",
+                (str(Path(d).resolve()), int(cfg.include_subdirs)),
+            )
         con.execute("COMMIT")
         for v in sorted(MISSION_MIGRATIONS):  # new databases start at the latest schema, no backup needed
             con.execute("BEGIN")

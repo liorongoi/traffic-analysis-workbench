@@ -150,6 +150,7 @@ class JobManager:
         self.detector_factory = detector_factory
         self.plate_factory = plate_factory
         self._detector = None
+        self._saved: dict[tuple, tuple] = {}     # saved models in use by missions, loaded once
         self._plates = None
         self._lock = threading.Lock()
         self.jobs: dict[str, Job] = {}
@@ -171,6 +172,37 @@ class JobManager:
         from ..sam3 import engine
         return engine()
 
+    def standard_for(self, m):
+        """The standard detector of a mission: the saved model it chose, else the model in production use."""
+        name = getattr(m.config(), "vehicle_model", None)
+        if not name:
+            return self.detector()
+        from ..learning import LearningError, ModelLibrary
+        lib = ModelLibrary(self.data_root)
+        d = lib.get(name)
+        if d is None:
+            raise RuntimeError(f"The saved model \u201c{name}\u201d chosen for this mission is no longer saved. Choose "
+                               "another model on the mission's overview.")
+        key = (d["model_name"], d["model_version"], d["sha256"])
+        with self._lock:
+            hit = self._saved.get(key)
+        if hit:
+            return hit
+        if self.model_loader:
+            det = self.model_loader(d["model_name"], d["model_version"])
+            card = getattr(getattr(det, "pack", None), "card", None) or {
+                "name": d["model_name"], "version": d["model_version"], "task": d["task"]}
+        else:
+            from ..detect import YoloxDetector
+            try:
+                pack = lib.pack(name)
+            except LearningError as exc:
+                raise RuntimeError(str(exc)) from None
+            det, card = YoloxDetector(pack), pack.card
+        with self._lock:
+            self._saved[key] = (det, card)
+        return det, card
+
     def detector_for(self, m):
         """The detector a mission chose: SAM 3.1 for still-image missions that asked for it, else the standard one."""
         choice = getattr(m.config(), "detector", "standard") if m.input_type == "images" else "standard"
@@ -186,10 +218,10 @@ class JobManager:
             if choice == "sam3":
                 return sam
             from ..combined import CombinedDetector
-            std, std_card = self.detector()
+            std, std_card = self.standard_for(m)
             both = CombinedDetector(std, std_card, sam[0], sam[1])
             return both, both.card()
-        return self.detector()
+        return self.standard_for(m)
 
     # ---------- scan areas found by SAM 3.1 ----------
     def find_areas(self, mission_id: str, view_id: int, version_id: int, prompts: list[str], kind: str,
@@ -379,8 +411,9 @@ class JobManager:
                 job.rate_done = 0
 
         try:
-            ev = LearningService(m).evaluate(p["dataset_id"], det, p["author"], split=p.get("split", "test"),
-                                             iou=p.get("iou", 0.5), control=job.control, progress=progress)
+            ev = LearningService(m).evaluate(p.get("dataset_id"), det, p["author"], split=p.get("split", "test"),
+                                             iou=p.get("iou", 0.5), control=job.control, progress=progress,
+                                             datasets=p.get("datasets"))
             job.result = {"evaluation": ev["id"]}
             job.state = "finished"
         except Exception as exc:
@@ -406,20 +439,23 @@ class JobManager:
         import shutil
         import tempfile
         from .. import models
-        from ..learning import LearningService
+        from ..learning import LearningService, improved
         from ..model_import import import_pack
         p = job.params
         if not _training_lock.acquire(blocking=False):
             raise RuntimeError("Another training is running on this computer. Wait for it to finish.")
         work = None
         final = None                                  # set on the job only after the temporary copy is removed
+        refs = p.get("datasets") or [{"mission_id": m.id, "dataset_id": p["dataset_id"]}]
+        ls = LearningService(m)
+        run_id = ls.start_training_run(refs, p.get("start_from") or "coco", int(p["epochs"]), p["author"])
+        job.result["training_run"] = run_id
         try:
             job.control.stage = "loading PyTorch"
             from .. import train as tr
-            ls = LearningService(m)
             work = Path(tempfile.mkdtemp(prefix="lanepulse-train-", dir=p.get("work_dir")))
             job.control.stage = "copying the dataset images"
-            ds_dir = ls.export_dataset(p["dataset_id"], out_dir=work)
+            ds_dir = ls.export_combined(refs, out_dir=work)
             log_lines: list[str] = []
 
             def log(*a):
@@ -455,8 +491,8 @@ class JobManager:
             job.control.stage = "adding the new model"
             r = import_pack(z, p.get("models_root") or models.models_root())
             job.result["model"] = {"name": r["name"], "version": r["version"]}
-            ds = ls.dataset(p["dataset_id"])
-            test_images = ((ds.get("stats") or {}).get("splits") or {}).get("test", {}).get("images", 0)
+            ls.finish_training_run(run_id, model_name=r["name"], model_version=r["version"])
+            test_images = len(ls.combine(refs, "test")[0])
             if test_images and p.get("evaluate", True):
                 job.control.stage = "evaluating the new model on the test images"
                 job.done, job.total, job.rate_start, job.rate_done = 0, 0, None, 0
@@ -466,9 +502,21 @@ class JobManager:
                     job.done = n
 
                 try:
+                    # The model it started from first (or its earlier identical evaluation), then the new one, so the
+                    # newest evaluation is the new model's and "compare" puts the two side by side.
+                    base = self._baseline(ls, p, refs, job, eprogress)
+                    job.control.stage = "evaluating the new model on the test images"
                     det = self.load_model(r["name"], r["version"])
-                    ev = ls.evaluate(p["dataset_id"], det, p["author"], split="test", control=job.control, progress=eprogress)
+                    ev = ls.evaluate(None, det, p["author"], split="test", control=job.control, progress=eprogress,
+                                     datasets=refs)
                     job.result["evaluation"] = ev["id"]
+                    ls.finish_training_run(run_id, evaluation_id=ev["id"])
+                    # Did it beat the model it started from, on exactly the same test images?
+                    if base is not None:
+                        job.result["baseline_evaluation"] = base["id"]
+                        better = improved(ev["report"]["overall"], base["report"]["overall"])
+                        job.result["improved"] = better
+                        ls.finish_training_run(run_id, baseline_evaluation_id=base["id"], improved=better)
                 except Exception as exc:              # the model is installed; evaluating it can be redone by hand
                     from ..process import RunCancelled
                     if isinstance(exc, RunCancelled):
@@ -492,8 +540,41 @@ class JobManager:
             _training_lock.release()
             if work is not None:
                 shutil.rmtree(work, ignore_errors=True)
+            try:
+                ls.finish_training_run(run_id, state=final or "failed", history=job.result.get("history") or [],
+                                       error=None if final else (str(sys.exc_info()[1]) or None))
+            except Exception:
+                pass
             if final:
                 job.state = final
+
+    def _baseline(self, ls, p, refs, job, eprogress) -> dict | None:
+        """The starting model's evaluation on the same test images: an earlier identical one, or a new one."""
+        from .. import models
+        start = p.get("start_from") or "coco"
+        try:
+            if start == "coco":                       # the released YOLOX-s, as shipped in the app
+                base = [x for x in models.installed("vehicle_detection", p.get("models_root")) if x["name"] == "yolox-s"]
+                if not base:
+                    job.result["baseline_error"] = "The built-in YOLOX-s is not installed here, so there is nothing to compare with."
+                    return None
+                name, version = "yolox-s", base[-1]["version"]
+            else:
+                name, _, version = start.partition("/")
+            sources = [{"mission_id": x["mission_id"], "dataset_id": x["dataset_id"]} for x in ls.combine(refs, "test")[1]]
+            found = ls.find_evaluation(name, version, sources, "test", 0.5)
+            if found:
+                return found
+            job.control.stage = f"evaluating the starting model ({name} {version}) on the same test images"
+            det = self.load_model(name, version)
+            return ls.evaluate(None, det, p["author"], split="test", control=job.control, progress=eprogress,
+                               datasets=refs)
+        except Exception as exc:
+            from ..process import RunCancelled
+            if isinstance(exc, RunCancelled):
+                raise
+            job.result["baseline_error"] = f"{type(exc).__name__}: {exc}"
+            return None
 
     # ---------- monitoring ----------
     def set_monitoring(self, mission_id: str, enabled: bool) -> None:

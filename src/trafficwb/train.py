@@ -463,7 +463,7 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, bat
         final = YOLOX(size, 80)
         final.load_state_dict(best_sd)
         final.eval()
-        record = {"dataset": {k: manifest.get(k) for k in ("mission_id", "dataset_id", "name", "stats", "exported_at")},
+        record = {"dataset": {k: manifest.get(k) for k in ("mission_id", "dataset_id", "name", "stats", "exported_at", "datasets")},
                   "dataset_files": {f: _sha256(dataset / f) for f in manifest.get("files", []) if (dataset / f).is_file()},
                   "init": init_src, "epochs": epochs, "best_epoch": best_epoch, "batch": batch, "lr": lr, "freeze_bn": freeze_bn,
                   "device": describe_device(dev), "torch": torch.__version__, "seed": seed,
