@@ -1581,6 +1581,12 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         svc = _video(m)
         return {"events": [_event_dict(e) for e in svc.events(version_id, status, flag)], "classes": svc.classes()}
 
+    @app.get("/api/missions/{mission_id}/counts")
+    def counts(m: Mission = Depends(mission), version_id: int | None = None,
+               bucket_s: int = Query(60, ge=10, le=3600)):
+        """Unique targets per class (one per track), per recording and for the mission, before and after review."""
+        return _video(m).counts(version_id, bucket_s)
+
     @app.get("/api/missions/{mission_id}/events/{event_id}")
     def event_get(event_id: int, m: Mission = Depends(mission)):
         svc = _video(m)

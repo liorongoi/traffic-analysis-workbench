@@ -481,3 +481,12 @@ button.folderpick-add { min-height: 26px; padding: 0 10px; font-size: 12.5px; }
 .savedgrid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
 .savedgrid .card { background: var(--panel-2); padding: 14px 16px; }
 .savedgrid h3 { margin: 0 0 2px; font-size: 15px; }
+
+/* Unique counts on the video events tab */
+.counts .count-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 8px 0 12px; }
+.counts .count-tile { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; }
+.counts .count-cls { font-size: 12.5px; color: var(--text-2); }
+.counts .count-cls::first-letter { text-transform: uppercase; }
+.counts .count-num { font-size: 28px; font-weight: 650; line-height: 1.15; font-variant-numeric: tabular-nums; color: var(--text); }
+.counts .count-chart svg { display: block; margin: 4px 0 2px; }
+.counts .count-tip { color: var(--text-2); min-height: 1.3em; }

@@ -56,6 +56,10 @@ class TrackerParams:
     high_score: float = 0.30
     low_iou_min: float = 0.5
     frame_s: float = 0.2           # Kalman time step: one analysed frame
+    # A track seen once has no speed yet, so a fast target (more than half its width per analysed frame) overlaps
+    # nothing on the next frame. Such a track may still take the nearest box of its family within this many box
+    # sizes per analysed frame ("byte" only).
+    first_jump: float = 1.0
 
 
 def iou(a, b) -> float:
@@ -195,13 +199,18 @@ class Tracker:
             obs.append(self._match(self.tracks[i], dets[j], t))
             pairs_matched.append((i, j))
         n_iou = len(pairs_matched)
-        if self.p.jump_per_s > 0:
+        first = self.p.first_jump if byte else 0.0
+        if self.p.jump_per_s > 0 or first > 0:
             near = []
             for i, (tr, pb) in enumerate(zip(self.tracks, preds)):
                 if i in used_t:
                     continue
                 size = max(pb[2] - pb[0], pb[3] - pb[1], 1.0)
-                reach = self.p.jump_per_s * max(t - tr.t, 1e-6) * size
+                dt = max(t - tr.t, 1e-6)
+                reach = max(self.p.jump_per_s * dt * size,
+                            first * size * dt / self.p.frame_s if tr.hits == 1 else 0.0)
+                if reach <= 0:
+                    continue
                 for j in strong:
                     db, dcls, _ = dets[j]
                     if j in used_d or family(dcls) != tr.family:
@@ -280,10 +289,16 @@ class Tracker:
         a = self.p.velocity_smoothing
         new_v = [(n - o) / dt for n, o in zip(db, tr.box)]
         tr.v = [round(a * ov + (1 - a) * nv, 4) for ov, nv in zip(tr.v, new_v)] if tr.hits > 1 else [round(x, 4) for x in new_v]
-        tr.box, tr.t = [round(float(x), 2) for x in db], t
         if self.p.algo == "byte" and tr.mean is not None:
-            m, c = kalman.update(tr.mean, tr.cov, db)
-            tr.mean, tr.cov, tr.kf_t = m.tolist(), c.ravel().tolist(), t
+            if tr.hits == 1:
+                # Second sighting: start the filter again with the measured speed. At 5 analysed frames per
+                # second a fast target moves most of its width per frame, more than the filter learns in a few steps.
+                tr.mean, tr.cov = kalman.initiate_moving(tr.box, db, dt / self.p.frame_s)
+            else:
+                m, c = kalman.update(tr.mean, tr.cov, db)
+                tr.mean, tr.cov = m.tolist(), c.ravel().tolist()
+            tr.kf_t = t
+        tr.box, tr.t = [round(float(x), 2) for x in db], t
         tr.hits += 1
         tr.votes[cls] = round(tr.votes.get(cls, 0.0) + score, 4)
         area = (db[2] - db[0]) * (db[3] - db[1])

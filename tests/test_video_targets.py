@@ -228,5 +228,42 @@ def test_weak_boxes_keep_a_track_alive_but_never_start_one():
     obs, _, new = tr.update(0.6, [([22, 20, 62, 44], "car", 0.15), ([200, 100, 240, 124], "car", 0.15)])
     assert not new and len(obs) == 1 and obs[0][0] is t1 and t1.hits == 4      # second pass kept it; no new track
     old = Tracker.from_state({**tr.state(), "params": {k: v for k, v in tr.state()["params"].items()
-                                                      if k not in ("algo", "high_score", "low_iou_min", "frame_s")}})
+                                                      if k not in ("algo", "high_score", "low_iou_min", "frame_s", "first_jump")}})
     assert old.p.algo == "iou"                                    # checkpoints from before resume the old way
+
+
+# ------------------------------------------------------------------ unique counts
+
+def crowd(t: float) -> np.ndarray:
+    """Three cars cross one after another (each seen for many frames) and a pedestrian walks."""
+    img = np.full((H, W, 3), 100, np.uint8)
+    for k, start in enumerate((0.0, 1.5, 3.0)):
+        x = int(-40 + 140 * (t - start))
+        if -40 < x < W:
+            cv2.rectangle(img, (x, 30 + 40 * k), (x + 40, 54 + 40 * k), (0, 0, 255), -1)
+    px = int(120 + 8 * t)
+    cv2.rectangle(img, (px, 140), (px + 12, 170), (255, 0, 0), -1)
+    return img
+
+
+def test_unique_counts_count_each_target_once_and_follow_review(tmp_path):
+    m = mission(tmp_path, {"CAM1_20261021T120000Z.mp4": (6.0, crowd, False)})
+    m.update_config("lior", "words", sam3_words={"pedestrian": ["pedestrian"]}, sam3_uncounted=["pedestrian"])
+    rep = VideoProcessor(m, both(), {}).process_all()
+    svc = VideoService(m)
+    c = svc.counts()
+    assert c["total"]["machine"] == {"car": 3, "pedestrian": 1}
+    assert c["total"]["counted"] == {"car": 3, "pedestrian": 1} and c["total"]["vehicles_counted"] == 3
+    assert rep[0].frames == 30                                   # 30 frames, yet 4 targets: one per track
+    (r,) = c["recordings"]
+    assert sum(b["counts"].get("car", 0) for b in r["per_bucket"]) == 3 and c["uncounted"] == ["pedestrian"]
+    cars = [e for e in svc.events() if e.cls == "car"]
+    svc.revise(cars[0].id, "reject", "lior")
+    svc.revise(cars[1].id, "duplicate", "lior", of=cars[2].key)
+    svc.revise(cars[2].id, "split_at", "lior", t=(cars[2].first_t + cars[2].last_t) / 2)
+    c = svc.counts()
+    assert c["total"]["machine"]["car"] == 3 and c["total"]["counted"]["car"] == 2   # rejected 1, duplicate 1, split +1
+    files = svc.export("lior", ["csv"])
+    counts_csv = next(p for p in files if p.name.endswith("_counts.csv")).read_text(encoding="utf-8-sig")
+    assert '"(all recordings)","","car","yes","3","2"' in counts_csv
+    assert any(p.name.endswith("_counts_per_minute.csv") for p in files)

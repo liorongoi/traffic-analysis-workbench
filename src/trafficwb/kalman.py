@@ -36,6 +36,15 @@ def initiate(box) -> tuple[list[float], list[float]]:
     return mean.tolist(), np.diag(std ** 2).ravel().tolist()
 
 
+def initiate_moving(prev_box, box, dt: float) -> tuple[list[float], list[float]]:
+    """A filter started on its second sighting, with the speed of its centre between the two (``dt`` in analysed
+    frames). Size and shape start still: a box growing as it enters at the frame edge is not a speed."""
+    z0, z1 = box_to_z(prev_box), box_to_z(box)
+    mean, cov = initiate(box)
+    mean[4:6] = ((z1[:2] - z0[:2]) / max(dt, 1e-6)).tolist()
+    return mean, cov
+
+
 def _F(dt: float) -> np.ndarray:
     f = np.eye(8)
     for i in range(4):

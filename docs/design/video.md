@@ -50,6 +50,15 @@ Video uses the same detector choice, model choice and words as still images (`Jo
 - Event fields: file and checksum, event id, first and last time (PTS and UTC), entry and exit position (relative to the frame), class by score-weighted vote with its share, thumbnail (the frame where the vehicle is largest), why the track ended, flags and related events, review status, clips.
 - Flags: appeared inside the frame (not at an edge, after the start), lost inside the frame, possible duplicate, class uncertain (vote share under 70%), cut by a scene change, cut by the end of the recording.
 
+## Unique counts
+
+- Each target counts once, however many frames it was seen in: one per confirmed track, never a sum over frames.
+- **Machine** count: one per event, by the machine class. **After review**: rejected, duplicate and merged events are left out, a split event counts once per part, and a re-classed event counts in its new class.
+- **Maybe the same**: of the counted events, those flagged as a possible duplicate (re-entry) that nobody has reviewed. The true count lies between the count minus these and the count.
+- Only the newest analysis of each recording counts. Classes the mission does not count as vehicles are counted and shown, and left out of the vehicle total.
+- Shown on the Events tab (per class, per recording, and new targets per minute) and exported as `counts` and `counts_per_minute` sheets beside `events`.
+- A target that leaves and comes back later (beyond the re-entry window) counts twice. Re-identification by appearance is planned.
+
 ## Review
 
 Machine events are never changed. Each operator action is an appended revision, and the event shown is the machine event with its revisions applied:
