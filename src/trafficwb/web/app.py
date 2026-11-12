@@ -72,6 +72,7 @@ class MissionBody(BaseModel):
     sam3_words: dict[str, list[str]] | None = None
     vehicle_model: str | None = None       # a saved model's name; None: the model in production use
     sam3_interval_s: float | None = None   # video: seconds between SAM 3.1 frames (None: 1 s)
+    camera: str = "fixed"                  # video: fixed | moving (PTZ, vehicle, drone, body-worn)
 
     def config(self) -> MissionConfig:
         d = self.model_dump()
@@ -84,6 +85,7 @@ class MissionBody(BaseModel):
 class DetectorBody(BaseModel):
     detector: str
     sam3_interval_s: float | None = None   # video: seconds between SAM 3.1 frames; None leaves it as it is
+    camera: str | None = None              # video: fixed | moving; None leaves it as it is
 
 
 class VehicleModelBody(BaseModel):
@@ -676,6 +678,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         cfg = m.config()
         if body.detector not in DETECTORS:
             raise ApiError(400, "invalid", f"Detector must be one of {sorted(DETECTORS)}.")
+        if body.camera is not None and body.camera not in ("fixed", "moving"):
+            raise ApiError(400, "invalid", "Camera must be fixed or moving.")
         if body.sam3_interval_s is not None and not (0.2 <= body.sam3_interval_s <= 10):
             raise ApiError(400, "invalid", "SAM 3.1 in video runs every 0.2 to 10 seconds of the recording.")
         if body.detector in ("sam3", "both") and not sam_info()["installed"]:
@@ -687,7 +691,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         if body.sam3_interval_s is not None and body.sam3_interval_s != cfg.sam3_interval_s:
             m.update_config(u.username, f"SAM 3.1 every {body.sam3_interval_s:g} s of video",
                             sam3_interval_s=body.sam3_interval_s)
-        return {"detector": body.detector, "sam3_interval_s": m.config().sam3_interval_s}
+        if body.camera is not None and body.camera != cfg.camera:
+            m.update_config(u.username, f"camera set to {body.camera}", camera=body.camera)
+        c2 = m.config()
+        return {"detector": body.detector, "sam3_interval_s": c2.sam3_interval_s, "camera": c2.camera}
 
     @app.post("/api/missions/{mission_id}/sources")
     def sources_add(body: SourcesBody, m: Mission = Depends(mission), u: User = Depends(user)):

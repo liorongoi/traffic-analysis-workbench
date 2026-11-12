@@ -144,3 +144,50 @@ def is_scene_cut(prev: np.ndarray | None, cur: np.ndarray, diff_threshold: float
         return False
     d = np.abs(prev.astype(np.int16) - cur.astype(np.int16))
     return float(d.mean()) > diff_threshold or float((d > 60).mean()) > 0.6
+
+
+# ---------- camera motion (moving and PTZ cameras) ----------
+
+MOTION_WIDTH = 480          # frames are compared at this width; the motion is returned in full-frame pixels
+
+
+def motion_frame(img: np.ndarray) -> np.ndarray:
+    """The small grey frame camera motion is measured on (kept in the checkpoint for resuming)."""
+    import cv2
+    h, w = img.shape[:2]
+    s = min(1.0, MOTION_WIDTH / w)
+    small = cv2.resize(img, (max(1, round(w * s)), max(1, round(h * s))), interpolation=cv2.INTER_AREA) if s < 1 else img
+    return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+
+def camera_motion(prev: np.ndarray | None, cur: np.ndarray, full_width: int, boxes=(),
+                  min_points: int = 30, min_inliers: float = 0.5) -> tuple[np.ndarray | None, str]:
+    """How the camera moved from ``prev`` to ``cur`` (small grey frames from ``motion_frame``), as a 2x3 affine in
+    full-frame pixels: corners tracked with pyramidal Lucas-Kanade optical flow, then a RANSAC fit of rotation,
+    scale and shift. ``boxes`` (full-frame pixels) are left out so moving objects do not count as camera motion.
+    Returns (motion, reason): reason "ok"; "no_texture" when the previous frame has too few corners to tell (fog,
+    a blank wall), motion None; or "no_match" when there were corners but too few agree on one motion, which on a
+    moving camera means the picture was replaced: a cut."""
+    import cv2
+    if prev is None or prev.shape != cur.shape:
+        return None, "no_texture"
+    s = cur.shape[1] / full_width
+    mask = np.full(prev.shape, 255, np.uint8)
+    for b in boxes:
+        x1, y1, x2, y2 = (int(round(v * s)) for v in b)
+        mask[max(0, y1):max(0, y2), max(0, x1):max(0, x2)] = 0
+    pts = cv2.goodFeaturesToTrack(prev, maxCorners=400, qualityLevel=0.01, minDistance=8, blockSize=3, mask=mask)
+    if pts is None or len(pts) < min_points:
+        return None, "no_texture"
+    nxt, st, _ = cv2.calcOpticalFlowPyrLK(prev, cur, pts, None, winSize=(21, 21), maxLevel=3)
+    ok = st.ravel() == 1
+    if ok.sum() < min_points:
+        return None, "no_match"
+    a, inl = cv2.estimateAffinePartial2D(pts[ok], nxt[ok], method=cv2.RANSAC, ransacReprojThreshold=3.0,
+                                         maxIters=2000, confidence=0.99, refineIters=10)
+    if a is None or inl is None or inl.mean() < min_inliers:
+        return None, "no_match"
+    a = a.astype(float)
+    a[:, 2] /= s                                  # shift back to full-frame pixels; rotation and scale are unchanged
+    return a, "ok"
+

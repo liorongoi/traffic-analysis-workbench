@@ -159,6 +159,15 @@ class YoloxDetector:
         other.classes = dict(classes)
         return other
 
+    def with_threshold(self, score: float) -> "YoloxDetector":
+        """The same loaded model reporting boxes down to ``score`` (video's tracker uses the weak ones)."""
+        if score == self.settings.score_threshold:
+            return self
+        from dataclasses import replace
+        other = copy.copy(self)
+        other.settings = replace(self.settings, score_threshold=score)
+        return other
+
     def describe(self) -> dict:
         pre = {"letterbox": self.size, "pad": 114, "colour": "BGR", "tiles": self.settings.record()}
         if self.classes != COCO_VEHICLES:

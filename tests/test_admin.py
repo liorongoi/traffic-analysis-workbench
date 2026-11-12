@@ -68,6 +68,7 @@ def test_update_backs_up_before_migrating_and_rollback_restores_old_schema(env):
     con = sqlite3.connect(db)
     assert newest == 17, "update this test to undo the newest migration"
     con.execute("ALTER TABLE track_observation DROP COLUMN found_by")
+    con.execute("ALTER TABLE video_checkpoint DROP COLUMN prev_motion")
     con.execute("DELETE FROM schema_version WHERE version=?", (newest,))
     con.commit()
     con.close()

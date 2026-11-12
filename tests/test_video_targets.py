@@ -162,3 +162,71 @@ def test_review_can_set_a_class_of_the_missions_own(tmp_path):
     car = next(e for e in svc.events() if e.cls == "car")
     assert "pedestrian" in svc.classes()
     assert svc.revise(car.id, "set_class", "lior", cls="pedestrian").cls == "pedestrian"
+
+
+# ------------------------------------------------------------------ moving cameras and the Kalman tracker
+
+_rng = np.random.default_rng(7)
+WORLD = cv2.GaussianBlur(_rng.integers(0, 255, (H, 1000, 3), dtype=np.uint8), (0, 0), 1.2)
+WORLD2 = cv2.GaussianBlur(np.random.default_rng(99).integers(0, 255, (H, 1000, 3), dtype=np.uint8), (0, 0), 1.2)
+
+
+def panning(t: float, cut_at: float | None = None) -> np.ndarray:
+    """A camera panning back and forth fast (up to 250 px/s) over a textured scene, with a car driving slowly."""
+    off = int(round(200 + 80 * np.sin(np.pi * t)))
+    world = (WORLD2 if cut_at is not None and t >= cut_at else WORLD).copy()
+    x = int(300 + 10 * t)
+    cv2.rectangle(world, (x, 60), (x + 40, 84), (0, 0, 255), -1)
+    return np.ascontiguousarray(world[:, off:off + W])
+
+
+def test_a_moving_camera_keeps_one_track_where_a_fixed_one_breaks_it(tmp_path):
+    fixed = mission(tmp_path / "f", {"CAM1_20261021T120000Z.mp4": (4.0, panning, False)})
+    VideoProcessor(fixed, RedDetector(), {}, VideoSettings(camera="fixed")).process_all()
+    moving = mission(tmp_path / "m", {"CAM1_20261021T120000Z.mp4": (4.0, panning, False)})
+    VideoProcessor(moving, RedDetector(), {}, VideoSettings(camera="moving")).process_all()
+    n_tracks = lambda m: m.con.execute("SELECT COUNT(*) FROM track").fetchone()[0]
+    assert n_tracks(fixed) > 3                              # the car jumps 50 px a frame: the fixed tracker loses it
+    assert n_tracks(moving) == 1 and len(VideoService(moving).events()) == 1
+    assert moving.con.execute("SELECT COUNT(*) FROM video_marker").fetchone()[0] == 0   # a pan is not a cut
+    assert '"camera": "moving"' in moving.con.execute("SELECT preprocessing FROM run").fetchone()[0]
+
+
+def test_a_real_cut_still_closes_tracks_on_a_moving_camera(tmp_path):
+    m = mission(tmp_path, {"CAM1_20261021T120000Z.mp4": (4.0, lambda t: panning(t, cut_at=2.0), False)})
+    VideoProcessor(m, RedDetector(), {}, VideoSettings(camera="moving")).process_all()
+    assert m.con.execute("SELECT COUNT(*) FROM video_marker WHERE kind='scene_cut'").fetchone()[0] == 1
+
+
+def test_moving_camera_resume_is_identical(tmp_path):
+    ref = mission(tmp_path / "a", {"CAM1_20261021T120000Z.mp4": (4.0, panning, False)})
+    VideoProcessor(ref, RedDetector(), {}, VideoSettings(camera="moving")).process_all()
+
+    class CancelOnce(RunControl):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def checkpoint(self):
+            self.n += 1
+            if self.n == 1:
+                raise RunCancelled()
+
+    m = mission(tmp_path / "b", {"CAM1_20261021T120000Z.mp4": (4.0, panning, False)})
+    VideoProcessor(m, RedDetector(), {}, VideoSettings(camera="moving", chunk_frames=6), CancelOnce()).process_all()
+    VideoProcessor(m, RedDetector(), {}, VideoSettings(camera="moving", chunk_frames=6)).process_all()
+    q = "SELECT COUNT(*), ROUND(SUM(t), 4), ROUND(SUM(x1 + y2), 2) FROM track_observation"
+    assert m.con.execute(q).fetchone() == ref.con.execute(q).fetchone()
+    assert summary(m) == summary(ref)
+
+
+def test_weak_boxes_keep_a_track_alive_but_never_start_one():
+    tr = Tracker(W, H)
+    for k in range(3):
+        tr.update(k * 0.2, [([10 + 4 * k, 20, 50 + 4 * k, 44], "car", 0.9)])
+    (t1,) = tr.tracks
+    obs, _, new = tr.update(0.6, [([22, 20, 62, 44], "car", 0.15), ([200, 100, 240, 124], "car", 0.15)])
+    assert not new and len(obs) == 1 and obs[0][0] is t1 and t1.hits == 4      # second pass kept it; no new track
+    old = Tracker.from_state({**tr.state(), "params": {k: v for k, v in tr.state()["params"].items()
+                                                      if k not in ("algo", "high_score", "low_iou_min", "frame_s")}})
+    assert old.p.algo == "iou"                                    # checkpoints from before resume the old way

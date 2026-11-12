@@ -28,7 +28,7 @@ from typing import Callable
 from .process import RunCancelled, RunControl, register_model
 from .store import Mission, utcnow
 from .tracker import Closed, Tracker, TrackerParams
-from .video import frames, is_scene_cut, probe, scene_signature
+from .video import camera_motion, frames, is_scene_cut, motion_frame, probe, scene_signature
 from .views import ViewService
 
 MAX_ATTEMPTS = 3
@@ -40,6 +40,23 @@ class VideoSettings:
     chunk_frames: int = 50           # analysed frames per committed chunk
     tracker: TrackerParams = field(default_factory=TrackerParams)
     sam3_interval_s: float | None = None   # SAM 3.1 every this many seconds (None: the mission's choice, else 1 s)
+    camera: str | None = None              # fixed | moving (None: the mission's choice)
+    low_score: float = 0.10                # the standard detector reports boxes down to this score in video, for
+                                           # the tracker's second pass (only boxes from high_score start tracks)
+
+
+def _low_threshold(detector, score: float):
+    """The same detector reporting weaker boxes too (shares the loaded model), for ByteTrack's second pass."""
+    if hasattr(detector, "standard") and hasattr(detector, "sam"):
+        if hasattr(detector.standard, "with_threshold"):
+            import copy
+            c = copy.copy(detector)
+            c.standard = detector.standard.with_threshold(min(score, detector.standard.settings.score_threshold))
+            return c
+        return detector
+    if hasattr(detector, "with_threshold"):
+        return detector.with_threshold(min(score, detector.settings.score_threshold))
+    return detector
 
 
 def _kind(detector) -> str:
@@ -62,6 +79,21 @@ class VideoReport:
     plates: dict | None = None
 
 
+def _pack(a) -> bytes | None:
+    if a is None:
+        return None
+    import numpy as np
+    return np.asarray(a.shape, np.int32).tobytes() + np.ascontiguousarray(a, np.uint8).tobytes()
+
+
+def _unpack(b: bytes | None):
+    if not b:
+        return None
+    import numpy as np
+    h, w = np.frombuffer(b[:8], np.int32)
+    return np.frombuffer(b[8:], np.uint8).reshape(int(h), int(w)).copy()
+
+
 class VideoProcessor:
     def __init__(self, mission: Mission, detector, card: dict | None = None, settings: VideoSettings | None = None,
                  control: RunControl | None = None, plate_models: Callable[[], tuple] | None = None):
@@ -81,6 +113,9 @@ class VideoProcessor:
         self.sam_every = max(1, round(sam_s / self.s.interval_s)) if self.kind == "both" else 1
         self.grid_s = max(self.s.interval_s, sam_s) if self.kind == "sam3" else self.s.interval_s
         self.sam_s = sam_s
+        self.camera = self.s.camera or getattr(mission.config(), "camera", None) or "fixed"
+        if self.s.tracker.algo == "byte":
+            self.detector = _low_threshold(detector, self.s.low_score)
         if self.kind != "standard" and not self.s.tracker.jump_per_s:
             # SAM 3.1 sees a target about once a second: a person walks several body widths in that time.
             from dataclasses import replace
@@ -145,6 +180,8 @@ class VideoProcessor:
         pre = json.loads(run["preprocessing"] or "{}")
         pre["vehicle_detection"] = desc["preprocessing"]
         pre["video"] = {"interval_s": self.grid_s, "chunk_frames": self.s.chunk_frames, "detector": self.kind,
+                        "camera": self.camera, "camera_motion": "optical flow + RANSAC similarity" if self.camera == "moving"
+                        else "none (fixed camera)",
                         **({"sam3_every_frames": self.sam_every, "sam3_interval_s": self.sam_s}
                            if self.kind != "standard" else {}),
                         "tracker": asdict(self.s.tracker), "time_base": "presentation timestamps",
@@ -225,9 +262,11 @@ class VideoProcessor:
             last_t, nxt, count = cp["last_t"], cp["next_sample_t"], cp["frames_analysed"]
             import numpy as np
             prev = np.frombuffer(cp["prev_signature"], np.uint8).reshape(36, 64) if cp["prev_signature"] else None
+            pm = _unpack(cp["prev_motion"]) if "prev_motion" in cp.keys() else None
         else:
             tracker = Tracker(pr["width"], pr["height"], self.s.tracker)
-            last_t, nxt, count, prev = None, 0.0, 0, None
+            last_t, nxt, count, prev, pm = None, 0.0, 0, None, None
+        moving = self.camera == "moving"
         ids = {r["track_key"]: r["id"] for r in self.con.execute(
             "SELECT id, track_key FROM track WHERE run_item_id=?", (it["id"],))}
         in_chunk = 0
@@ -235,7 +274,16 @@ class VideoProcessor:
         try:
             for fr, nxt_after in frames(path, self.grid_s, after_t=last_t, next_sample_t=nxt):
                 sig = scene_signature(fr.image)
-                if is_scene_cut(prev, sig):
+                motion = None
+                cut = is_scene_cut(prev, sig)
+                if moving:
+                    # A moving camera: measure how the picture moved and take it out before tracking. A pan or
+                    # zoom is never a cut; a textured frame that matches the previous one nowhere is.
+                    mf = motion_frame(fr.image)
+                    motion, why = camera_motion(pm, mf, pr["width"], [t.box for t in tracker.tracks])
+                    cut = why == "no_match" or (why == "no_texture" and pm is not None and cut)
+                    pm = mf
+                if cut:
                     self.con.execute("INSERT INTO video_marker(run_item_id,t,kind) VALUES (?,?,?)",
                                      (it["id"], fr.t, "scene_cut"))
                     self._finish(it, tracker.close_all("scene_cut"), ids, pr, rep)
@@ -245,7 +293,7 @@ class VideoProcessor:
                     box = list(map(float, d.box))
                     found[id(box)] = getattr(d, "found_by", None) or ("sam3" if self.kind == "sam3" else "standard")
                     dets.append((box, d.cls, float(d.score)))
-                obs, closed, new = tracker.update(fr.t, dets)
+                obs, closed, new = tracker.update(fr.t, dets, motion=motion)
                 for tr in new:
                     ids[tr.key] = self.con.execute(
                         "INSERT INTO track(run_item_id,track_key,state) VALUES (?,?,?)",
@@ -260,14 +308,14 @@ class VideoProcessor:
                 rep.frames += 1
                 in_chunk += 1
                 if in_chunk >= self.s.chunk_frames:
-                    self._checkpoint(it["id"], last_t, nxt, count, tracker, prev)
+                    self._checkpoint(it["id"], last_t, nxt, count, tracker, prev, pm)
                     self.con.execute("COMMIT")
                     in_chunk = 0
                     self.control.checkpoint()          # pause or cancel only between committed chunks
                     self.con.execute("BEGIN")
             end_t = pr["duration_s"] if pr["duration_s"] else last_t
             self._finish(it, tracker.close_all("end_of_recording", end_t), ids, pr, rep)
-            self._checkpoint(it["id"], last_t if last_t is not None else 0.0, nxt, count, tracker, prev)
+            self._checkpoint(it["id"], last_t if last_t is not None else 0.0, nxt, count, tracker, prev, pm)
             self.con.execute("UPDATE run_item SET processing_state='done', stage=NULL, error_code=NULL, error_detail=NULL "
                              "WHERE id=?", (it["id"],))
             self.con.execute("COMMIT")
@@ -287,14 +335,15 @@ class VideoProcessor:
             return [replace(d, found_by="standard") for d in self.detector.standard.detect(img)]
         return self.detector.detect(img)
 
-    def _checkpoint(self, item_id, last_t, nxt, count, tracker: Tracker, prev) -> None:
+    def _checkpoint(self, item_id, last_t, nxt, count, tracker: Tracker, prev, pm=None) -> None:
         self.con.execute(
             "INSERT INTO video_checkpoint(run_item_id,last_t,next_sample_t,frames_analysed,tracker_state,prev_signature,"
-            "updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(run_item_id) DO UPDATE SET last_t=excluded.last_t, "
-            "next_sample_t=excluded.next_sample_t, frames_analysed=excluded.frames_analysed, "
-            "tracker_state=excluded.tracker_state, prev_signature=excluded.prev_signature, updated_at=excluded.updated_at",
+            "prev_motion,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(run_item_id) DO UPDATE SET "
+            "last_t=excluded.last_t, next_sample_t=excluded.next_sample_t, frames_analysed=excluded.frames_analysed, "
+            "tracker_state=excluded.tracker_state, prev_signature=excluded.prev_signature, "
+            "prev_motion=excluded.prev_motion, updated_at=excluded.updated_at",
             (item_id, last_t, nxt, count, json.dumps(tracker.state()), prev.tobytes() if prev is not None else None,
-             utcnow()))
+             _pack(pm), utcnow()))
 
     def _finish(self, it, closed: list[Closed], ids: dict, pr: dict, rep: VideoReport) -> None:
         for c in closed:

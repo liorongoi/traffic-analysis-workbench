@@ -23,7 +23,7 @@ export default function Wizard() {
     name: "", input_type: "images", mode: "general_traffic", country: "IL", iana_zone: "Asia/Jerusalem",
     latitude: null as number | null, longitude: null as number | null,
     source_dir: "", source_dirs: [] as string[], include_subdirs: true, processing: "one_time", output_dir: "", export_formats: ["xlsx", "csv"],
-    detector: "standard", vehicle_model: null as string | null, sam3_interval_s: null as number | null,
+    detector: "standard", vehicle_model: null as string | null, sam3_interval_s: null as number | null, camera: "fixed",
   });
   const [saved, setSaved] = useState<any[]>([]);
   useEffect(() => { api("/models/saved").then((r) => setSaved(r.saved ?? [])).catch(() => setSaved([])); }, []);
@@ -123,6 +123,7 @@ export default function Wizard() {
             </label>
             <p className="muted">{MODE_HELP[cfg.mode]}</p>
             <DetectorChoice value={cfg.detector} onChange={(d) => set("detector", d)} sam={ref.sam3} video={cfg.input_type === "video"} />
+            {cfg.input_type === "video" && <CameraChoice value={cfg.camera} onChange={(v) => set("camera", v)} />}
             {cfg.input_type === "video" && cfg.detector !== "standard" && <SamInterval value={cfg.sam3_interval_s} onChange={(v) => set("sam3_interval_s", v)} both={cfg.detector === "both"} />}
             {cfg.detector !== "sam3" && <ModelChoice saved={saved} value={cfg.vehicle_model} onChange={(v) => set("vehicle_model", v)} />}
           </>
@@ -210,6 +211,7 @@ export default function Wizard() {
                 [cfg.source_dirs.length > 1 ? "Sources" : "Source"]: `${cfg.source_dirs.join("; ")}${cfg.include_subdirs ? " (with subfolders)" : ""}`, Processing: cfg.processing.replace("_", "-"), Output: cfg.output_dir, Formats: cfg.export_formats.join(", "),
                 Detector: (cfg.detector === "sam3" ? "SAM 3.1 (finds objects by name)" : cfg.detector === "both" ? "Both: standard and SAM 3.1, merged" : "Standard (YOLOX-s)")
                   + (cfg.input_type === "video" && cfg.detector !== "standard" ? `, SAM 3.1 every ${cfg.sam3_interval_s ?? 1} s of video` : ""),
+                ...(cfg.input_type === "video" ? { Camera: cfg.camera === "moving" ? "Moving: camera motion is measured and removed" : "Fixed" } : {}),
                 ...(cfg.detector !== "sam3" ? { Model: cfg.vehicle_model ? `${cfg.vehicle_model} (saved model)` : "The model in production use" } : {}) })
                 .map(([k, v]) => <tr key={k}><th style={{ width: 140 }}>{k}</th><td className="bidi">{v}</td></tr>)}
             </tbody></table>
@@ -263,6 +265,20 @@ export function DetectorChoice({ value, onChange, sam, disabled, legend = true, 
       </div>
       {(value === "sam3" || value === "both") && sam?.memory_note && <div className="msg warn">{sam.memory_note}</div>}
     </fieldset>
+  );
+}
+
+/** Video: does the camera move? A moving camera (PTZ, on a vehicle, a drone, worn) has its own motion measured on
+ *  every analysed frame and taken out before tracking, so a pan neither breaks tracks nor counts as a cut. */
+export function CameraChoice({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled?: boolean }) {
+  return (
+    <label className="field"><span>Camera</span>
+      <select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
+        <option value="fixed">Fixed: mounted and not moving (fastest)</option>
+        <option value="moving">Moving: PTZ, on a vehicle, a drone or worn</option>
+      </select>
+      <small className="muted">{value === "moving" ? "The camera's own motion is measured on every analysed frame (a few milliseconds) and removed, so targets keep one track while the camera pans or zooms." : "A sudden change of the whole picture is treated as a scene cut."}</small>
+    </label>
   );
 }
 

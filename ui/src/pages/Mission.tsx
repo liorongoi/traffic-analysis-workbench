@@ -6,7 +6,7 @@ import EventsTab from "./Events";
 import PlatesTab from "./Plates";
 import LearningTab from "./Learning";
 import NightReviewTab from "./NightReview";
-import { DetectorChoice, ModelChoice, SamInterval } from "./Wizard";
+import { CameraChoice, DetectorChoice, ModelChoice, SamInterval } from "./Wizard";
 import FolderPicker from "../components/FolderPicker";
 
 export type SavedQuery = { filter: Filter; sort: string; desc: boolean };
@@ -215,11 +215,13 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
   const video = m.config.input_type === "video";
   const [every, setEvery] = useState<number>(m.config.sam3_interval_s ?? 1);
   useEffect(() => { setEvery(m.config.sam3_interval_s ?? 1); }, [m.config.sam3_interval_s]);
-  const changed = value !== (m.config.detector ?? "standard") || (video && every !== (m.config.sam3_interval_s ?? 1));
+  const [camera, setCamera] = useState<string>(m.config.camera ?? "fixed");
+  useEffect(() => { setCamera(m.config.camera ?? "fixed"); }, [m.config.camera]);
+  const changed = value !== (m.config.detector ?? "standard") || (video && (every !== (m.config.sam3_interval_s ?? 1) || camera !== (m.config.camera ?? "fixed")));
   const saveIt = async () => {
     setErr(null);
     setSaving(true);
-    try { await api(`/missions/${m.id}/detector`, { method: "PUT", body: { detector: value, ...(video ? { sam3_interval_s: every } : {}) } }); reload(); }
+    try { await api(`/missions/${m.id}/detector`, { method: "PUT", body: { detector: value, ...(video ? { sam3_interval_s: every, camera } : {}) } }); reload(); }
     catch (e) { setErr((e as ApiError).message); }
     finally { setSaving(false); }
   };
@@ -228,11 +230,12 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
       <h2>Detector</h2>
       <DetectorChoice value={value} onChange={setValue} sam={sam ?? undefined} disabled={busy} legend={false} video={video} />
       {video && value !== "standard" && <SamInterval value={every} onChange={setEvery} both={value === "both"} disabled={busy} />}
+      {video && <CameraChoice value={camera} onChange={setCamera} disabled={busy} />}
       {value !== "sam3" && <ModelChoice saved={saved} value={m.config.vehicle_model ?? null} onChange={setModel} disabled={busy} />}
       {changed && <p className="muted">{video ? "Recordings" : "Images"} already processed keep their detections; the change applies to the next run. Each detection records the model that made it.</p>}
       {busy && <p className="muted">The detector can be changed when processing has finished.</p>}
       {changed && <div className="row"><button className="primary" disabled={busy || saving} onClick={saveIt}>{saving ? "Saving…" : "Use this detector"}</button>
-        <button onClick={() => { setValue(m.config.detector ?? "standard"); setEvery(m.config.sam3_interval_s ?? 1); }}>Cancel</button></div>}
+        <button onClick={() => { setValue(m.config.detector ?? "standard"); setEvery(m.config.sam3_interval_s ?? 1); setCamera(m.config.camera ?? "fixed"); }}>Cancel</button></div>}
       {err && <div className="msg err" role="alert">{err}</div>}
       {!changed && sam?.vehicle_prompts && (
         <SamWords m={m} defaults={sam.vehicle_prompts} busy={busy} reload={reload} samOnly={m.config.detector === "sam3"} standardOnly={(m.config.detector ?? "standard") === "standard"} standardKnows={sam.standard_knows ?? []} />

@@ -33,13 +33,15 @@ Video uses the same detector choice, model choice and words as still images (`Jo
 
 ## Tracking (`trafficwb.tracker`)
 
-- Detection runs on each analysed frame with the mission's detector (above).
-- Tracks are matched by overlap (IoU ≥ 0.25) with each track's predicted position (constant velocity). Within the vehicle family the class does not take part in matching, because the detector may call the same vehicle car in one frame and truck in the next. Other classes are each a family of their own: a person is never matched to the bicycle they ride, and the two are never merged into one detection.
+- Detection runs on each analysed frame with the mission's detector (above). In video the standard detector reports boxes down to score 0.10.
+- **Kalman and ByteTrack**: each track's box is predicted by a Kalman filter (centre, aspect, height and their velocities, per analysed frame, as in SORT/ByteTrack/BoT-SORT). Boxes scoring 0.30 or more are matched first, by overlap (IoU ≥ 0.25) with the predicted boxes, and may start new tracks. Weaker boxes are matched next, only to tracks still unmatched and only at IoU ≥ 0.5; they keep a track alive through partial occlusion and never start one. Checkpoints written before this tracker resume with the earlier constant-velocity tracker, so a run never changes method half way.
+- **Moving cameras** (mission setting "Camera: moving"): on every analysed frame the camera's own motion is measured on a 480-pixel-wide grey copy (corners tracked with pyramidal Lucas-Kanade optical flow, tracked objects masked out, RANSAC fit of rotation, scale and shift). Every track, its Kalman state and recently closed tracks are moved by it before matching, so only the objects' own motion is predicted. A pan or zoom is never a cut; a textured frame that matches the previous one nowhere is. The previous grey frame is kept in the checkpoint, so a resumed run measures the same motion.
+- Tracks are matched by overlap with each track's predicted position. Within the vehicle family the class does not take part in matching, because the detector may call the same vehicle car in one frame and truck in the next. Other classes are each a family of their own: a person is never matched to the bicycle they ride, and the two are never merged into one detection.
 - When SAM 3.1 is used, a box that overlaps no track may still join the nearest track of its family whose predicted centre is within 3 box sizes per second since it was last seen (sizes within a factor of 2). SAM 3.1 sees a walking person about once a second, by which time the person has moved several body widths.
 - A track becomes **confirmed** after 3 matched frames. Shorter tracks are kept in the database as discarded, and never become events.
 - **Occlusion**: an unmatched track keeps its predicted motion for up to 1.5 s. If it is matched again within that time it is the same track.
 - **Re-entry**: a new track that starts within 3 s of a closed track, near where that track was heading, is flagged **possible duplicate** of it. The tracker never merges them; the operator decides.
-- **Scene cut**: when most of the picture changes at once (mean grey difference over 45, or more than 60% of pixels changed strongly), every open track is closed with "cut by a scene change" and a marker is stored. Re-entry suspicion does not cross a cut. A slow pan or zoom of a PTZ camera is not detected as a cut in this version.
+- **Scene cut**: on a fixed camera, when most of the picture changes at once (mean grey difference over 45, or more than 60% of pixels changed strongly), every open track is closed with "cut by a scene change" and a marker is stored. On a moving camera, see above. Re-entry suspicion does not cross a cut.
 - **End of recording** closes every track. A track already unseen for more than 0.5 s at the frame edge is recorded as having left the frame. No identity is carried across recordings or cameras.
 
 ## Events
@@ -82,6 +84,7 @@ Machine events are never changed. Each operator action is an appended revision, 
 ## Not in this version
 
 - Night light tracking and analysis regions for video.
-- Learning from video, unique counts, parallel segments and camera-motion compensation: see the phased plan.
+- Learning from video, unique counts, parallel segments and appearance re-identification: see the phased plan.
+- Moving cameras: lines and areas drawn on a moving camera, and speed in km/h.
 - Plates in video.
 - Detecting slow camera movement (pan/zoom) as a view change.
