@@ -66,6 +66,8 @@ def test_video_missions_may_choose_sam_and_how_often_it_looks(tmp_path):
     assert validate(cfg, tmp_path, min_free_bytes=0).ok
     cfg.sam3_interval_s = 30
     assert any("0.2 to 10 seconds" in e for e in validate(cfg, tmp_path, min_free_bytes=0).errors)
+    cfg.sam3_interval_s, cfg.video_workers = 1.0, 40
+    assert any("1 to 32" in e for e in validate(cfg, tmp_path, min_free_bytes=0).errors)
 
 
 # ------------------------------------------------------------------ both detectors in a recording
@@ -267,3 +269,59 @@ def test_unique_counts_count_each_target_once_and_follow_review(tmp_path):
     counts_csv = next(p for p in files if p.name.endswith("_counts.csv")).read_text(encoding="utf-8-sig")
     assert '"(all recordings)","","car","yes","3","2"' in counts_csv
     assert any(p.name.endswith("_counts_per_minute.csv") for p in files)
+
+
+# ------------------------------------------------------------------ parallel segments
+
+def test_plan_cuts_on_the_grid_and_the_last_segment_takes_a_short_tail():
+    from trafficwb.video_segments import plan
+    segs = plan(6.0, 2.0, 0.6, 0.2)
+    assert [(s.own_a, s.own_b) for s in segs] == [(0.0, 2.0), (2.0, 4.0), (4.0, float("inf"))]
+    assert segs[0].run_a == 0.0 and segs[1].run_a == 1.4 and segs[1].run_b == 4.6 and segs[2].run_b == float("inf")
+    assert [(s.own_a, s.own_b) for s in plan(6.3, 2.0, 0.6, 0.2)] == [(0.0, 2.0), (2.0, 4.0), (4.0, float("inf"))]
+    assert len(plan(1.0, 300.0, 3.0, 0.2)) == 1
+    assert all(round(s.own_a / 0.2, 6).is_integer() for s in plan(17.0, 2.1, 0.5, 0.2))
+
+
+def segmented(**kw):
+    return VideoSettings(workers=3, segment_s=2.0, overlap_s=0.6, **kw)
+
+
+def test_segments_side_by_side_find_the_same_targets_and_counts_as_one_worker(tmp_path):
+    files = {"CAM1_20261021T120000Z.mp4": (6.0, crowd, False)}
+    ref = mission(tmp_path / "a", files)
+    ref.update_config("lior", "words", sam3_words={"pedestrian": ["pedestrian"]})
+    one = VideoProcessor(ref, both(), {}).process_all()
+    m = mission(tmp_path / "b", files)
+    m.update_config("lior", "words", sam3_words={"pedestrian": ["pedestrian"]})
+    par = VideoProcessor(m, both(), {}, segmented()).process_all()
+    assert m.con.execute("SELECT COUNT(*) FROM video_segment WHERE state='done'").fetchone()[0] == 3
+    assert par[0].frames == one[0].frames == 30
+    a, b = VideoService(ref).counts()["total"], VideoService(m).counts()["total"]
+    assert b["machine"] == a["machine"] == {"car": 3, "pedestrian": 1}
+    ev_a = sorted((e.cls, round(e.first_t, 1), round(e.last_t, 1)) for e in VideoService(ref).events())
+    ev_b = sorted((e.cls, round(e.first_t, 1), round(e.last_t, 1)) for e in VideoService(m).events())
+    assert ev_b == ev_a
+    q = "SELECT found_by, COUNT(*) FROM track_observation GROUP BY found_by ORDER BY found_by"
+    assert m.con.execute(q).fetchall() == ref.con.execute(q).fetchall()    # every frame once, SAM on the same frames
+    assert par[0].realtime_factor
+
+
+def test_a_cancelled_segmented_run_keeps_the_segments_it_finished(tmp_path):
+    files = {"CAM1_20261021T120000Z.mp4": (6.0, crowd, False)}
+    ref = mission(tmp_path / "a", files)
+    VideoProcessor(ref, both(), {}, segmented()).process_all()
+
+    class CancelLate(RunControl):
+        def checkpoint(self):                        # cancel once the first segment is stored
+            import threading
+            if threading.current_thread() is threading.main_thread():
+                raise RunCancelled()
+
+    m = mission(tmp_path / "b", files)
+    VideoProcessor(m, both(), {}, VideoSettings(workers=2, segment_s=2.0, overlap_s=0.6), CancelLate()).process_all()
+    assert not VideoService(m).events()
+    kept = m.con.execute("SELECT COUNT(*) FROM video_segment WHERE state='done'").fetchone()[0]
+    assert 0 < kept < 3
+    VideoProcessor(m, both(), {}, segmented()).process_all()
+    assert summary(m) == summary(ref)

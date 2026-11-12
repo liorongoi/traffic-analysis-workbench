@@ -23,7 +23,7 @@ export default function Wizard() {
     name: "", input_type: "images", mode: "general_traffic", country: "IL", iana_zone: "Asia/Jerusalem",
     latitude: null as number | null, longitude: null as number | null,
     source_dir: "", source_dirs: [] as string[], include_subdirs: true, processing: "one_time", output_dir: "", export_formats: ["xlsx", "csv"],
-    detector: "standard", vehicle_model: null as string | null, sam3_interval_s: null as number | null, camera: "fixed",
+    detector: "standard", vehicle_model: null as string | null, sam3_interval_s: null as number | null, camera: "fixed", video_workers: null as number | null,
   });
   const [saved, setSaved] = useState<any[]>([]);
   useEffect(() => { api("/models/saved").then((r) => setSaved(r.saved ?? [])).catch(() => setSaved([])); }, []);
@@ -124,6 +124,7 @@ export default function Wizard() {
             <p className="muted">{MODE_HELP[cfg.mode]}</p>
             <DetectorChoice value={cfg.detector} onChange={(d) => set("detector", d)} sam={ref.sam3} video={cfg.input_type === "video"} />
             {cfg.input_type === "video" && <CameraChoice value={cfg.camera} onChange={(v) => set("camera", v)} />}
+            {cfg.input_type === "video" && <ParallelChoice value={cfg.video_workers} onChange={(v) => set("video_workers", v)} />}
             {cfg.input_type === "video" && cfg.detector !== "standard" && <SamInterval value={cfg.sam3_interval_s} onChange={(v) => set("sam3_interval_s", v)} both={cfg.detector === "both"} />}
             {cfg.detector !== "sam3" && <ModelChoice saved={saved} value={cfg.vehicle_model} onChange={(v) => set("vehicle_model", v)} />}
           </>
@@ -278,6 +279,19 @@ export function CameraChoice({ value, onChange, disabled }: { value: string; onC
         <option value="moving">Moving: PTZ, on a vehicle, a drone or worn</option>
       </select>
       <small className="muted">{value === "moving" ? "The camera's own motion is measured on every analysed frame (a few milliseconds) and removed, so targets keep one track while the camera pans or zooms." : "A sudden change of the whole picture is treated as a scene cut."}</small>
+    </label>
+  );
+}
+
+/** Video: how many pieces of a long recording are analysed side by side on this computer. */
+export function ParallelChoice({ value, onChange, disabled }: { value: number | null; onChange: (v: number) => void; disabled?: boolean }) {
+  const n = value ?? 1;
+  return (
+    <label className="field"><span>Analyse side by side</span>
+      <select value={String(n)} disabled={disabled} onChange={(e) => onChange(Number(e.target.value))}>
+        {[1, 2, 3, 4, 6, 8].map((k) => <option key={k} value={k}>{k === 1 ? "1 piece at a time" : `${k} pieces at a time`}</option>)}
+      </select>
+      <small className="muted">{n === 1 ? "A recording is analysed from start to end." : "Recordings longer than about 6 minutes are cut into 5-minute pieces with a few seconds of overlap, analysed at the same time and joined at the cuts, so every target is counted once. Use more pieces on a computer with a strong graphics card or many cores."}</small>
     </label>
   );
 }

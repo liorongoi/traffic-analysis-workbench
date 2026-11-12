@@ -887,6 +887,20 @@ CREATE TABLE training_run (
 ALTER TABLE track_observation ADD COLUMN found_by TEXT;
 -- Moving cameras: the small grey frame camera motion was last measured on, so a resumed run measures the same.
 ALTER TABLE video_checkpoint ADD COLUMN prev_motion BLOB;
+-- Several workers: each finished segment of a recording, with its tracks before they are joined at the cuts.
+CREATE TABLE video_segment (
+  id INTEGER PRIMARY KEY,
+  run_item_id INTEGER NOT NULL REFERENCES run_item(id),
+  idx INTEGER NOT NULL,
+  own_start REAL NOT NULL,
+  own_end REAL,                     -- NULL: to the end of the recording
+  state TEXT NOT NULL,              -- done
+  result TEXT NOT NULL,             -- JSON: pieces of tracks, scene cuts, frames analysed
+  frames INTEGER NOT NULL,
+  seconds REAL NOT NULL,            -- wall time
+  updated_at TEXT NOT NULL,
+  UNIQUE (run_item_id, idx)
+);
 """,
 }
 
@@ -972,6 +986,7 @@ class MissionConfig:
     vehicle_model: str | None = None  # a saved model (by its name) instead of the one in production use
     sam3_interval_s: float | None = None  # video: seconds of recording between SAM 3.1 frames (None: 1 s)
     camera: str = "fixed"            # video: fixed | moving (PTZ, vehicle, drone, body-worn): camera motion is removed
+    video_workers: int | None = None  # video: segments analysed side by side on this computer (None: 1)
 
     def sources(self) -> list[str]:
         """Every source folder of the mission, the first being source_dir."""
@@ -1029,6 +1044,8 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         v.errors.append("Export formats must be xlsx, csv, or both.")
     if cfg.detector not in DETECTORS:
         v.errors.append(f"Detector must be one of {sorted(DETECTORS)}.")
+    if cfg.video_workers is not None and not (1 <= cfg.video_workers <= 32):
+        v.errors.append("Workers must be 1 to 32.")
     if cfg.camera not in CAMERAS:
         v.errors.append(f"Camera must be one of {sorted(CAMERAS)}.")
     if cfg.sam3_interval_s is not None and not (0.2 <= cfg.sam3_interval_s <= 10):

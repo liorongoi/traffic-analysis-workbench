@@ -41,6 +41,9 @@ class VideoSettings:
     tracker: TrackerParams = field(default_factory=TrackerParams)
     sam3_interval_s: float | None = None   # SAM 3.1 every this many seconds (None: the mission's choice, else 1 s)
     camera: str | None = None              # fixed | moving (None: the mission's choice)
+    workers: int | None = None             # segments analysed side by side (None: the mission's choice, else 1)
+    segment_s: float = 300.0               # segment length when workers > 1
+    overlap_s: float = 3.0                 # analysed on both sides of each cut, to join tracks across it
     low_score: float = 0.10                # the standard detector reports boxes down to this score in video, for
                                            # the tracker's second pass (only boxes from high_score start tracks)
 
@@ -77,6 +80,33 @@ class VideoReport:
     events: int = 0
     errors: list[str] = field(default_factory=list)
     plates: dict | None = None
+    video_s: float = 0.0                   # seconds of recording analysed in this call
+    wall_s: float = 0.0                    # seconds it took
+
+    @property
+    def realtime_factor(self) -> float | None:
+        """How many seconds of video were analysed per second of work (above 1: faster than real time)."""
+        return round(self.video_s / self.wall_s, 2) if self.wall_s > 0 and self.video_s > 0 else None
+
+
+def _with_found(d, who: str):
+    from dataclasses import replace
+    try:
+        return replace(d, found_by=who)
+    except TypeError:
+        return d
+
+
+def _plain(res) -> dict:
+    return {"idx": res.idx, "cuts": res.cuts, "frames": res.frames, "seconds": res.seconds,
+            "pieces": [{"key": p.key, "family": p.family, "obs": p.obs, "reason": p.reason, "related": p.related}
+                       for p in res.pieces]}
+
+
+def _result(d: dict):
+    from .video_segments import Piece, SegmentResult
+    return SegmentResult(d["idx"], [Piece(p["key"], p["family"], [tuple(o) for o in p["obs"]], p["reason"], p["related"])
+                                    for p in d["pieces"]], d["cuts"], d["frames"], d["seconds"])
 
 
 def _pack(a) -> bytes | None:
@@ -114,6 +144,7 @@ class VideoProcessor:
         self.grid_s = max(self.s.interval_s, sam_s) if self.kind == "sam3" else self.s.interval_s
         self.sam_s = sam_s
         self.camera = self.s.camera or getattr(mission.config(), "camera", None) or "fixed"
+        self.workers = max(1, int(self.s.workers or getattr(mission.config(), "video_workers", None) or 1))
         if self.s.tracker.algo == "byte":
             self.detector = _low_threshold(detector, self.s.low_score)
         if self.kind != "standard" and not self.s.tracker.jump_per_s:
@@ -257,6 +288,8 @@ class VideoProcessor:
             return False
         path = self.views._path(vid)
         cp = self.con.execute("SELECT * FROM video_checkpoint WHERE run_item_id=?", (it["id"],)).fetchone()
+        if not cp and self.workers > 1 and (pr["duration_s"] or 0) > self.s.segment_s * 1.25:
+            return self._process_segmented(it, pr, rep, path)
         if cp:
             tracker = Tracker.from_state(json.loads(cp["tracker_state"]))
             last_t, nxt, count = cp["last_t"], cp["next_sample_t"], cp["frames_analysed"]
@@ -325,6 +358,105 @@ class VideoProcessor:
             if self.con.in_transaction:
                 self.con.execute("ROLLBACK")
             raise
+        return True
+
+    # ---------- several segments side by side ----------
+    def _process_segmented(self, it, pr: dict, rep: "VideoReport", path) -> bool:
+        """Cut the recording into segments, analyse them in a pool of workers sharing the detector, join the
+        tracks at the cuts and record them as one run would. Finished segments are kept, so a cancelled run
+        resumes with the segments still to do."""
+        import time as _time
+        from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+        from . import video_segments as vs
+        t0 = _time.monotonic()
+        # The overlap on each side holds at least one SAM 3.1 frame, so a target only SAM 3.1 finds is seen by both
+        # segments on two frames or more around the cut and can be joined.
+        ov = max(self.s.overlap_s, self.sam_s if self.kind != "standard" else 0.0)
+        segs = vs.plan(pr["duration_s"], self.s.segment_s, ov, self.grid_s)
+        done = {r["idx"]: _result(json.loads(r["result"])) for r in self.con.execute(
+            "SELECT idx, result FROM video_segment WHERE run_item_id=? AND state='done'", (it["id"],))}
+        todo = [s for s in segs if s.idx not in done]
+        moving = self.camera == "moving"
+        sam_every = self.sam_every if self.kind == "both" else 1
+
+        def detect(img, sam: bool):
+            if self.kind == "both" and not sam:
+                from dataclasses import replace
+                return [replace(d, found_by="standard") for d in self.detector.standard.detect(img)]
+            return [d if getattr(d, "found_by", None) else _with_found(d, "sam3" if self.kind == "sam3" else "standard")
+                    for d in self.detector.detect(img)]
+
+        self.control.stage = f"analysing video in {len(segs)} segments, {min(self.workers, len(segs))} at a time"
+        with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="segment") as pool:
+            running = {pool.submit(vs.analyse, s, path, pr["width"], pr["height"], detect, self.grid_s,
+                                   self.s.tracker, moving, sam_every, self.control.checkpoint): s for s in todo}
+            try:
+                while running:
+                    fin, _ = wait(running, return_when=FIRST_COMPLETED)
+                    for f in fin:
+                        s = running.pop(f)
+                        res = f.result()                       # a cancel raised inside a worker comes out here
+                        done[s.idx] = res
+                        self.con.execute(
+                            "INSERT INTO video_segment(run_item_id,idx,own_start,own_end,state,result,frames,seconds,"
+                            "updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(run_item_id,idx) DO UPDATE SET "
+                            "state=excluded.state, result=excluded.result, frames=excluded.frames, "
+                            "seconds=excluded.seconds, updated_at=excluded.updated_at",
+                            (it["id"], s.idx, s.own_a, None if s.own_b == float("inf") else s.own_b, "done",
+                             json.dumps(_plain(res)), res.frames, res.seconds, utcnow()))
+                        self.control.checkpoint()      # pause or cancel between segments too
+            except BaseException:
+                self.control.cancel() if not self.control.cancelled else None
+                for f in running:
+                    f.cancel()
+                raise
+        # All segments are done: join them and write tracks, observations and events in one transaction.
+        joined = sorted(vs.join(segs, done), key=lambda j: (j.obs[0][0], j.obs[0][1]))
+        keys: dict[tuple, str] = {}
+        for n, j in enumerate(joined, 1):
+            for pid in j.ids:
+                keys[tuple(pid)] = f"T{n}"
+        end_t = pr["duration_s"]
+        self.con.execute("BEGIN")
+        try:
+            ids: dict[str, int] = {}
+            closed = []
+            from .tracker import Closed
+            for n, j in enumerate(joined, 1):
+                tr, ok = vs.to_track(j, f"T{n}", self.s.tracker.min_hits)
+                tr.related = sorted({keys[tuple(r)] for r in j.related if tuple(r) in keys} - {tr.key})
+                ids[tr.key] = self.con.execute("INSERT INTO track(run_item_id,track_key,state) VALUES (?,?,?)",
+                                               (it["id"], tr.key, tr.state)).lastrowid
+                self.con.executemany(
+                    "INSERT INTO track_observation(track_id,t,x1,y1,x2,y2,cls,score,found_by) VALUES (?,?,?,?,?,?,?,?,?)",
+                    [(ids[tr.key], t, *box, cls, score, fb) for t, box, cls, score, fb in j.obs])
+                reason = j.reason
+                if reason == "segment_end":
+                    e = self.s.tracker.edge_px
+                    edge = (tr.box[0] <= e or tr.box[1] <= e or tr.box[2] >= pr["width"] - e or tr.box[3] >= pr["height"] - e)
+                    reason = "left_frame" if end_t - tr.t > 0.5 and edge else "end_of_recording"
+                closed.append(Closed(tr, reason, ok))
+            for s in segs:
+                for t in done[s.idx].cuts:
+                    self.con.execute("INSERT INTO video_marker(run_item_id,t,kind) VALUES (?,?,?)", (it["id"], t, "scene_cut"))
+            self._finish(it, sorted(closed, key=lambda c: (c.track.t, c.track.key)), ids, pr, rep)
+            frames_n = sum(done[s.idx].frames for s in segs)
+            last_t = max((j.obs[-1][0] for j in joined), default=0.0)
+            self.con.execute(
+                "INSERT INTO video_checkpoint(run_item_id,last_t,next_sample_t,frames_analysed,tracker_state,updated_at) "
+                "VALUES (?,?,?,?,?,?) ON CONFLICT(run_item_id) DO UPDATE SET last_t=excluded.last_t, "
+                "frames_analysed=excluded.frames_analysed, updated_at=excluded.updated_at",
+                (it["id"], last_t, end_t, frames_n, json.dumps({"segments": len(segs)}), utcnow()))
+            self.con.execute("UPDATE run_item SET processing_state='done', stage=NULL, error_code=NULL, error_detail=NULL "
+                             "WHERE id=?", (it["id"],))
+            self.con.execute("COMMIT")
+        except Exception:
+            if self.con.in_transaction:
+                self.con.execute("ROLLBACK")
+            raise
+        rep.frames += sum(done[s.idx].frames for s in segs if s in todo)
+        rep.video_s += pr["duration_s"]
+        rep.wall_s += _time.monotonic() - t0
         return True
 
     def _detect(self, img, count: int):

@@ -59,6 +59,15 @@ Video uses the same detector choice, model choice and words as still images (`Jo
 - Shown on the Events tab (per class, per recording, and new targets per minute) and exported as `counts` and `counts_per_minute` sheets beside `events`.
 - A target that leaves and comes back later (beyond the re-entry window) counts twice. Re-identification by appearance is planned.
 
+## Parallel segments (`trafficwb.video_segments`)
+
+- A mission chooses how many pieces of a recording are analysed side by side (1 to 32; 1 by default). With more than one, a recording longer than 1.25 segments is cut at multiples of 5 minutes on the time grid; a short tail joins the last segment.
+- Each segment owns the frames in [start, end) and also analyses 3 seconds before and after (at least one SAM 3.1 interval, so a target only SAM 3.1 finds is seen twice on each side of the cut). Segments share the loaded detector and each has its own tracker.
+- SAM 3.1 frames come from the whole recording's grid, so a segment calls SAM 3.1 on the frames a single run would.
+- Joining: a track still running at a cut and a track on the right side that saw the same frames in the overlap are one target when their boxes agree (IoU 0.5 or more on most shared frames, two at least) and their classes are of one family; best agreement first. Each frame's box comes from the segment that owns it, so nothing is counted twice.
+- Each finished segment is stored; a cancelled run resumes with the segments still to do. Tracks, observations and events are written once all segments are done, in one transaction.
+- A join is not guaranteed to equal a single run's track (the trackers' histories differ at the cut); targets and counts are tested to agree.
+
 ## Review
 
 Machine events are never changed. Each operator action is an appended revision, and the event shown is the machine event with its revisions applied:
@@ -93,7 +102,7 @@ Machine events are never changed. Each operator action is an appended revision, 
 ## Not in this version
 
 - Night light tracking and analysis regions for video.
-- Learning from video, unique counts, parallel segments and appearance re-identification: see the phased plan.
+- Learning from video, segments on other computers and appearance re-identification: see the phased plan.
 - Moving cameras: lines and areas drawn on a moving camera, and speed in km/h.
 - Plates in video.
 - Detecting slow camera movement (pan/zoom) as a view change.

@@ -73,6 +73,7 @@ class MissionBody(BaseModel):
     vehicle_model: str | None = None       # a saved model's name; None: the model in production use
     sam3_interval_s: float | None = None   # video: seconds between SAM 3.1 frames (None: 1 s)
     camera: str = "fixed"                  # video: fixed | moving (PTZ, vehicle, drone, body-worn)
+    video_workers: int | None = None       # video: segments analysed side by side (None: 1)
 
     def config(self) -> MissionConfig:
         d = self.model_dump()
@@ -86,6 +87,7 @@ class DetectorBody(BaseModel):
     detector: str
     sam3_interval_s: float | None = None   # video: seconds between SAM 3.1 frames; None leaves it as it is
     camera: str | None = None              # video: fixed | moving; None leaves it as it is
+    video_workers: int | None = None       # video: segments analysed side by side; None leaves it as it is
 
 
 class VehicleModelBody(BaseModel):
@@ -682,6 +684,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "invalid", "Camera must be fixed or moving.")
         if body.sam3_interval_s is not None and not (0.2 <= body.sam3_interval_s <= 10):
             raise ApiError(400, "invalid", "SAM 3.1 in video runs every 0.2 to 10 seconds of the recording.")
+        if body.video_workers is not None and not (1 <= body.video_workers <= 32):
+            raise ApiError(400, "invalid", "Segments side by side must be 1 to 32.")
         if body.detector in ("sam3", "both") and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""))
         if jobs.busy(m.id):
@@ -693,8 +697,11 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                             sam3_interval_s=body.sam3_interval_s)
         if body.camera is not None and body.camera != cfg.camera:
             m.update_config(u.username, f"camera set to {body.camera}", camera=body.camera)
+        if body.video_workers is not None and body.video_workers != cfg.video_workers:
+            m.update_config(u.username, f"{body.video_workers} segments side by side", video_workers=body.video_workers)
         c2 = m.config()
-        return {"detector": body.detector, "sam3_interval_s": c2.sam3_interval_s, "camera": c2.camera}
+        return {"detector": body.detector, "sam3_interval_s": c2.sam3_interval_s, "camera": c2.camera,
+                "video_workers": c2.video_workers}
 
     @app.post("/api/missions/{mission_id}/sources")
     def sources_add(body: SourcesBody, m: Mission = Depends(mission), u: User = Depends(user)):
