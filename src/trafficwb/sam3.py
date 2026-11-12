@@ -34,7 +34,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .detect import (COCO_VEHICLES, Detection, VEHICLE_CLASSES, _iou, _merge_across_classes, _nms_per_class,
+from .detect import (COCO_VEHICLES, Detection, family, VEHICLE_CLASSES, _iou, _merge_across_classes, _nms_per_class,
                      _touches_inner_edge, tile_grid)
 from .models import ModelPack, ModelPackError
 
@@ -427,9 +427,9 @@ class Sam3Detector:
         dets = []
         for cls, score, box in raw:
             # What each class said about this box, as YOLOX's class scores do; the box's own class is its score.
-            cs = {c: 0.0 for c in self.prompts}
+            cs = {c: 0.0 for c in self.prompts if family(c) == family(cls)}
             for c2, s2, b2 in raw:
-                if _iou(box, b2) >= 0.5:
+                if c2 in cs and _iou(box, b2) >= 0.5:
                     cs[c2] = max(cs[c2], round(s2, 4))
             cs[cls] = max(cs[cls], round(score, 4))
             dets.append(Detection(tuple(round(v, 1) for v in box), cls, round(score, 4), cs))

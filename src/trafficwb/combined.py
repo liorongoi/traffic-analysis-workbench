@@ -1,4 +1,4 @@
-"""Both vehicle detectors on one still image: the standard detector (YOLOX-s, or the promoted model) and SAM 3.1.
+"""Both detectors on one still image or video frame: the standard detector (YOLOX-s, or the promoted model) and SAM 3.1.
 
 They miss different vehicles, so together they find more. A vehicle both of them found is kept once: the box and
 class of the more confident one, with each class's best score from either. A vehicle only one of them found is kept
@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 
-from .detect import Detection, _iou, accepts_area
+from .detect import Detection, _iou, accepts_area, family
 
 
 @dataclass
@@ -37,6 +37,8 @@ def merge(standard: list[Detection], sam: list[Detection], s: CombinedSettings |
     pairs = []
     for i, a in enumerate(standard):
         for j, b in enumerate(sam):
+            if family(a.cls) != family(b.cls):      # a person and the bicycle under them stay two objects
+                continue
             iou = _iou(a.box, b.box)
             if iou >= s.same_vehicle_iou or _inside(a.box, b.box) >= s.same_vehicle_inside:
                 pairs.append((iou, i, j))

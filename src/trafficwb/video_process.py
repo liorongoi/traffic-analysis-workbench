@@ -39,6 +39,16 @@ class VideoSettings:
     interval_s: float = 0.2          # analysis every 0.2 s of presentation time (5 per second)
     chunk_frames: int = 50           # analysed frames per committed chunk
     tracker: TrackerParams = field(default_factory=TrackerParams)
+    sam3_interval_s: float | None = None   # SAM 3.1 every this many seconds (None: the mission's choice, else 1 s)
+
+
+def _kind(detector) -> str:
+    """standard | sam3 | both, from the detector's shape (test doubles are standard)."""
+    if hasattr(detector, "standard") and hasattr(detector, "sam"):
+        return "both"
+    if hasattr(detector, "prompts") and hasattr(detector, "engine"):
+        return "sam3"
+    return "standard"
 
 
 @dataclass
@@ -63,6 +73,18 @@ class VideoProcessor:
         self.s = settings or VideoSettings()
         self.control = control or RunControl()
         self.views = ViewService(mission)
+        # SAM 3.1 takes seconds per frame, so it looks at every Nth analysed frame and the tracker carries what it
+        # found between them. With both detectors the standard one sees every frame; with SAM 3.1 alone the grid
+        # itself is spaced out to the SAM 3.1 interval.
+        self.kind = _kind(detector)
+        sam_s = self.s.sam3_interval_s or getattr(mission.config(), "sam3_interval_s", None) or 1.0
+        self.sam_every = max(1, round(sam_s / self.s.interval_s)) if self.kind == "both" else 1
+        self.grid_s = max(self.s.interval_s, sam_s) if self.kind == "sam3" else self.s.interval_s
+        self.sam_s = sam_s
+        if self.kind != "standard" and not self.s.tracker.jump_per_s:
+            # SAM 3.1 sees a target about once a second: a person walks several body widths in that time.
+            from dataclasses import replace
+            self.s = replace(self.s, tracker=replace(self.s.tracker, jump_per_s=3.0))
 
     def pending_runs(self) -> list[int]:
         return [r[0] for r in self.con.execute(
@@ -122,7 +144,9 @@ class VideoProcessor:
         models["vehicle_detection"] = desc["model"]
         pre = json.loads(run["preprocessing"] or "{}")
         pre["vehicle_detection"] = desc["preprocessing"]
-        pre["video"] = {"interval_s": self.s.interval_s, "chunk_frames": self.s.chunk_frames,
+        pre["video"] = {"interval_s": self.grid_s, "chunk_frames": self.s.chunk_frames, "detector": self.kind,
+                        **({"sam3_every_frames": self.sam_every, "sam3_interval_s": self.sam_s}
+                           if self.kind != "standard" else {}),
                         "tracker": asdict(self.s.tracker), "time_base": "presentation timestamps",
                         "view_signature": "first presentation frame", "regions": "applied to event search boxes"}
         self.con.execute("UPDATE run SET state='running', started_at=COALESCE(started_at,?), model_versions=?, "
@@ -209,14 +233,18 @@ class VideoProcessor:
         in_chunk = 0
         self.con.execute("BEGIN")
         try:
-            for fr, nxt_after in frames(path, self.s.interval_s, after_t=last_t, next_sample_t=nxt):
+            for fr, nxt_after in frames(path, self.grid_s, after_t=last_t, next_sample_t=nxt):
                 sig = scene_signature(fr.image)
                 if is_scene_cut(prev, sig):
                     self.con.execute("INSERT INTO video_marker(run_item_id,t,kind) VALUES (?,?,?)",
                                      (it["id"], fr.t, "scene_cut"))
                     self._finish(it, tracker.close_all("scene_cut"), ids, pr, rep)
                 prev = sig
-                dets = [(list(map(float, d.box)), d.cls, float(d.score)) for d in self.detector.detect(fr.image)]
+                dets, found = [], {}
+                for d in self._detect(fr.image, count):
+                    box = list(map(float, d.box))
+                    found[id(box)] = getattr(d, "found_by", None) or ("sam3" if self.kind == "sam3" else "standard")
+                    dets.append((box, d.cls, float(d.score)))
                 obs, closed, new = tracker.update(fr.t, dets)
                 for tr in new:
                     ids[tr.key] = self.con.execute(
@@ -224,8 +252,9 @@ class VideoProcessor:
                         (it["id"], tr.key, tr.state)).lastrowid
                 for tr, box, cls, score in obs:
                     self.con.execute(
-                        "INSERT INTO track_observation(track_id,t,x1,y1,x2,y2,cls,score) VALUES (?,?,?,?,?,?,?,?)",
-                        (ids[tr.key], round(fr.t, 6), *[round(float(b), 2) for b in box], cls, round(score, 4)))
+                        "INSERT INTO track_observation(track_id,t,x1,y1,x2,y2,cls,score,found_by) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (ids[tr.key], round(fr.t, 6), *[round(float(b), 2) for b in box], cls, round(score, 4),
+                         found.get(id(box))))
                 self._finish(it, closed, ids, pr, rep)
                 last_t, nxt, count = fr.t, nxt_after, count + 1
                 rep.frames += 1
@@ -249,6 +278,14 @@ class VideoProcessor:
                 self.con.execute("ROLLBACK")
             raise
         return True
+
+    def _detect(self, img, count: int):
+        """Detections on one analysed frame; ``count`` frames of this recording were analysed before it, so a
+        resumed run calls SAM 3.1 on the same frames as an uninterrupted one."""
+        if self.kind == "both" and count % self.sam_every:
+            from dataclasses import replace
+            return [replace(d, found_by="standard") for d in self.detector.standard.detect(img)]
+        return self.detector.detect(img)
 
     def _checkpoint(self, item_id, last_t, nxt, count, tracker: Tracker, prev) -> None:
         self.con.execute(

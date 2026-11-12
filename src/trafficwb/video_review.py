@@ -171,7 +171,8 @@ class VideoService:
 
     def observations(self, event_id: int) -> list[dict]:
         return [dict(r) for r in self.con.execute(
-            "SELECT o.t, o.x1, o.y1, o.x2, o.y2, o.cls, o.score, o.appearance FROM track_observation o "
+            "SELECT o.t, o.x1, o.y1, o.x2, o.y2, o.cls, o.score, o.appearance, COALESCE(o.found_by, 'standard') AS found_by "
+            "FROM track_observation o "
             "JOIN video_event e ON e.track_id=o.track_id WHERE e.id=? ORDER BY o.t", (event_id,))]
 
     def recordings(self) -> list[dict]:
@@ -251,8 +252,9 @@ class VideoService:
                 raise VideoError("The end must be after the start.")
             payload = {"first_t": a, "last_t": b}
         elif action == "set_class":
-            if payload.get("cls") not in CLASSES:
-                raise VideoError(f"Class must be one of {', '.join(CLASSES)}.")
+            allowed = self.classes()
+            if payload.get("cls") not in allowed:
+                raise VideoError(f"Class must be one of {', '.join(allowed)}.")
             payload = {"cls": payload["cls"]}
         elif action == "merge_into":
             tgt = int(payload["target"])
@@ -272,6 +274,11 @@ class VideoService:
         self.con.execute("INSERT INTO event_revision(event_id,action,payload,author,note,created_at) VALUES (?,?,?,?,?,?)",
                          (event_id, action, json.dumps(payload), author, note, utcnow()))
         return self.event(event_id)
+
+    def classes(self) -> list[str]:
+        """The vehicle classes, then the mission's own (people, or anything named by words), as for still images."""
+        own = [k for k in (getattr(self.m.config(), "sam3_words", None) or {}) if k not in CLASSES]
+        return [*CLASSES, *own]
 
     def snap(self, version_id: int, t: float) -> float:
         """The presentation time of the first frame at or after t (or the last frame)."""

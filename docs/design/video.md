@@ -21,10 +21,21 @@ Requirements VID-01 to VID-04. Video missions use the **object search** mode; th
 - Memory does not grow with recording length: only one frame, the open tracks and the current chunk are held.
 - A recording that cannot be decoded is marked failed with the decoder's reason. Other recordings continue.
 
+## Detectors and targets
+
+Video uses the same detector choice, model choice and words as still images (`JobManager.detector_for`, one code path for both):
+
+- **Standard**: YOLOX-s, the promoted model or a saved model, on every analysed frame.
+- **SAM 3.1**: the mission's words, on a grid spaced to the SAM 3.1 interval (default 1 s, mission setting 0.2 to 10 s).
+- **Both**: the standard detector on every analysed frame and SAM 3.1 on every Nth one (N = SAM interval ÷ 0.2 s), merged as for still images. Which analysed frames get SAM 3.1 depends only on how many frames were analysed before, so a resumed run calls it on the same frames.
+- **Targets**: the five vehicle classes plus up to eight classes of the mission's own (people, tractors, animals). A class of the mission's own whose name COCO knows (person, or the aliases pedestrian, people) is also found by the standard detector; any other is found by SAM 3.1 only, and the overview says so. A vehicle class given no words is not looked for by either detector.
+- Every tracked box records which detector found it (`track_observation.found_by`: standard, sam3 or both); the event screen shows the totals.
+
 ## Tracking (`trafficwb.tracker`)
 
-- Vehicle detection runs on each analysed frame with the same model as still images.
-- Tracks are matched by overlap (IoU ≥ 0.25) with each track's predicted position (constant velocity). The class does not take part in matching, because the detector may call the same vehicle car in one frame and truck in the next.
+- Detection runs on each analysed frame with the mission's detector (above).
+- Tracks are matched by overlap (IoU ≥ 0.25) with each track's predicted position (constant velocity). Within the vehicle family the class does not take part in matching, because the detector may call the same vehicle car in one frame and truck in the next. Other classes are each a family of their own: a person is never matched to the bicycle they ride, and the two are never merged into one detection.
+- When SAM 3.1 is used, a box that overlaps no track may still join the nearest track of its family whose predicted centre is within 3 box sizes per second since it was last seen (sizes within a factor of 2). SAM 3.1 sees a walking person about once a second, by which time the person has moved several body widths.
 - A track becomes **confirmed** after 3 matched frames. Shorter tracks are kept in the database as discarded, and never become events.
 - **Occlusion**: an unmatched track keeps its predicted motion for up to 1.5 s. If it is matched again within that time it is the same track.
 - **Re-entry**: a new track that starts within 3 s of a closed track, near where that track was heading, is flagged **possible duplicate** of it. The tracker never merges them; the operator decides.
@@ -71,5 +82,6 @@ Machine events are never changed. Each operator action is an appended revision, 
 ## Not in this version
 
 - Night light tracking and analysis regions for video.
+- Learning from video, unique counts, parallel segments and camera-motion compensation: see the phased plan.
 - Plates in video.
 - Detecting slow camera movement (pan/zoom) as a view change.

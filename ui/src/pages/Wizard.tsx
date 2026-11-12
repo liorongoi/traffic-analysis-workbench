@@ -23,7 +23,7 @@ export default function Wizard() {
     name: "", input_type: "images", mode: "general_traffic", country: "IL", iana_zone: "Asia/Jerusalem",
     latitude: null as number | null, longitude: null as number | null,
     source_dir: "", source_dirs: [] as string[], include_subdirs: true, processing: "one_time", output_dir: "", export_formats: ["xlsx", "csv"],
-    detector: "standard", vehicle_model: null as string | null,
+    detector: "standard", vehicle_model: null as string | null, sam3_interval_s: null as number | null,
   });
   const [saved, setSaved] = useState<any[]>([]);
   useEffect(() => { api("/models/saved").then((r) => setSaved(r.saved ?? [])).catch(() => setSaved([])); }, []);
@@ -112,7 +112,7 @@ export default function Wizard() {
           <>
             <label className="field"><span>Mission name</span><input autoFocus value={cfg.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Route 6 north, October" /></label>
             <label className="field"><span>Input type (cannot change later)</span>
-              <select value={cfg.input_type} onChange={(e) => { set("input_type", e.target.value); set("mode", ref.modes[e.target.value][0]); if (e.target.value === "video") set("detector", "standard"); }}>
+              <select value={cfg.input_type} onChange={(e) => { set("input_type", e.target.value); set("mode", ref.modes[e.target.value][0]); }}>
                 <option value="images">Still images</option><option value="video">Video recordings</option>
               </select>
             </label>
@@ -122,8 +122,9 @@ export default function Wizard() {
               </select>
             </label>
             <p className="muted">{MODE_HELP[cfg.mode]}</p>
-            {cfg.input_type === "images" && <DetectorChoice value={cfg.detector} onChange={(d) => set("detector", d)} sam={ref.sam3} />}
-            {cfg.input_type === "images" && cfg.detector !== "sam3" && <ModelChoice saved={saved} value={cfg.vehicle_model} onChange={(v) => set("vehicle_model", v)} />}
+            <DetectorChoice value={cfg.detector} onChange={(d) => set("detector", d)} sam={ref.sam3} video={cfg.input_type === "video"} />
+            {cfg.input_type === "video" && cfg.detector !== "standard" && <SamInterval value={cfg.sam3_interval_s} onChange={(v) => set("sam3_interval_s", v)} both={cfg.detector === "both"} />}
+            {cfg.detector !== "sam3" && <ModelChoice saved={saved} value={cfg.vehicle_model} onChange={(v) => set("vehicle_model", v)} />}
           </>
         )}
         {step === 1 && (
@@ -207,7 +208,8 @@ export default function Wizard() {
               {Object.entries({ Name: cfg.name, "Input type": cfg.input_type, Mode: cfg.mode.replace(/_/g, " "), Country: cfg.country, "Time zone": cfg.iana_zone,
                 Location: cfg.latitude === null || cfg.longitude === null ? "Not set" : `${cfg.latitude.toFixed(4)}, ${cfg.longitude.toFixed(4)}`,
                 [cfg.source_dirs.length > 1 ? "Sources" : "Source"]: `${cfg.source_dirs.join("; ")}${cfg.include_subdirs ? " (with subfolders)" : ""}`, Processing: cfg.processing.replace("_", "-"), Output: cfg.output_dir, Formats: cfg.export_formats.join(", "),
-                "Vehicle detector": cfg.detector === "sam3" ? "SAM 3.1 (finds vehicles by name)" : cfg.detector === "both" ? "Both: standard and SAM 3.1, merged" : "Standard (YOLOX-s)",
+                Detector: (cfg.detector === "sam3" ? "SAM 3.1 (finds objects by name)" : cfg.detector === "both" ? "Both: standard and SAM 3.1, merged" : "Standard (YOLOX-s)")
+                  + (cfg.input_type === "video" && cfg.detector !== "standard" ? `, SAM 3.1 every ${cfg.sam3_interval_s ?? 1} s of video` : ""),
                 ...(cfg.detector !== "sam3" ? { Model: cfg.vehicle_model ? `${cfg.vehicle_model} (saved model)` : "The model in production use" } : {}) })
                 .map(([k, v]) => <tr key={k}><th style={{ width: 140 }}>{k}</th><td className="bidi">{v}</td></tr>)}
             </tbody></table>
@@ -228,36 +230,52 @@ export default function Wizard() {
   );
 }
 
-export function DetectorChoice({ value, onChange, sam, disabled, legend = true }: {
+export function DetectorChoice({ value, onChange, sam, disabled, legend = true, video = false }: {
   value: string; onChange: (d: string) => void; sam?: { installed: boolean; reason: string | null; memory_note?: string | null };
-  disabled?: boolean; legend?: boolean;
+  disabled?: boolean; legend?: boolean; video?: boolean;
 }) {
+  const unit = video ? "analysed frame" : "image";
   return (
-    <fieldset style={{ border: 0, padding: 0, margin: "4px 0 14px", minWidth: 0 }} aria-label="Vehicle detector">
-      {legend && <legend style={{ padding: 0, fontSize: 12.5, fontWeight: 550, color: "var(--text-2)", marginBottom: 6 }}>Vehicle detector (can change later)</legend>}
+    <fieldset style={{ border: 0, padding: 0, margin: "4px 0 14px", minWidth: 0 }} aria-label="Detector">
+      {legend && <legend style={{ padding: 0, fontSize: 12.5, fontWeight: 550, color: "var(--text-2)", marginBottom: 6 }}>Detector (can change later)</legend>}
       <div className="choices">
         <label className="choice">
           <input type="radio" name="detector" checked={value === "standard"} disabled={disabled} onChange={() => onChange("standard")} />
           <b>Standard</b>
-          <small>YOLOX-s, or the model promoted on the learning page. About a second per image, and it can be trained on your own camera images.</small>
+          <small>YOLOX-s, or the model promoted on the learning page. About a second per {unit} on a CPU, and it can be trained on your own camera {video ? "recordings" : "images"}. Finds vehicles, and people when the mission looks for them.</small>
         </label>
         <label className="choice">
           <input type="radio" name="detector" checked={value === "sam3"} disabled={disabled || !sam?.installed} onChange={() => onChange("sam3")} />
           <b>SAM 3.1</b>
           <small>{sam?.installed
-            ? "Meta's Segment Anything 3.1 asks for each kind of vehicle by name. More thorough on unusual angles and crowded scenes; on a CPU it takes from several seconds to a minute per image."
+            ? (video ? "Meta's Segment Anything 3.1 asks for each kind of object by name, every second of video by default; the tracker follows what it found in between. Finds anything you can name, and is slow on a CPU."
+              : "Meta's Segment Anything 3.1 asks for each kind of object by name. More thorough on unusual angles and crowded scenes; on a CPU it takes from several seconds to a minute per image.")
             : `Not available on this computer. ${sam?.reason ?? ""}`}</small>
         </label>
         <label className="choice">
           <input type="radio" name="detector" checked={value === "both"} disabled={disabled || !sam?.installed} onChange={() => onChange("both")} />
           <b>Both</b>
           <small>{sam?.installed
-            ? "The standard detector and SAM 3.1 on every image. A vehicle both find counts once; each vehicle says which of them found it. The most complete, and as slow as SAM 3.1."
+            ? (video ? "The standard detector on every analysed frame and SAM 3.1 every second of video by default, merged. An object both find counts once; each tracked box says which of them found it."
+              : "The standard detector and SAM 3.1 on every image. A vehicle both find counts once; each vehicle says which of them found it. The most complete, and as slow as SAM 3.1.")
             : "Needs SAM 3.1, which is not available on this computer."}</small>
         </label>
       </div>
       {(value === "sam3" || value === "both") && sam?.memory_note && <div className="msg warn">{sam.memory_note}</div>}
     </fieldset>
+  );
+}
+
+/** Video: how often SAM 3.1 looks at the recording. Between those frames the tracker (and, with "Both", the
+ *  standard detector) follows what it found. */
+export function SamInterval({ value, onChange, both, disabled }: { value: number | null; onChange: (v: number) => void; both: boolean; disabled?: boolean }) {
+  return (
+    <label className="field"><span>SAM 3.1 looks at the video every</span>
+      <select value={String(value ?? 1)} disabled={disabled} onChange={(e) => onChange(Number(e.target.value))}>
+        {[0.2, 0.5, 1, 2, 5].map((s) => <option key={s} value={s}>{s === 0.2 ? "0.2 s (every analysed frame, slowest)" : `${s} s`}</option>)}
+      </select>
+      <small className="muted">{both ? "The standard detector still looks at every analysed frame (5 per second)." : "Only these frames are analysed; a shorter interval follows fast objects better."}</small>
+    </label>
   );
 }
 

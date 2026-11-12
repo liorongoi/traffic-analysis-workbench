@@ -71,6 +71,7 @@ class MissionBody(BaseModel):
     detector: str = "standard"
     sam3_words: dict[str, list[str]] | None = None
     vehicle_model: str | None = None       # a saved model's name; None: the model in production use
+    sam3_interval_s: float | None = None   # video: seconds between SAM 3.1 frames (None: 1 s)
 
     def config(self) -> MissionConfig:
         d = self.model_dump()
@@ -82,6 +83,7 @@ class MissionBody(BaseModel):
 
 class DetectorBody(BaseModel):
     detector: str
+    sam3_interval_s: float | None = None   # video: seconds between SAM 3.1 frames; None leaves it as it is
 
 
 class VehicleModelBody(BaseModel):
@@ -486,7 +488,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     @app.get("/api/sam3")
     def sam3_status(_u: User = Depends(user)):
         from ..sam3 import AREA_SUGGESTIONS, VEHICLE_PROMPTS
-        return {**sam_info(), "suggestions": AREA_SUGGESTIONS, "vehicle_prompts": VEHICLE_PROMPTS}
+        from ..detect import COCO_ALIASES, COCO_OTHER
+        return {**sam_info(), "suggestions": AREA_SUGGESTIONS, "vehicle_prompts": VEHICLE_PROMPTS,
+                # class names the standard detector also finds when a mission adds them (a pedestrian is a person)
+                "standard_knows": sorted({*COCO_OTHER.values(), *COCO_ALIASES})}
 
     @app.post("/api/source-preview")
     def source_preview(body: PreviewBody, _u: User = Depends(user)):
@@ -671,15 +676,18 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         cfg = m.config()
         if body.detector not in DETECTORS:
             raise ApiError(400, "invalid", f"Detector must be one of {sorted(DETECTORS)}.")
-        if body.detector in ("sam3", "both") and cfg.input_type != "images":
-            raise ApiError(400, "invalid", "SAM 3.1 detection is for still images; video missions use the standard detector.")
+        if body.sam3_interval_s is not None and not (0.2 <= body.sam3_interval_s <= 10):
+            raise ApiError(400, "invalid", "SAM 3.1 in video runs every 0.2 to 10 seconds of the recording.")
         if body.detector in ("sam3", "both") and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""))
         if jobs.busy(m.id):
             raise ApiError(409, "busy", "Processing is running. Change the detector when it has finished or is cancelled.")
         if body.detector != getattr(cfg, "detector", "standard"):
             m.update_config(u.username, f"detector set to {body.detector}", detector=body.detector)
-        return {"detector": body.detector}
+        if body.sam3_interval_s is not None and body.sam3_interval_s != cfg.sam3_interval_s:
+            m.update_config(u.username, f"SAM 3.1 every {body.sam3_interval_s:g} s of video",
+                            sam3_interval_s=body.sam3_interval_s)
+        return {"detector": body.detector, "sam3_interval_s": m.config().sam3_interval_s}
 
     @app.post("/api/missions/{mission_id}/sources")
     def sources_add(body: SourcesBody, m: Mission = Depends(mission), u: User = Depends(user)):
@@ -1563,7 +1571,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     @app.get("/api/missions/{mission_id}/events")
     def events(m: Mission = Depends(mission), version_id: int | None = None, status: str | None = None,
                flag: str | None = None):
-        return {"events": [_event_dict(e) for e in _video(m).events(version_id, status, flag)]}
+        svc = _video(m)
+        return {"events": [_event_dict(e) for e in svc.events(version_id, status, flag)], "classes": svc.classes()}
 
     @app.get("/api/missions/{mission_id}/events/{event_id}")
     def event_get(event_id: int, m: Mission = Depends(mission)):

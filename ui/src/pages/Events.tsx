@@ -12,7 +12,7 @@ export type VEvent = {
   merged_into: number | null; absorbed: string[]; split_at: number[]; parts: [number, number][];
   first_utc: string | null; last_utc: string | null; revisions: number;
 };
-type Obs = { t: number; x1: number; y1: number; x2: number; y2: number; cls: string; score: number };
+type Obs = { t: number; x1: number; y1: number; x2: number; y2: number; cls: string; score: number; found_by?: string };
 
 export const fmtT = (t: number | null | undefined) => {
   if (t == null) return "";
@@ -155,6 +155,15 @@ function EventList({ missionId }: { missionId: string }) {
   );
 }
 
+const FOUND_LABEL: Record<string, string> = { standard: "standard detector", sam3: "SAM 3.1", both: "both" };
+
+/** Which detector found the tracked boxes of an event, e.g. "standard detector 41 · both 7 · SAM 3.1 2 frames". */
+function foundBy(obs: Obs[]): string {
+  const n: Record<string, number> = {};
+  for (const o of obs) n[o.found_by ?? "standard"] = (n[o.found_by ?? "standard"] ?? 0) + 1;
+  return Object.entries(n).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${FOUND_LABEL[k] ?? k} ${v}`).join(" · ") + " frames";
+}
+
 function EventDetail({ missionId, eventId }: { missionId: string; eventId: number }) {
   const [ev, setEv] = useState<(VEvent & { observations: Obs[]; clips: any[] }) | null>(null);
   const [others, setOthers] = useState<VEvent[]>([]);
@@ -166,6 +175,7 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
   const [method, setMethod] = useState("copy");
   const [busy, setBusy] = useState(false);
   const [fallback, setFallback] = useState(false);   // the browser cannot play this codec: show decoded frames
+  const [classes, setClasses] = useState<string[]>(CLASSES);   // the vehicle classes and the mission's own
   const video = useRef<HTMLVideoElement>(null);
   const still = useRef<HTMLImageElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -176,6 +186,7 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
       setEv(e);
       const r = await api(`/missions/${missionId}/events?version_id=${e.source_version_id}`);
       setOthers(r.events.filter((o: VEvent) => o.id !== eventId));
+      if (r.classes) setClasses(r.classes);
     } catch (e) { setErr((e as ApiError).message); }
   }, [missionId, eventId]);
   useEffect(() => { load(); }, [load]);
@@ -282,6 +293,7 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
               <tr><td>End</td><td className="mono">{fmtT(ev.last_t)}{ev.last_t !== ev.machine_last_t && <span className="muted"> (machine {fmtT(ev.machine_last_t)})</span>}</td></tr>
               <tr><td>Start (UTC)</td><td className="mono">{ev.first_utc ?? "unknown: the file name has no start time"}</td></tr>
               <tr><td>Class</td><td>{ev.cls} <span className="muted">({Math.round(ev.cls_share * 100)}% of detections{ev.cls !== ev.machine_cls ? `, machine said ${ev.machine_cls}` : ""})</span></td></tr>
+              <tr><td>Found by</td><td>{foundBy(ev.observations)}</td></tr>
               <tr><td>Ended because</td><td>{ev.end_reason.replace(/_/g, " ")}</td></tr>
               <tr><td>Flags</td><td>{ev.flags.length ? ev.flags.map((f) => FLAG_LABEL[f] ?? f).join(", ") : "none"}{ev.related.length > 0 && ` (${ev.related.join(", ")})`}</td></tr>
               {ev.parts.length > 1 && <tr><td>Parts</td><td className="mono">{ev.parts.map(([a, b]) => `${fmtT(a)}–${fmtT(b)}`).join(", ")}</td></tr>}
@@ -303,7 +315,7 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
             </div>
             <div className="row">
               <select aria-label="Set class" value="" onChange={(e) => e.target.value && revise("set_class", { cls: e.target.value })}>
-                <option value="">Set class…</option>{CLASSES.map((c) => <option key={c}>{c}</option>)}
+                <option value="">Set class…</option>{classes.map((c) => <option key={c}>{c}</option>)}
               </select>
               <select aria-label="Duplicate of" value="" onChange={(e) => e.target.value && revise("duplicate", { of: e.target.value })}>
                 <option value="">Duplicate of…</option>{others.map((o) => <option key={o.id} value={o.key}>{o.key} ({fmtT(o.first_t)})</option>)}

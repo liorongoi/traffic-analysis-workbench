@@ -31,8 +31,9 @@ MODES = {
     "video": {"object_search", "plate_recognition"},
 }
 EXPORT_FORMATS = {"xlsx", "csv"}
-# Vehicle detector of a still-image mission: YOLOX-s (or the model promoted on the learning page), or SAM 3.1,
-# which finds vehicles by name: slower, and stronger on unusual views; or both, merged. Video always uses the standard detector.
+# Detector of a mission (still images and video alike): YOLOX-s (or the model promoted on the learning page), or
+# SAM 3.1, which finds objects by name: slower, and stronger on unusual views; or both, merged. In video SAM 3.1 runs
+# every sam3_interval_s seconds of the recording and the tracker carries what it found between those frames.
 DETECTORS = {"standard", "sam3", "both"}
 
 CONTROL_SCHEMA = """
@@ -880,6 +881,10 @@ CREATE TABLE training_run (
   finished_at TEXT
 );
 """,
+    17: """
+-- Which detector found each tracked box in video (standard | sam3 | both); NULL for older rows (standard).
+ALTER TABLE track_observation ADD COLUMN found_by TEXT;
+""",
 }
 
 
@@ -962,6 +967,7 @@ class MissionConfig:
     sam3_uncounted: list | None = None   # the mission's own classes listed and exported but not counted as vehicles
     source_dirs: list | None = None   # several source folders; source_dir is the first of them
     vehicle_model: str | None = None  # a saved model (by its name) instead of the one in production use
+    sam3_interval_s: float | None = None  # video: seconds of recording between SAM 3.1 frames (None: 1 s)
 
     def sources(self) -> list[str]:
         """Every source folder of the mission, the first being source_dir."""
@@ -1019,8 +1025,8 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         v.errors.append("Export formats must be xlsx, csv, or both.")
     if cfg.detector not in DETECTORS:
         v.errors.append(f"Detector must be one of {sorted(DETECTORS)}.")
-    elif cfg.detector in ("sam3", "both") and cfg.input_type == "video":
-        v.errors.append("SAM 3.1 detection is for still images; video missions use the standard detector.")
+    if cfg.sam3_interval_s is not None and not (0.2 <= cfg.sam3_interval_s <= 10):
+        v.errors.append("SAM 3.1 in video runs every 0.2 to 10 seconds of the recording.")
     if cfg.sam3_words is not None:
         from .sam3 import vehicle_prompts
         try:

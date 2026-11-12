@@ -204,12 +204,19 @@ class JobManager:
         return det, card
 
     def detector_for(self, m):
-        """The detector a mission chose: SAM 3.1 for still-image missions that asked for it, else the standard one."""
-        choice = getattr(m.config(), "detector", "standard") if m.input_type == "images" else "standard"
+        """The detector a mission chose (still images and video alike): standard, SAM 3.1, or both merged. The
+        standard detector also looks for the mission's own classes that it knows (a "pedestrian" is COCO "person")
+        and leaves out vehicle classes the mission does not look for."""
+        cfg = m.config()
+        choice = getattr(cfg, "detector", "standard")
+        words = getattr(cfg, "sam3_words", None)
+        std = None
+        if choice != "sam3":
+            std = self._with_classes(self.standard_for(m), words)
         if choice in ("sam3", "both"):
             from ..sam3 import Sam3Detector, vehicle_prompts
             eng = self.sam_engine()
-            prompts = vehicle_prompts(getattr(m.config(), "sam3_words", None))
+            prompts = vehicle_prompts(words)
             with self._lock:
                 cur = self._sam_detector
                 if cur is None or cur[0].engine is not eng or cur[0].prompts != prompts:
@@ -218,10 +225,20 @@ class JobManager:
             if choice == "sam3":
                 return sam
             from ..combined import CombinedDetector
-            std, std_card = self.standard_for(m)
-            both = CombinedDetector(std, std_card, sam[0], sam[1])
+            both = CombinedDetector(std[0], std[1], sam[0], sam[1])
             return both, both.card()
-        return self.standard_for(m)
+        return std
+
+    @staticmethod
+    def _with_classes(std: tuple, words: dict | None) -> tuple:
+        det, card = std
+        if words is None or not hasattr(det, "with_classes"):
+            return std
+        from ..detect import VEHICLE_CLASSES, standard_classes
+        own = [c for c in words if c not in VEHICLE_CLASSES]
+        classes = {i: c for i, c in standard_classes(own).items()
+                   if not (c in VEHICLE_CLASSES and c in words and not words[c])}
+        return det.with_classes(classes), card
 
     # ---------- scan areas found by SAM 3.1 ----------
     def find_areas(self, mission_id: str, view_id: int, version_id: int, prompts: list[str], kind: str,
