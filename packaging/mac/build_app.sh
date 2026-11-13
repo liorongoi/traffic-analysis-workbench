@@ -65,7 +65,7 @@ LAUNCH="$APP/Contents/Resources/launch"
 mkdir -p "$LAUNCH/fonts"
 cp "$ROOT/packaging/mac/launch/index.html" "$LAUNCH/index.html"
 for f in chakra-petch-600 chakra-petch-700 ibm-plex-sans-400 ibm-plex-sans-500 ibm-plex-mono-400 ibm-plex-mono-500; do
-  src="$(ls "$ROOT/src/trafficwb/web/static/assets/${f%-*}-latin-${f##*-}-normal"*.woff2 2>/dev/null | head -1)"
+  src="$(ls "$ROOT/src/trafficwb/web/static/assets/${f%-*}-latin-${f##*-}-normal"*.woff2 2>/dev/null | head -1 || true)"
   [ -z "$src" ] || cp "$src" "$LAUNCH/fonts/$f.woff2"
 done
 chmod +x "$APP/Contents/MacOS/LanePulse"
