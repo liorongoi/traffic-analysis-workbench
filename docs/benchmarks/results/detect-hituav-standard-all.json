@@ -1,0 +1,141 @@
+{
+ "kind": "detect",
+ "suite": "hituav",
+ "detector": "standard",
+ "images": 579,
+ "image_ids": "all",
+ "seed": 0,
+ "model": {
+  "name": "yolox-s",
+  "version": "0.1.1rc0",
+  "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063"
+ },
+ "preprocessing": {
+  "letterbox": 640,
+  "pad": 114,
+  "colour": "BGR",
+  "tiles": {
+   "score_threshold": 0.3,
+   "nms_iou": 0.45,
+   "cross_class_iou": 0.5,
+   "tiles": [
+    3,
+    2
+   ],
+   "tile_overlap": 0.2,
+   "min_tile_side": 360
+  },
+  "classes": {
+   "0": "person",
+   "1": "bicycle",
+   "2": "car",
+   "3": "motorcycle",
+   "5": "bus",
+   "7": "truck"
+  }
+ },
+ "seconds_per_image": 0.075,
+ "wall_s": 44.3,
+ "machine": {
+  "os": "Linux-6.18.44-fc-v445-x86_64-with-glibc2.39",
+  "python": "3.13.18",
+  "cpus": 4
+ },
+ "classes": {
+  "AP": 0.0138,
+  "AP50": 0.0238,
+  "AP75": 0.0116,
+  "AP_small": 0.0078,
+  "AP_medium": 0.0109,
+  "AP_large": 0.0586,
+  "AR": 0.0154,
+  "max_dets": 100,
+  "per_class": {
+   "person": {
+    "AP": 0.013892019695357617,
+    "AP50": 0.023639196332156234,
+    "gt": 2611
+   },
+   "bicycle": {
+    "AP": 0.0,
+    "AP50": 0.0,
+    "gt": 796
+   },
+   "car": {
+    "AP": 0.027605789119936247,
+    "AP50": 0.04767221402991364,
+    "gt": 1339
+   },
+   "motorcycle": {
+    "AP": null,
+    "AP50": null,
+    "gt": 0
+   },
+   "bus": {
+    "AP": null,
+    "AP50": null,
+    "gt": 0
+   },
+   "truck": {
+    "AP": null,
+    "AP50": null,
+    "gt": 0
+   }
+  }
+ },
+ "vehicle_any": {
+  "AP": 0.0225,
+  "AP50": 0.0371,
+  "AP75": 0.0217,
+  "AP_small": 0.0058,
+  "AP_medium": 0.0295,
+  "AP_large": 0.0562,
+  "AR": 0.021,
+  "max_dets": 100
+ },
+ "operating_point": {
+  "vehicle_any": {
+   "score_min": 0.3,
+   "iou": 0.5,
+   "gt": 2169,
+   "tp": 75,
+   "fp": 12,
+   "precision": 0.8621,
+   "recall": 0.0346,
+   "f1": 0.0665
+  },
+  "person": {
+   "score_min": 0.3,
+   "iou": 0.5,
+   "gt": 2611,
+   "tp": 86,
+   "fp": 105,
+   "precision": 0.4503,
+   "recall": 0.0329,
+   "f1": 0.0614
+  }
+ },
+ "conditions": {
+  "day": {
+   "images": 183,
+   "vehicle_AP50": 0.0864,
+   "person_AP50": 0.0015
+  },
+  "night": {
+   "images": 396,
+   "vehicle_AP50": 0.0181,
+   "person_AP50": 0.0254
+  },
+  "altitude <= 80 m": {
+   "images": 278,
+   "vehicle_AP50": 0.0483,
+   "person_AP50": 0.0346
+  },
+  "altitude >= 100 m": {
+   "images": 274,
+   "vehicle_AP50": 0.0357,
+   "person_AP50": 0.0015
+  }
+ },
+ "standard_pack": "yolox-s"
+}

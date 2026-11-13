@@ -1,0 +1,197 @@
+{
+ "kind": "detect",
+ "suite": "visdrone",
+ "detector": "sam3",
+ "images": 60,
+ "image_ids": [
+  2,
+  15,
+  42,
+  66,
+  67,
+  78,
+  85,
+  96,
+  98,
+  100,
+  104,
+  106,
+  114,
+  130,
+  145,
+  146,
+  148,
+  153,
+  198,
+  211,
+  212,
+  226,
+  230,
+  247,
+  252,
+  259,
+  268,
+  269,
+  291,
+  297,
+  301,
+  311,
+  313,
+  320,
+  326,
+  330,
+  336,
+  341,
+  343,
+  344,
+  365,
+  369,
+  397,
+  411,
+  417,
+  433,
+  447,
+  456,
+  458,
+  461,
+  486,
+  491,
+  500,
+  504,
+  508,
+  519,
+  523,
+  526,
+  536,
+  548
+ ],
+ "seed": 0,
+ "model": {
+  "name": "sam3.1-w8a16",
+  "version": "ov-9e742f7",
+  "sha256": "415f47ec986f350c6fc35cc61d2eb1e45f695a71190ff95c00fb391c9de64d78"
+ },
+ "preprocessing": {
+  "resize": [
+   1008,
+   1008
+  ],
+  "keep_aspect": false,
+  "colour": "RGB",
+  "normalise": "(x/255 - 0.5) / 0.5",
+  "prompts": {
+   "car": [
+    "car",
+    "van"
+   ],
+   "truck": [
+    "truck"
+   ],
+   "bus": [
+    "bus"
+   ],
+   "motorcycle": [
+    "motorcycle"
+   ],
+   "bicycle": [
+    "bicycle"
+   ],
+   "person": [
+    "person"
+   ]
+  },
+  "settings": {
+   "score_threshold": 0.45,
+   "cross_class_iou": 0.5,
+   "nms_iou": 0.5,
+   "tiles": [
+    2,
+    2
+   ],
+   "tile_overlap": 0.2,
+   "min_tile_side": 700
+  }
+ },
+ "seconds_per_image": 11.821,
+ "wall_s": 709.6,
+ "machine": {
+  "os": "Linux-6.18.44-fc-v445-x86_64-with-glibc2.39",
+  "python": "3.13.18",
+  "cpus": 4
+ },
+ "classes": {
+  "AP": 0.2833,
+  "AP50": 0.5234,
+  "AP75": 0.261,
+  "AP_small": 0.1967,
+  "AP_medium": 0.4232,
+  "AP_large": 0.6865,
+  "AR": 0.3362,
+  "max_dets": 500,
+  "per_class": {
+   "person": {
+    "AP": 0.21214056458014519,
+    "AP50": 0.5354416942598159,
+    "gt": 1452
+   },
+   "bicycle": {
+    "AP": 0.11540110381079492,
+    "AP50": 0.33129697329531016,
+    "gt": 143
+   },
+   "car": {
+    "AP": 0.5364592498659486,
+    "AP50": 0.8097898320401702,
+    "gt": 1768
+   },
+   "motorcycle": {
+    "AP": 0.18080773331208064,
+    "AP50": 0.47070447686530575,
+    "gt": 677
+   },
+   "bus": {
+    "AP": 0.3564784024671987,
+    "AP50": 0.5692417926003126,
+    "gt": 27
+   },
+   "truck": {
+    "AP": 0.2987374143227093,
+    "AP50": 0.4240459527656609,
+    "gt": 69
+   }
+  }
+ },
+ "vehicle_any": {
+  "AP": 0.4367,
+  "AP50": 0.7226,
+  "AP75": 0.4538,
+  "AP_small": 0.2832,
+  "AP_medium": 0.6074,
+  "AP_large": 0.8088,
+  "AR": 0.4779,
+  "max_dets": 500
+ },
+ "operating_point": {
+  "vehicle_any": {
+   "score_min": 0.0,
+   "iou": 0.5,
+   "gt": 2684,
+   "tp": 2030,
+   "fp": 391,
+   "precision": 0.8385,
+   "recall": 0.7563,
+   "f1": 0.7953
+  },
+  "person": {
+   "score_min": 0.0,
+   "iou": 0.5,
+   "gt": 1452,
+   "tp": 862,
+   "fp": 347,
+   "precision": 0.713,
+   "recall": 0.5937,
+   "f1": 0.6479
+  }
+ },
+ "standard_pack": "yolox-s"
+}

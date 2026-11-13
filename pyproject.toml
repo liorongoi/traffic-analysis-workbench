@@ -35,6 +35,8 @@ dev = ["pytest>=8", "httpx>=0.27", "onnx>=1.16"]   # onnx builds the small SAM 3
 # RF-DETR's own training loop (rfdetr_train.py) comes with the rfdetr package; pinned to the minor version tested, as
 # LanePulse adds its progress and stop callback to that loop.
 train = ["torch>=2.3", "onnx>=1.16", "rfdetr[train]>=1.12.1,<1.13"]
+# Benchmarks on public datasets (scripts/benchmark.py): COCO-style scoring and TrackEval (HOTA, MOTA, IDF1).
+bench = ["pycocotools>=2.0.7", "trackeval>=1.3"]
 
 [project.scripts]
 trafficwb-probe = "trafficwb.probe:main"

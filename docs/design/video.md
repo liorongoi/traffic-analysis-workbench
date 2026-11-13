@@ -152,6 +152,13 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 - Only counted events are used, narrowed by the events page filters. Beside the video, "On screen now" lists the events showing at that second; each opens its event.
 - It is made in the background, one at a time per mission (a new request stops the one running), and kept with the mission's evidence until the events or their boxes change.
 
+## Drone and aircraft metadata
+
+- LanePulse reads where an airborne camera was and what it looked at, with nothing to set (`video_meta.py`, table `video_telemetry`, migration 22): a DJI subtitle file beside the video (the same name, ending .srt), or KLV inside the video (MISB ST 0601, the UAS Datalink Local Set).
+- A subtitle file counts as telemetry only when most of its entries carry a position. Ordinary subtitles (speech, "[Music]") are ignored. KLV packets are checked (key, length, checksum); a damaged one is skipped.
+- Optional: it is read only when the operator chooses "Flight data" in the player, then kept with the mission (so it stays when the file is moved). The player then shows the aircraft's position, height, heading, field of view and where it looked at that moment (`GET .../recordings/{vid}/telemetry`). Nothing else depends on it: detection, tracking, times and counts are the same with or without it.
+- Web and broadcast video files are taken in too: .webm, .ogv, .mpg, .mpeg, .m2ts and .mts.
+
 ## Workers on other computers
 
 - Other computers can analyse segments of a long recording. The operator turns "Other computers may help" on (Workers screen). Off by default; while off, nothing is shared and workers are refused.

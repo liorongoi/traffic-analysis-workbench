@@ -1,0 +1,119 @@
+{
+ "kind": "detect",
+ "suite": "coco",
+ "detector": "standard",
+ "images": 5000,
+ "image_ids": "all",
+ "seed": 0,
+ "model": {
+  "name": "yolox-s",
+  "version": "0.1.1rc0",
+  "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063"
+ },
+ "preprocessing": {
+  "letterbox": 640,
+  "pad": 114,
+  "colour": "BGR",
+  "tiles": {
+   "score_threshold": 0.3,
+   "nms_iou": 0.45,
+   "cross_class_iou": 0.5,
+   "tiles": [
+    3,
+    2
+   ],
+   "tile_overlap": 0.2,
+   "min_tile_side": 360
+  },
+  "classes": {
+   "0": "person",
+   "1": "bicycle",
+   "2": "car",
+   "3": "motorcycle",
+   "5": "bus",
+   "7": "truck"
+  }
+ },
+ "seconds_per_image": 0.07,
+ "wall_s": 362.6,
+ "machine": {
+  "os": "Linux-6.18.44-fc-v445-x86_64-with-glibc2.39",
+  "python": "3.13.18",
+  "cpus": 4
+ },
+ "classes": {
+  "AP": 0.3917,
+  "AP50": 0.5715,
+  "AP75": 0.4251,
+  "AP_small": 0.168,
+  "AP_medium": 0.413,
+  "AP_large": 0.6271,
+  "AR": 0.4375,
+  "max_dets": 100,
+  "per_class": {
+   "person": {
+    "AP": 0.4914643061650205,
+    "AP50": 0.7136936361960783,
+    "gt": 10777
+   },
+   "bicycle": {
+    "AP": 0.2740762468931155,
+    "AP50": 0.45443014325380854,
+    "gt": 314
+   },
+   "car": {
+    "AP": 0.3600224279614578,
+    "AP50": 0.5478284777184224,
+    "gt": 1918
+   },
+   "motorcycle": {
+    "AP": 0.3860071642790338,
+    "AP50": 0.626896854524791,
+    "gt": 367
+   },
+   "bus": {
+    "AP": 0.5851178259349751,
+    "AP50": 0.7172210355438933,
+    "gt": 283
+   },
+   "truck": {
+    "AP": 0.25361264849633913,
+    "AP50": 0.368975246786175,
+    "gt": 414
+   }
+  }
+ },
+ "vehicle_any": {
+  "AP": 0.3979,
+  "AP50": 0.5961,
+  "AP75": 0.4303,
+  "AP_small": 0.2237,
+  "AP_medium": 0.4828,
+  "AP_large": 0.6695,
+  "AR": 0.441,
+  "max_dets": 100
+ },
+ "operating_point": {
+  "vehicle_any": {
+   "score_min": 0.3,
+   "iou": 0.5,
+   "gt": 3296,
+   "tp": 2057,
+   "fp": 543,
+   "precision": 0.7912,
+   "recall": 0.6241,
+   "f1": 0.6978
+  },
+  "person": {
+   "score_min": 0.3,
+   "iou": 0.5,
+   "gt": 10777,
+   "tp": 7884,
+   "fp": 1221,
+   "precision": 0.8659,
+   "recall": 0.7316,
+   "f1": 0.7931
+  }
+ },
+ "standard_pack": "yolox-s"
+}

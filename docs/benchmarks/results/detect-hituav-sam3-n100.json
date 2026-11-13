@@ -1,0 +1,259 @@
+{
+ "kind": "detect",
+ "suite": "hituav",
+ "detector": "sam3",
+ "images": 100,
+ "image_ids": [
+  2319,
+  2331,
+  2332,
+  2335,
+  2346,
+  2354,
+  2359,
+  2360,
+  2374,
+  2378,
+  2379,
+  2385,
+  2386,
+  2391,
+  2399,
+  2400,
+  2402,
+  2407,
+  2411,
+  2412,
+  2416,
+  2424,
+  2432,
+  2440,
+  2441,
+  2442,
+  2443,
+  2444,
+  2456,
+  2464,
+  2488,
+  2489,
+  2496,
+  2507,
+  2510,
+  2528,
+  2529,
+  2532,
+  2543,
+  2548,
+  2549,
+  2561,
+  2570,
+  2571,
+  2576,
+  2581,
+  2587,
+  2593,
+  2600,
+  2605,
+  2606,
+  2608,
+  2613,
+  2615,
+  2619,
+  2623,
+  2624,
+  2626,
+  2633,
+  2635,
+  2645,
+  2646,
+  2648,
+  2652,
+  2670,
+  2686,
+  2702,
+  2711,
+  2712,
+  2714,
+  2720,
+  2726,
+  2737,
+  2743,
+  2751,
+  2753,
+  2763,
+  2775,
+  2782,
+  2784,
+  2789,
+  2791,
+  2794,
+  2795,
+  2805,
+  2807,
+  2811,
+  2815,
+  2822,
+  2826,
+  2837,
+  2840,
+  2842,
+  2850,
+  2870,
+  2872,
+  2876,
+  2880,
+  2885,
+  2894
+ ],
+ "seed": 0,
+ "model": {
+  "name": "sam3.1-w8a16",
+  "version": "ov-9e742f7",
+  "sha256": "415f47ec986f350c6fc35cc61d2eb1e45f695a71190ff95c00fb391c9de64d78"
+ },
+ "preprocessing": {
+  "resize": [
+   1008,
+   1008
+  ],
+  "keep_aspect": false,
+  "colour": "RGB",
+  "normalise": "(x/255 - 0.5) / 0.5",
+  "prompts": {
+   "car": [
+    "car",
+    "van"
+   ],
+   "truck": [
+    "truck"
+   ],
+   "bus": [
+    "bus"
+   ],
+   "motorcycle": [
+    "motorcycle"
+   ],
+   "bicycle": [
+    "bicycle"
+   ],
+   "person": [
+    "person"
+   ]
+  },
+  "settings": {
+   "score_threshold": 0.45,
+   "cross_class_iou": 0.5,
+   "nms_iou": 0.5,
+   "tiles": [
+    2,
+    2
+   ],
+   "tile_overlap": 0.2,
+   "min_tile_side": 700
+  }
+ },
+ "seconds_per_image": 11.618,
+ "wall_s": 1162.1,
+ "machine": {
+  "os": "Linux-6.18.44-fc-v445-x86_64-with-glibc2.39",
+  "python": "3.13.18",
+  "cpus": 4
+ },
+ "classes": {
+  "AP": 0.1419,
+  "AP50": 0.3218,
+  "AP75": 0.0794,
+  "AP_small": 0.1075,
+  "AP_medium": 0.1409,
+  "AP_large": 0.4525,
+  "AR": 0.2037,
+  "max_dets": 100,
+  "per_class": {
+   "person": {
+    "AP": 0.08066289367281732,
+    "AP50": 0.18412024194000082,
+    "gt": 107
+   },
+   "bicycle": {
+    "AP": 0.0,
+    "AP50": 0.0,
+    "gt": 200
+   },
+   "car": {
+    "AP": 0.3451573040535357,
+    "AP50": 0.7814182675362595,
+    "gt": 426
+   },
+   "motorcycle": {
+    "AP": null,
+    "AP50": null,
+    "gt": 0
+   },
+   "bus": {
+    "AP": null,
+    "AP50": null,
+    "gt": 0
+   },
+   "truck": {
+    "AP": null,
+    "AP50": null,
+    "gt": 0
+   }
+  }
+ },
+ "vehicle_any": {
+  "AP": 0.2447,
+  "AP50": 0.5586,
+  "AP75": 0.1439,
+  "AP_small": 0.1184,
+  "AP_medium": 0.3005,
+  "AP_large": 0.4532,
+  "AR": 0.3091,
+  "max_dets": 100
+ },
+ "operating_point": {
+  "vehicle_any": {
+   "score_min": 0.0,
+   "iou": 0.5,
+   "gt": 639,
+   "tp": 372,
+   "fp": 169,
+   "precision": 0.6876,
+   "recall": 0.5822,
+   "f1": 0.6305
+  },
+  "person": {
+   "score_min": 0.0,
+   "iou": 0.5,
+   "gt": 107,
+   "tp": 36,
+   "fp": 166,
+   "precision": 0.1782,
+   "recall": 0.3364,
+   "f1": 0.233
+  }
+ },
+ "conditions": {
+  "day": {
+   "images": 38,
+   "vehicle_AP50": 0.7912,
+   "person_AP50": 0.1179
+  },
+  "night": {
+   "images": 62,
+   "vehicle_AP50": 0.4382,
+   "person_AP50": 0.198
+  },
+  "altitude <= 80 m": {
+   "images": 31,
+   "vehicle_AP50": 0.4934,
+   "person_AP50": 0.2192
+  },
+  "altitude >= 100 m": {
+   "images": 61,
+   "vehicle_AP50": 0.7041,
+   "person_AP50": 0.2058
+  }
+ },
+ "standard_pack": "yolox-s"
+}
