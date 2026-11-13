@@ -20,6 +20,7 @@ export type Attrs = {
   direction: string | null; dwell_s: number; stopped_s: number; speed: number | null; top_speed: number | null;
   unit: "km/h" | "px/s"; w: number | null; h: number | null; size_unit: "m" | "px";
   colour: string[] | null; upper: string[] | null; lower: string[] | null;
+  path?: string[]; zones?: Record<string, string[]>;      // lines crossed (directions) and areas entered ("inside"), in order
 };
 
 export const ARROW: Record<string, string> = {
@@ -203,6 +204,41 @@ function InViewCard({ missionId, versionId, refresh }: { missionId: string; vers
   );
 }
 
+/** Each counting line's crossings (in and out) and each area's entries and time inside, by class. */
+function ZonesCard({ missionId, versionId, refresh }: { missionId: string; versionId: string; refresh: number }) {
+  const [d, setD] = useState<any | null>(null);
+  useEffect(() => {
+    const q = versionId.startsWith("g") ? `?group_id=${versionId.slice(1)}` : versionId ? `?version_id=${versionId}` : "";
+    api(`/missions/${missionId}/zones${q}`).then(setD).catch(() => setD(null));
+  }, [missionId, versionId, refresh]);
+  if (!d || !d.recordings.length) return null;
+  // all videos in view added up, zone by zone (videos from one camera share its zones)
+  const tot = new Map<string, { name: string; kind: string; by: Record<string, any> }>();
+  for (const r of d.recordings) for (const z of r.zones) {
+    const t = tot.get(z.uid) ?? { name: z.name, kind: z.kind, by: {} as Record<string, any> };
+    for (const [c, v] of Object.entries(z.by_class) as [string, any][]) {
+      const cur: Record<string, number> = t.by[c] ?? (z.kind === "line" ? { in: 0, out: 0 } : { entries: 0, inside_s: 0 });
+      for (const k of Object.keys(cur)) cur[k] += v[k] ?? 0;
+      t.by[c] = cur;
+    }
+    tot.set(z.uid, t);
+  }
+  const classes = [...new Set([...tot.values()].flatMap((t) => Object.keys(t.by)))];
+  return (
+    <div className="card">
+      <h2>Lines and areas</h2>
+      <table className="t"><thead><tr><th>Line or area</th>{classes.map((c) => <th key={c} className="num">{c}</th>)}</tr></thead>
+        <tbody>{[...tot.entries()].map(([uid, t]) => (
+          <tr key={uid}><td>{t.kind === "line" ? "Line" : "Area"}: {t.name}</td>
+            {classes.map((c) => { const v = t.by[c]; return <td key={c} className="num mono">{!v ? "0" : t.kind === "line"
+              ? `${v.in} in · ${v.out} out` : `${v.entries} · ${fmtDur(v.inside_s / Math.max(1, v.entries))} each`}</td>; })}
+          </tr>))}</tbody></table>
+      <p className="muted small" style={{ marginBottom: 0 }}>Draw lines and areas in the player ("Lines and areas"). Each target is
+        counted once per crossing; the areas show how many entered and the average time inside.</p>
+    </div>
+  );
+}
+
 function EventList({ missionId, recording }: { missionId: string; recording: string }) {
   const [recs, setRecs] = useState<any[]>([]);
   const [groups, setGroups] = useState<{ id: number; name: string; members: number[] }[]>([]);
@@ -221,6 +257,10 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
   const [upper, setUpper] = useState("");
   const [lower, setLower] = useState("");
   const [reading, setReading] = useState(false);
+  const [zoneNames, setZoneNames] = useState<Record<string, string>>({});
+  const [zone, setZone] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [startTimes, setStartTimes] = useState<Record<number, string>>({});
   const [precisions, setPrecisions] = useState<Record<number, string>>({});
   const [timeRevision, setTimeRevision] = useState(0);
@@ -232,7 +272,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
     else if (rec) q.set("version_id", rec);
     if (status) q.set("status", status);
     if (flag) q.set("flag", flag);
-    api(`/missions/${missionId}/events?${q}`).then((r) => { setEvs(r.events); setReading(!!r.reading_colours); });
+    api(`/missions/${missionId}/events?${q}`).then((r) => { setEvs(r.events); setReading(!!r.reading_colours); setZoneNames(r.zones ?? {}); });
   }, [missionId, rec, status, flag, timeRevision]);
   // While colours are being read, the list fills in every few seconds.
   useEffect(() => {
@@ -291,11 +331,25 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
     if (a.unit !== "px/s") return false;
     return speed === "slow" ? a.speed < third(1) : speed === "medium" ? a.speed >= third(1) && a.speed < third(2) : a.speed >= third(2);
   };
+  const inZone = (a: Attrs) => {
+    if (!zone) return true;
+    const [uid, how] = zone.split(":");
+    const z = a.zones?.[uid];
+    return !!z && (how === "any" || z.includes(how));
+  };
+  const onPath = (a: Attrs) => {
+    if (!from && !to) return true;
+    const p = a.path ?? [];
+    if (from && !to) return p.includes(from);
+    if (!from) return p.includes(to);
+    const i = p.indexOf(from);
+    return i >= 0 && p.slice(i + 1).includes(to);
+  };
   const people = evs?.some((e) => e.attrs?.upper != null || e.cls === "person");
   const shown = (evs ?? []).filter((e) => { const a = e.attrs; if (!a) return true;
     return (!dir || a.direction === dir) && (!inView || a.dwell_s >= Number(inView)) && (!stopped || a.stopped_s >= Number(stopped))
-      && inSpeed(a) && (!colour || has(a.colour, colour) || has(a.upper, colour) || has(a.lower, colour)) && (!upper || has(a.upper, upper)) && (!lower || has(a.lower, lower)); });
-  const filtering = !!(dir || inView || stopped || speed || colour || upper || lower);
+      && inSpeed(a) && inZone(a) && onPath(a) && (!colour || has(a.colour, colour) || has(a.upper, colour) || has(a.lower, colour)) && (!upper || has(a.upper, upper)) && (!lower || has(a.lower, lower)); });
+  const filtering = !!(dir || inView || stopped || speed || colour || upper || lower || zone || from || to);
   // One tab per analysed video; the parts of a merged recording share one tab.
   const inGroup = new Set(groups.flatMap((g) => g.members));
   const done = new Set(recs.filter((r) => r.processing_state === "done").map((r) => r.id));
@@ -317,6 +371,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
         </nav>)}
       <CountsCard missionId={missionId} versionId={rec} refresh={timeRevision} />
       <InViewCard missionId={missionId} versionId={rec} refresh={timeRevision} />
+      <ZonesCard missionId={missionId} versionId={rec} refresh={timeRevision} />
       <div className="card">
         <h2>Recordings</h2>
         <table className="t"><thead><tr><th>File</th><th>Start (UTC)</th><th className="num">Length</th><th>Frame rate</th><th>Processing</th><th className="num">Events</th><th>For learning</th></tr></thead>
@@ -405,7 +460,23 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
           <select aria-label="Lower body colour" value={lower} onChange={(e) => setLower(e.target.value)}>
             <option value="">Any trousers or skirt</option>{COLOURS.map((c) => <option key={c} value={c}>{c} below</option>)}
           </select></>}
-        {filtering && <button onClick={() => { setDir(""); setSpeed(""); setInView(""); setStopped(""); setColour(""); setUpper(""); setLower(""); }}>Clear</button>}
+        {Object.keys(zoneNames).length > 0 && <>
+          <span className="muted small">Where they went</span>
+          <select aria-label="Line or area" value={zone} onChange={(e) => setZone(e.target.value)}>
+            <option value="">Any line or area</option>
+            {Object.entries(zoneNames).map(([uid, n]) => (evs ?? []).some((e) => e.attrs?.zones?.[uid]?.includes("inside"))
+              ? <option key={uid} value={`${uid}:any`}>Was in {n}</option>
+              : [<option key={uid} value={`${uid}:any`}>Crossed {n}</option>,
+                 <option key={`${uid}i`} value={`${uid}:in`}>Crossed {n}, in</option>,
+                 <option key={`${uid}o`} value={`${uid}:out`}>Crossed {n}, out</option>])}
+          </select>
+          <select aria-label="From" value={from} onChange={(e) => setFrom(e.target.value)}>
+            <option value="">From anywhere</option>{Object.entries(zoneNames).map(([uid, n]) => <option key={uid} value={uid}>From {n}</option>)}
+          </select>
+          <select aria-label="To" value={to} onChange={(e) => setTo(e.target.value)}>
+            <option value="">to anywhere</option>{Object.entries(zoneNames).map(([uid, n]) => <option key={uid} value={uid}>to {n}</option>)}
+          </select></>}
+        {filtering && <button onClick={() => { setDir(""); setSpeed(""); setInView(""); setStopped(""); setColour(""); setUpper(""); setLower(""); setZone(""); setFrom(""); setTo(""); }}>Clear</button>}
         {reading && <span className="muted small">Reading colours…</span>}
       </div>}
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
@@ -414,7 +485,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
       {evs && shown.length > 0 && (
         <div className="tablewrap">
           <table className="t">
-            <thead><tr><th style={{ width: 90 }}></th><th>Event</th><th>Recording</th><th>Start</th><th>End</th><th>Start (UTC)</th><th>Class</th><th>Went</th><th className="num">Speed</th><th className="num">In view</th><th>Colour</th><th>Review</th><th>Flags</th></tr></thead>
+            <thead><tr><th style={{ width: 90 }}></th><th>Event</th><th>Recording</th><th>Start</th><th>End</th><th>Start (UTC)</th><th>Class</th><th>Went</th><th>Path</th><th className="num">Speed</th><th className="num">In view</th><th>Colour</th><th>Review</th><th>Flags</th></tr></thead>
             <tbody>{shown.map((e) => (
               <tr key={e.id} className="click" onClick={() => go(`/m/${missionId}/events/${e.id}`)}>
                 <td><img loading="lazy" src={`/api/missions/${missionId}/events/${e.id}/thumb?h=48`} alt="" style={{ height: 40, display: "block", borderRadius: 3 }} /></td>
@@ -425,6 +496,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
                 <td className="mono">{e.first_utc ?? <span className="muted">unknown</span>}</td>
                 <td>{e.cls}{e.cls !== e.machine_cls ? <span className="muted"> (machine: {e.machine_cls})</span> : ""}</td>
                 <td title={e.attrs?.direction ?? ""}>{e.attrs?.direction ? `${ARROW[e.attrs.direction]} ${e.attrs.direction}` : ""}</td>
+                <td className="small">{(e.attrs?.path ?? []).map((u) => zoneNames[u] ?? "?").join(" → ")}</td>
                 <td className="num mono">{e.attrs ? fmtSpeed(e.attrs) : ""}</td>
                 <td className="num mono">{e.attrs ? fmtDur(e.attrs.dwell_s) : ""}{e.attrs && e.attrs.stopped_s >= 3 ? <div className="muted small">stopped {fmtDur(e.attrs.stopped_s)}</div> : null}</td>
                 <td>{e.attrs && (e.attrs.upper !== null || e.attrs.lower !== null) && e.attrs.colour == null && (e.attrs.upper || e.attrs.lower)

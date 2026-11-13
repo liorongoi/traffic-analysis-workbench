@@ -222,6 +222,12 @@ class ReviseBody(BaseModel):
     box: list[float] | None = None
 
 
+class ZoneBody(BaseModel):
+    kind: str = Field(..., pattern="^(line|area)$")
+    name: str = Field("", max_length=60)
+    points: list[list[float]] = Field(..., min_length=2, max_length=64)
+
+
 class CrowdAlertBody(BaseModel):
     people: int | None = Field(None, ge=2, le=10000)
 
@@ -1927,8 +1933,56 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             from ..video_attributes import read_colours_soon
             from ..video_review import VideoService
             reading = read_colours_soon(m.id, lambda: VideoService(DataRoot(data_root).open_mission(m.id)))
+        from ..video_zones import tally
+        zt = tally(svc, evs)
+        zone_names = {z["uid"]: z["name"] for r in zt["recordings"] for z in r["zones"]}
+        for e in evs:
+            p = zt["events"].get(e.id)
+            attrs[e.id]["path"] = p["path"] if p else []
+            # per zone: a line's crossing directions in order, or "inside" for an area it entered
+            attrs[e.id]["zones"] = {u: ([h["dir"] for h in hits] if "dir" in hits[0] else ["inside"])
+                                    for u, hits in (p["zones"] if p else {}).items()}
         return {"events": [_event_dict(e) | {"attrs": attrs[e.id]} for e in evs], "classes": svc.classes(),
-                "reading_colours": reading}
+                "reading_colours": reading, "zones": zone_names}
+
+    @app.get("/api/missions/{mission_id}/zones")
+    def zones_tally(m: Mission = Depends(mission), version_id: int | None = None, group_id: int | None = None):
+        """Each line's crossings (in and out) and each area's entries and time inside, by class, per video."""
+        from ..video_zones import tally
+        svc = _video(m)
+        evs = _video_call(lambda: [e for e in svc.events(version_id, group_id=group_id) if e.continues is None])
+        out = tally(svc, evs)
+        out.pop("events")
+        return out
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/zones")
+    def zones_get(version_id: int, m: Mission = Depends(mission)):
+        from ..video_zones import AREA_NAMES, LINE_NAMES, ZoneError, Zones
+        _video(m)
+        try:
+            return {"zones": Zones(m).of(version_id), "line_names": LINE_NAMES, "area_names": AREA_NAMES}
+        except ZoneError as exc:
+            raise ApiError(404, "zone", str(exc)) from None
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/zones")
+    def zones_add(version_id: int, body: ZoneBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """A counting line or an area on this camera's picture (every video in the same folder uses it)."""
+        from ..video_zones import ZoneError, Zones
+        _video(m)
+        try:
+            return Zones(m).add(version_id, body.kind, body.name, body.points, u.username)
+        except ZoneError as exc:
+            raise ApiError(400, "zone", str(exc)) from None
+
+    @app.delete("/api/missions/{mission_id}/zones/{uid}")
+    def zones_delete(uid: str, m: Mission = Depends(mission), u: User = Depends(user)):
+        from ..video_zones import ZoneError, Zones
+        _video(m)
+        try:
+            Zones(m).delete(uid, u.username)
+        except ZoneError as exc:
+            raise ApiError(404, "zone", str(exc)) from None
+        return {"ok": True}
 
     @app.get("/api/missions/{mission_id}/in-view")
     def in_view(m: Mission = Depends(mission), version_id: int | None = None, group_id: int | None = None):

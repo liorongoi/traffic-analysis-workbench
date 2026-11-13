@@ -132,6 +132,13 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 - "Most in view at once": per family (vehicles, people), the most counted targets in view at the same moment and when. The crowd alert (5 to 100 people, or off) lists the periods with that many people in view, with links to play them.
 - Not yet: hats, bags and other worn items (they need a model of their own), ground speed from a moving or airborne camera (phase 7), lines and areas in video (phase 6b).
 
+## Lines, areas and paths
+
+- In the player, "Lines and areas" draws a counting line (drag; L) or an area (click each corner, then the first again or Enter), named from a list. They belong to the camera: every video in the same folder uses them. The side panel lists them, with Remove (`video_zones.py`, table `video_zone`, migration 21).
+- A target crosses a line when the bottom middle of its box passes from one side to the other within the line's length. "In" is to the right of the line as drawn (an arrow shows it). A crossing back within 1 s cancels the one before, and a crossing counts only once the target is a fifth of its height clear of the line, so a target standing on the line is not counted.
+- A target is in an area while that point is inside; entries shorter than 0.5 s are ignored. Its path is the order of the lines it crossed and areas it entered.
+- The events page shows "Lines and areas": each line's crossings in and out, and each area's entries and average time inside, by class (counted events only). The filters add "Crossed X (in, out)", "Was in X" and "From X to Y"; the events list has a Path column. The export adds a path column and a `lines_and_areas` sheet.
+
 ## Workers on other computers
 
 - Other computers can analyse segments of a long recording. The operator turns "Other computers may help" on (Workers screen). Off by default; while off, nothing is shared and workers are refused.

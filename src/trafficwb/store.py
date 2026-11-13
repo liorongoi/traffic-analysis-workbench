@@ -1004,6 +1004,20 @@ CREATE TABLE video_event_colour (          -- the colour read on an event's shar
   read_at TEXT NOT NULL
 );
 """,
+    21: """
+CREATE TABLE video_zone (                  -- counting lines and areas drawn on a camera's picture (video_zones)
+  id INTEGER PRIMARY KEY,
+  uid TEXT NOT NULL UNIQUE,
+  folder TEXT NOT NULL,                    -- the camera: every video in this folder uses it
+  kind TEXT NOT NULL CHECK (kind IN ('line','area')),
+  name TEXT NOT NULL,
+  points TEXT NOT NULL,                    -- JSON [[x, y], ...] in video pixels
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  deleted_at TEXT,
+  deleted_by TEXT
+);
+""",
 }
 
 
