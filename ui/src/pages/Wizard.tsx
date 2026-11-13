@@ -309,7 +309,7 @@ export function GradesTable({ g }: { g: Grades }) {
         </table>
       </div>
       {trained.length > 0 && <>
-        <p className="muted" style={{ margin: "10px 0 4px" }}>After training on 300 thermal drone images (vehicle AP50, same thermal test images):</p>
+        <p className="muted" style={{ margin: "10px 0 4px" }}>After training on 150 thermal drone images (vehicle AP50 on the same thermal test images; SAM 3.1 untrained: 55.9):</p>
         <table className="t"><tbody>{trained.map((k) => (
           <tr key={k}><th>{DETECTOR_LABEL[k]?.split(" (")[0] ?? k}</th>
             {Object.entries(g.detectors[k].trained!).map(([sc, v]) => <td key={sc}>{v == null ? "–" : v.toFixed(1)} <span className={`grade g-${apGrade(v)}`}><b>{apGrade(v)}</b></span></td>)}
