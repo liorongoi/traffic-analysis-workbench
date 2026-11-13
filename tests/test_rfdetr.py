@@ -174,3 +174,37 @@ def test_train_rfdetr_on_the_learning_page(tmp_path, monkeypatch):
     assert job["result"]["model"]["name"] == "rf-detr-small-tuned" and "evaluation" in job["result"]
     saved = c.get("/api/models/saved").json()["saved"]
     assert saved == []                                                             # added, not saved or promoted
+
+
+def test_rfdetr_together_with_sam(tmp_path, monkeypatch):
+    """The picker's tick boxes: RF-DETR and SAM 3.1 ticked together run merged, as "rfdetr+sam3"."""
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from test_web_api import H1, Fake, direct_access, mission
+    from trafficwb.combined import CombinedDetector
+    from trafficwb.store import DataRoot
+    from trafficwb.web.app import create_app
+
+    assert detectors.uses_sam("rfdetr+sam3") and detectors.fast_of("rfdetr+sam3") == "rfdetr"
+    assert detectors.uses_sam("both") and detectors.fast_of("both") == "standard"
+    assert detectors.fast_of("sam3") is None and not detectors.uses_sam("rfdetr")
+    root = tmp_path / "models"
+    monkeypatch.setenv("TWB_MODELS", str(root))
+    _rfdetr_pack(root, "rf-detr-small")
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    app = create_app(tmp_path / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
+                     start_monitoring=False, stability_seconds=0)
+    c = direct_access(TestClient(app))
+    mid = mission(c, src, out)
+    jobs = app.state.jobs
+    eng = SimpleNamespace(pack=SimpleNamespace(card={"name": "sam3.1", "license": "SAM License"}))
+    jobs.sam_factory = lambda: eng
+    m = DataRoot(tmp_path / "data").open_mission(mid)
+    m.update_config("operator", "test", detector="rfdetr+sam3")
+    det, card = jobs.detector_for(m)
+    assert isinstance(det, CombinedDetector) and isinstance(det.standard, DetrDetector)
+    assert "sam" in card["license"].lower()

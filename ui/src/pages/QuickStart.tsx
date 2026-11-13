@@ -3,7 +3,7 @@ import { api, ApiError, post } from "../api";
 import { go } from "../router";
 import FolderPicker from "../components/FolderPicker";
 import { NamePick } from "../components/Pick";
-import { GradeLine, type Grades } from "./Wizard";
+import { DETECTOR_LABEL, GradeLine, partsOf, toggleDetector, type Grades } from "./Wizard";
 
 // A new mission on one screen. The person chooses the folder; LanePulse reads it and fills in the rest (name, still
 // images or video, the time zone the last mission used, an exports folder beside the source), then Create and start
@@ -167,14 +167,17 @@ export default function QuickStart() {
           <div style={{ marginTop: 16 }}>
             <div>
               <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>Detector</div>
-              <div className="seg" role="radiogroup" aria-label="Detector">
-                {([["standard", "Standard", "Fastest, works on any computer"], ["rfdetr", "RF-DETR", rfOk ? "Finds more, a little slower" : "Not installed here"],
-                  ["sam3", "SAM 3.1", samOk ? "Finds things by name" : "Not installed here"],
-                  ["both", "Both", samOk ? "Finds the most, slowest" : "Needs SAM 3.1"]] as const).map(([k, l, d]) => (
-                  <button key={k} type="button" role="radio" aria-checked={detector === k} className={detector === k ? "on" : ""}
-                    disabled={!g || (k === "rfdetr" ? !rfOk : k !== "standard" && !samOk)} onClick={() => setDetector(k)}><b>{l}</b><small>{d}</small><GradeLine g={grades} k={k} /></button>
-                ))}
+              <div className="muted" style={{ fontSize: 12.5, margin: "-4px 0 8px" }}>Tick one fast detector, SAM 3.1, or a fast one with SAM 3.1 (their findings are merged).</div>
+              <div className="seg" role="group" aria-label="Detector">
+                {([["standard", "YOLOX-s", "Fastest, works on any computer"], ["rfdetr", "RF-DETR", rfOk ? "Finds more, a little slower" : "Not installed here"],
+                  ["sam3", "SAM 3.1", samOk ? "Finds things by name, slowest" : "Not installed here"]] as const).map(([k, l, d]) => {
+                  const on = k === "sam3" ? partsOf(detector).sam : partsOf(detector).fast === k;
+                  return <button key={k} type="button" role="checkbox" aria-checked={on} className={on ? "on" : ""}
+                    disabled={!g || (k === "rfdetr" ? !rfOk : k === "sam3" && !samOk)} onClick={() => setDetector(toggleDetector(detector, k))}>
+                    <b><span aria-hidden="true">{on ? "\u2611" : "\u2610"}</span> {l}</b><small>{d}</small><GradeLine g={grades} k={k} /></button>;
+                })}
               </div>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Runs: {DETECTOR_LABEL[detector] ?? detector}</div>
             </div>
           </div>
 

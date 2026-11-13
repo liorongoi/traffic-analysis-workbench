@@ -134,8 +134,8 @@ export default function Wizard() {
             <DetectorChoice value={cfg.detector} onChange={(d) => set("detector", d)} sam={ref.sam3} video={cfg.input_type === "video"} />
             {cfg.input_type === "video" && <CameraChoice value={cfg.camera} onChange={(v) => set("camera", v)} />}
             {cfg.input_type === "video" && <ParallelChoice value={cfg.video_workers} onChange={(v) => set("video_workers", v)} />}
-            {cfg.input_type === "video" && usesSam(cfg.detector) && <SamInterval value={cfg.sam3_interval_s} onChange={(v) => set("sam3_interval_s", v)} both={cfg.detector === "both"} />}
-            {cfg.detector !== "sam3" && <ModelChoice saved={saved} value={cfg.vehicle_model} onChange={(v) => set("vehicle_model", v)} rfdetr={cfg.detector === "rfdetr"} />}
+            {cfg.input_type === "video" && usesSam(cfg.detector) && <SamInterval value={cfg.sam3_interval_s} onChange={(v) => set("sam3_interval_s", v)} both={partsOf(cfg.detector).fast !== null} />}
+            {cfg.detector !== "sam3" && <ModelChoice saved={saved} value={cfg.vehicle_model} onChange={(v) => set("vehicle_model", v)} rfdetr={partsOf(cfg.detector).fast === "rfdetr"} />}
           </>
         )}
         {step === 1 && (
@@ -238,10 +238,27 @@ export default function Wizard() {
 
 export const DETECTOR_LABEL: Record<string, string> = {
   standard: "Standard (YOLOX-s)", rfdetr: "RF-DETR (transformer detector)", sam3: "SAM 3.1 (finds objects by name)",
-  both: "Both: standard and SAM 3.1, merged",
+  both: "YOLOX-s and SAM 3.1, merged", "rfdetr+sam3": "RF-DETR and SAM 3.1, merged",
 };
+/** The mission's detector setting as tick boxes: one fast detector (YOLOX-s or RF-DETR) and/or SAM 3.1. */
+const PARTS: Record<string, { fast: "standard" | "rfdetr" | null; sam: boolean }> = {
+  standard: { fast: "standard", sam: false }, rfdetr: { fast: "rfdetr", sam: false }, sam3: { fast: null, sam: true },
+  both: { fast: "standard", sam: true }, "rfdetr+sam3": { fast: "rfdetr", sam: true },
+};
+export const partsOf = (d: string) => PARTS[d] ?? PARTS.standard;
+export function detectorOf(fast: "standard" | "rfdetr" | null, sam: boolean): string {
+  if (!sam) return fast ?? "standard";
+  return fast === "standard" ? "both" : fast === "rfdetr" ? "rfdetr+sam3" : "sam3";
+}
+/** Tick or untick one detector. The two fast ones replace each other; one detector at least stays ticked. */
+export function toggleDetector(value: string, key: "standard" | "rfdetr" | "sam3"): string {
+  const p = partsOf(value);
+  if (key === "sam3") return p.sam && !p.fast ? value : detectorOf(p.fast, !p.sam);
+  if (p.fast === key) return p.sam ? detectorOf(null, true) : value;
+  return detectorOf(key, p.sam);
+}
 /** SAM 3.1 runs for these choices (so its interval and words apply). */
-export const usesSam = (d: string) => d === "sam3" || d === "both";
+export const usesSam = (d: string) => partsOf(d).sam;
 
 export type Grades = {
   measured?: string; machine?: string; note?: string;
@@ -285,7 +302,7 @@ export function GradeLine({ g, k }: { g?: Grades; k: string }) {
 
 /** The measured scores behind the grades, all detectors side by side, the best in each column marked. */
 export function GradesTable({ g }: { g: Grades }) {
-  const keys = ["standard", "rfdetr", "sam3", "both"].filter((k) => g.detectors[k]);
+  const keys = ["standard", "rfdetr", "sam3", "both", "rfdetr+sam3"].filter((k) => g.detectors[k]);
   const best = (sc: string) => Math.max(...keys.map((k) => g.detectors[k].ap50[sc] ?? -1));
   const fastest = Math.min(...keys.map((k) => meanSeconds(g.detectors[k].seconds) ?? 1e9));
   const trained = keys.filter((k) => g.detectors[k].trained);
@@ -334,26 +351,28 @@ export function DetectorChoice({ value, onChange, sam, disabled, legend = true, 
   useEffect(() => { api("/detectors").then(setInfo).catch(() => setInfo({})); }, []);
   const rf = info.rfdetr;
   const g = info.grades && info.grades.scenes ? info.grades : undefined;
+  const p = partsOf(value);
   return (
     <fieldset style={{ border: 0, padding: 0, margin: "4px 0 14px", minWidth: 0 }} aria-label="Detector">
       {legend && <legend style={{ padding: 0, fontSize: 12.5, fontWeight: 550, color: "var(--text-2)", marginBottom: 6 }}>Detector (can change later)</legend>}
+      <p className="muted" style={{ margin: "0 0 8px", fontSize: 12.5 }}>Tick one fast detector, SAM 3.1, or a fast one together with SAM 3.1: what both find is merged, and an object they both find counts once.</p>
       <div className="choices">
         <label className="choice">
-          <input type="radio" name="detector" checked={value === "standard"} disabled={disabled} onChange={() => onChange("standard")} />
-          <b>Standard</b>
+          <input type="checkbox" checked={p.fast === "standard"} disabled={disabled} onChange={() => onChange(toggleDetector(value, "standard"))} />
+          <b>YOLOX-s</b>
           <GradeLine g={g} k="standard" />
-          <small>YOLOX-s, or the model promoted on the learning page. The fastest, and it can be trained on your own camera {video ? "recordings" : "images"}. Finds vehicles, and people when the mission looks for them; weak on small targets from the air and in thermal.</small>
+          <small>The standard detector: YOLOX-s, or the model promoted on the learning page. The fastest, and it can be trained on your own camera {video ? "recordings" : "images"}. Finds vehicles, and people when the mission looks for them; weak on small targets from the air and in thermal until trained.</small>
         </label>
         <label className="choice">
-          <input type="radio" name="detector" checked={value === "rfdetr"} disabled={disabled || (rf != null && !rf.installed)} onChange={() => onChange("rfdetr")} />
+          <input type="checkbox" checked={p.fast === "rfdetr"} disabled={disabled || (rf != null && !rf.installed)} onChange={() => onChange(toggleDetector(value, "rfdetr"))} />
           <b>RF-DETR</b>
           <GradeLine g={g} k="rfdetr" />
           <small>{rf == null || rf.installed
-            ? `A newer transformer detector (Roboflow, Apache-2.0)${rf?.model ? `, ${rf.model.name}` : ""}. Finds more vehicles than YOLOX-s on every kind of scene, at about two to three times its time per ${unit}, and it can be trained on your own ${video ? "recordings" : "images"} the same way.`
+            ? `A newer transformer detector (Roboflow, Apache-2.0)${rf?.model ? `, ${rf.model.name}` : ""}. Finds more vehicles than YOLOX-s on every kind of scene, at about two to three times its time per ${unit}, and it can be trained on your own ${video ? "recordings" : "images"} the same way. Ticking it unticks YOLOX-s.`
             : `Not available on this computer. ${rf.reason ?? ""}`}</small>
         </label>
         <label className="choice">
-          <input type="radio" name="detector" checked={value === "sam3"} disabled={disabled || !sam?.installed} onChange={() => onChange("sam3")} />
+          <input type="checkbox" checked={p.sam} disabled={disabled || !sam?.installed} onChange={() => onChange(toggleDetector(value, "sam3"))} />
           <b>SAM 3.1</b>
           <GradeLine g={g} k="sam3" />
           <small>{sam?.installed
@@ -361,15 +380,13 @@ export function DetectorChoice({ value, onChange, sam, disabled, legend = true, 
               : "Meta's Segment Anything 3.1 asks for each kind of object by name. More thorough on unusual angles and crowded scenes; on a CPU it takes from several seconds to a minute per image.")
             : `Not available on this computer. ${sam?.reason ?? ""}`}</small>
         </label>
-        <label className="choice">
-          <input type="radio" name="detector" checked={value === "both"} disabled={disabled || !sam?.installed} onChange={() => onChange("both")} />
-          <b>Both</b>
-          <GradeLine g={g} k="both" />
-          <small>{sam?.installed
-            ? (video ? "The standard detector on every analysed frame and SAM 3.1 every second of video by default, merged. An object both find counts once; each tracked box says which of them found it."
-              : "The standard detector and SAM 3.1 on every image. A vehicle both find counts once; each vehicle says which of them found it. The most complete, and as slow as SAM 3.1.")
-            : "Needs SAM 3.1, which is not available on this computer."}</small>
-        </label>
+      </div>
+      <div className="msg" style={{ marginTop: 8 }}>
+        <b>Runs: {DETECTOR_LABEL[value] ?? value}</b>
+        {p.fast && p.sam && <>{" "}<GradeLine g={g} k={value} /><small className="muted" style={{ display: "block", marginTop: 4 }}>
+          {video ? `The ${p.fast === "rfdetr" ? "RF-DETR" : "standard"} detector on every analysed frame and SAM 3.1 every second of video by default, merged; each tracked box says which of them found it.`
+            : `Both on every image, merged; each vehicle says which of them found it. As slow as SAM 3.1.`}
+          {value === "rfdetr+sam3" && !g?.detectors?.["rfdetr+sam3"] ? " Not measured together yet; expect results close to SAM 3.1's." : ""}</small></>}
       </div>
       {g && <GradesTable g={g} />}
       {usesSam(value) && sam?.memory_note && <div className="msg warn">{sam.memory_note}</div>}

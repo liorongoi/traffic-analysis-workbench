@@ -6,7 +6,7 @@ import EventsTab from "./Events";
 import PlatesTab from "./Plates";
 import LearningTab from "./Learning";
 import NightReviewTab from "./NightReview";
-import { CameraChoice, DetectorChoice, ModelChoice, ParallelChoice, SamInterval, usesSam } from "./Wizard";
+import { CameraChoice, DETECTOR_LABEL, DetectorChoice, ModelChoice, ParallelChoice, SamInterval, partsOf, usesSam } from "./Wizard";
 import FolderPicker from "../components/FolderPicker";
 import { Choice, NamePick } from "../components/Pick";
 
@@ -53,7 +53,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
             <span>{cap(m.config.mode.replace(/_/g, " "))}</span>
             <span>{m.config.iana_zone}</span>
             <span>{m.config.processing === "continuous" ? `Continuous, monitoring ${m.config.monitoring_enabled ? "on" : "off"}` : "One-time"}</span>
-            {<span>{m.config.detector === "sam3" ? "SAM 3.1 detector" : m.config.detector === "both" ? "Standard + SAM 3.1 detectors" : "Standard detector"}{m.config.detector !== "sam3" && m.config.vehicle_model ? ` · ${m.config.vehicle_model}` : ""}</span>}
+            {<span>{DETECTOR_LABEL[m.config.detector ?? "standard"] ?? "Standard detector"}{m.config.detector !== "sam3" && m.config.vehicle_model ? ` · ${m.config.vehicle_model}` : ""}</span>}
           </div>
         </div>
       </div>
@@ -238,10 +238,10 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
     <div className="card">
       <h2>Detector</h2>
       <DetectorChoice value={value} onChange={setValue} sam={sam ?? undefined} disabled={busy} legend={false} video={video} />
-      {video && usesSam(value) && <SamInterval value={every} onChange={setEvery} both={value === "both"} disabled={busy} />}
+      {video && usesSam(value) && <SamInterval value={every} onChange={setEvery} both={partsOf(value).fast !== null} disabled={busy} />}
       {video && <CameraChoice value={camera} onChange={setCamera} disabled={busy} />}
       {video && <ParallelChoice value={workers} onChange={setWorkers} disabled={busy} />}
-      {value !== "sam3" && <ModelChoice saved={saved} value={m.config.vehicle_model ?? null} onChange={setModel} disabled={busy} rfdetr={value === "rfdetr"} />}
+      {value !== "sam3" && <ModelChoice saved={saved} value={m.config.vehicle_model ?? null} onChange={setModel} disabled={busy} rfdetr={partsOf(value).fast === "rfdetr"} />}
       {changed && <p className="muted">{video ? "Recordings" : "Images"} already processed keep their detections; the change applies to the next run. Each detection records the model that made it.</p>}
       {busy && <p className="muted">The detector can be changed when processing has finished.</p>}
       {changed && <div className="row"><button className="primary" disabled={busy || saving} onClick={saveIt}>{saving ? "Saving…" : "Use this detector"}</button>

@@ -5,7 +5,8 @@
   trainable on the learning page as well. The mission uses the RF-DETR model promoted for RF-DETR missions if there is
   one, else the released RF-DETR model installed here (Small first, then Medium, then Nano).
 - "sam3": SAM 3.1, which finds objects by name; much slower, strongest from the air and in thermal.
-- "both": the standard detector and SAM 3.1, merged.
+- "both": the standard detector and SAM 3.1, merged; "rfdetr+sam3": RF-DETR and SAM 3.1, merged. The picker shows
+  these as tick boxes: one fast detector (YOLOX-s or RF-DETR), SAM 3.1, or a fast one together with SAM 3.1.
 
 GRADES are the measured results (docs/benchmarks/README.md): vehicle AP50 per kind of scene, and seconds per image
 on 4 CPU cores. The detector picker shows them so the choice is an informed one.
@@ -16,6 +17,20 @@ import json
 from pathlib import Path
 
 ARCH_RFDETR = "rf-detr"
+# Each choice: (fast detector or None, whether SAM 3.1 runs too).
+CHOICES = {"standard": ("standard", False), "rfdetr": ("rfdetr", False), "sam3": (None, True),
+           "both": ("standard", True), "rfdetr+sam3": ("rfdetr", True)}
+
+
+def uses_sam(choice: str | None) -> bool:
+    return CHOICES.get(choice or "standard", ("standard", False))[1]
+
+
+def fast_of(choice: str | None) -> str | None:
+    """The fast detector of a choice: "standard" (YOLOX-s or the promoted model), "rfdetr", or None (SAM 3.1 alone)."""
+    return CHOICES.get(choice or "standard", ("standard", False))[0]
+
+
 RFDETR_PREFERENCE = ("rf-detr-small", "rf-detr-medium", "rf-detr-nano")
 
 

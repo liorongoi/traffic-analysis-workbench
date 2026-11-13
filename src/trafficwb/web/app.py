@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..detect import VEHICLE_CLASSES
-from ..detectors import grades as detector_grades, is_rfdetr, rfdetr_info
+from ..detectors import fast_of, grades as detector_grades, is_rfdetr, rfdetr_info, uses_sam
 from ..change import CONDITIONS, ChangeService
 from ..export import export as run_export
 from ..localtime import to_local
@@ -805,10 +805,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
 
     @app.post("/api/missions")
     def mission_create(body: MissionBody, u: User = Depends(user)):
-        if body.detector in ("sam3", "both") and not sam_info()["installed"]:
+        if uses_sam(body.detector) and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""),
                            "Choose the standard detector, or install the full LanePulse package.")
-        if body.detector == "rfdetr" and not body.vehicle_model and not rfdetr_info(data_root)["installed"]:
+        if fast_of(body.detector) == "rfdetr" and not body.vehicle_model and not rfdetr_info(data_root)["installed"]:
             raise ApiError(400, "rfdetr_missing", rfdetr_info(data_root)["reason"], "Choose another detector.")
         if body.vehicle_model and not _saved_or_none(body.vehicle_model):
             raise ApiError(400, "invalid", f"There is no saved model named “{body.vehicle_model}”.")
@@ -894,9 +894,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "invalid", "SAM 3.1 in video runs every 0.2 to 10 seconds of the recording.")
         if body.video_workers is not None and not (1 <= body.video_workers <= 32):
             raise ApiError(400, "invalid", "Segments side by side must be 1 to 32.")
-        if body.detector in ("sam3", "both") and not sam_info()["installed"]:
+        if uses_sam(body.detector) and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""))
-        if body.detector == "rfdetr" and not cfg.vehicle_model and not rfdetr_info(data_root)["installed"]:
+        if fast_of(body.detector) == "rfdetr" and not cfg.vehicle_model and not rfdetr_info(data_root)["installed"]:
             raise ApiError(400, "rfdetr_missing", rfdetr_info(data_root)["reason"])
         if jobs.busy(m.id):
             raise ApiError(409, "busy", "Processing is running. Change the detector when it has finished or is cancelled.")

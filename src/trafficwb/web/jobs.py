@@ -201,7 +201,8 @@ class JobManager:
         """The standard detector of a mission: the saved model it chose, else the model in production use."""
         name = getattr(m.config(), "vehicle_model", None)
         if not name:
-            if getattr(m.config(), "detector", "standard") == "rfdetr":
+            from ..detectors import fast_of
+            if fast_of(getattr(m.config(), "detector", "standard")) == "rfdetr":
                 return self.rfdetr()
             return self.detector()
         from ..learning import LearningError, ModelLibrary
@@ -240,7 +241,8 @@ class JobManager:
         std = None
         if choice != "sam3":
             std = self._with_classes(self.standard_for(m), words)
-        if choice in ("sam3", "both"):
+        from ..detectors import uses_sam
+        if uses_sam(choice):
             from ..sam3 import Sam3Detector, vehicle_prompts
             eng = self.sam_engine()
             prompts = vehicle_prompts(words)

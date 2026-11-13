@@ -93,15 +93,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "detect":
         from . import models
-        from .detect import DetectorSettings, YoloxDetector, make_detector
+        from .detect import DetectorSettings, make_detector
         from .process import Processor
         cols, rows = (int(x) for x in a.tiles.lower().split("x"))
         m = root.open_mission(a.mission)
         chosen = m.config().detector if m.input_type == "images" else "standard"
-        model = a.model or (chosen if chosen in ("sam3", "both") else "yolox-s")
-        if not a.model and chosen == "rfdetr":
+        from .detectors import fast_of, uses_sam
+        model = a.model or (chosen if chosen == "sam3" else "both" if uses_sam(chosen) else "yolox-s")
+        fast = "yolox-s"
+        if not a.model and fast_of(chosen) == "rfdetr":
             from .detectors import rfdetr_pack
-            model = rfdetr_pack(a.data).name
+            fast = rfdetr_pack(a.data).name
+            model = "both" if uses_sam(chosen) else fast
         card = None
         if model in ("sam3", "sam3.1"):
             from .sam3 import Sam3Detector, engine
@@ -111,8 +114,8 @@ def main(argv: list[str] | None = None) -> int:
             from .combined import CombinedDetector
             from .sam3 import Sam3Detector, engine
             eng = engine()
-            pack = models.find("yolox-s", a.model_version)
-            det = CombinedDetector(YoloxDetector(pack, DetectorSettings(tiles=(cols, rows))), pack.card,
+            pack = models.find(fast, a.model_version)
+            det = CombinedDetector(make_detector(pack, DetectorSettings(tiles=(cols, rows))), pack.card,
                                    Sam3Detector(eng), eng.pack.card)
             card = det.card()
         else:
