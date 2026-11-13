@@ -13,8 +13,38 @@ export type VEvent = {
   flags: string[]; related: string[]; end_reason: string; status: string; duplicate_of: string | null;
   merged_into: number | null; absorbed: string[]; split_at: number[]; parts: [number, number][];
   first_utc: string | null; last_utc: string | null; revisions: number;
-  continues?: number | null; continues_key?: string | null;
+  continues?: number | null; continues_key?: string | null; attrs?: Attrs;
 };
+/** What a target did and looked like (phase 6a). Colours: null not read yet, [] not observable, 2+ uncertain. */
+export type Attrs = {
+  direction: string | null; dwell_s: number; stopped_s: number; speed: number | null; top_speed: number | null;
+  unit: "km/h" | "px/s"; w: number | null; h: number | null; size_unit: "m" | "px";
+  colour: string[] | null; upper: string[] | null; lower: string[] | null;
+};
+
+export const ARROW: Record<string, string> = {
+  right: "→", "down-right": "↘", down: "↓", "down-left": "↙", left: "←", "up-left": "↖", up: "↑", "up-right": "↗", stayed: "•",
+};
+const COLOURS = ["black", "white", "grey", "brown", "red", "orange", "yellow", "green", "blue"];
+const SWATCH: Record<string, string> = {
+  black: "#111", white: "#f4f4f4", grey: "#8a8a8a", brown: "#7a4b22", red: "#d33", orange: "#f08a24", yellow: "#f2d02a",
+  green: "#2e9e4f", blue: "#2f6fd6",
+};
+/** Colour chips with their names (never colour alone). */
+export function ColourChips({ v }: { v: string[] | null | undefined }) {
+  if (v == null) return <span className="muted small">reading…</span>;
+  if (!v.length) return <span className="muted small">not seen</span>;
+  return <span className="chips">{v.map((c, i) => <span key={c} className="chip-colour">
+    <i style={{ background: SWATCH[c] ?? "transparent" }} />{c}{i < v.length - 1 ? " or" : ""}</span>)}</span>;
+}
+export const fmtDur = (s: number) => s < 60 ? `${s.toFixed(s < 10 ? 1 : 0)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+const fmtSpeed = (a: Attrs) => a.speed == null ? "" : `${a.unit === "km/h" ? Math.round(a.speed) : Math.round(a.speed)} ${a.unit}`;
+
+// Filters on what targets did and looked like; every one a pick from a list.
+const DIRS = ["right", "down-right", "down", "down-left", "left", "up-left", "up", "up-right", "stayed"];
+const IN_VIEW = [5, 10, 30, 60, 120, 300];
+const STOPPED = [3, 10, 30, 60, 120, 300];
+const KMH = [[0, 10], [10, 30], [30, 50], [50, 70], [70, 90], [90, 120], [120, 999]];
 type Obs = { t: number; x1: number; y1: number; x2: number; y2: number; cls: string; score: number; found_by?: string };
 
 export const fmtT = (t: number | null | undefined) => {
@@ -130,6 +160,49 @@ function CountsCard({ missionId, versionId, refresh }: { missionId: string; vers
   );
 }
 
+const FAMILY: Record<string, string> = { vehicle: "vehicles", person: "people" };
+const CROWD = [5, 10, 20, 30, 50, 100];
+
+/** The most targets in view at the same moment, per family, and the crowd alert (people in view at once). */
+function InViewCard({ missionId, versionId, refresh }: { missionId: string; versionId: string; refresh: number }) {
+  const [d, setD] = useState<any | null>(null);
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const q = versionId.startsWith("g") ? `?group_id=${versionId.slice(1)}` : versionId ? `?version_id=${versionId}` : "";
+    api(`/missions/${missionId}/in-view${q}`).then(setD).catch(() => setD(null));
+  }, [missionId, versionId, refresh, n]);
+  if (!d || !d.recordings.length) return null;
+  const fams = new Map<string, { max: number; at_s: number; rec: any }>();
+  for (const r of d.recordings) for (const [f, v] of Object.entries(r.families) as [string, any][])
+    if (!fams.has(f) || v.max > fams.get(f)!.max) fams.set(f, { ...v, rec: r });
+  const crowds = d.recordings.flatMap((r: any) => r.crowd.map((c: any) => ({ ...c, rec: r })));
+  const setAlert = (v: string) => api(`/missions/${missionId}/crowd-alert`, { method: "PUT", body: { people: v ? Number(v) : null } }).then(() => setN((x) => x + 1));
+  return (
+    <div className="card counts in-view">
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+        <h2>Most in view at once</h2>
+        <label className="row small">Crowd alert
+          <select aria-label="Crowd alert" value={d.crowd_at ?? ""} onChange={(e) => setAlert(e.target.value)}>
+            <option value="">Off</option>{CROWD.map((c) => <option key={c} value={c}>{c} or more people at once</option>)}
+          </select></label>
+      </div>
+      <div className="count-tiles">
+        {[...fams.entries()].map(([f, v]) => (
+          <div key={f} className="count-tile">
+            <div className="count-cls">{FAMILY[f] ?? f}</div>
+            <div className="count-num">{v.max}</div>
+            <div className="muted small">at <a href={`#/m/${missionId}/events/play-${v.rec.source_version_id}`}>{fmtT(v.at_s).slice(0, 8)}</a>
+              {d.recordings.length > 1 ? <> in <span className="bidi">{v.rec.file.split("/").pop()}</span></> : null}</div>
+          </div>))}
+      </div>
+      {d.crowd_at && (crowds.length ? <div className="msg warn"><strong>{crowds.length} crowd period(s)</strong> with {d.crowd_at} or more people in view:{" "}
+        {crowds.slice(0, 12).map((c: any, i: number) => <span key={i}>{i ? ", " : ""}<a href={`#/m/${missionId}/events/play-${c.rec.source_version_id}`}>{fmtT(c.start_s).slice(0, 8)}–{fmtT(c.end_s).slice(0, 8)}</a> (up to {c.peak})</span>)}
+        {crowds.length > 12 ? " …" : ""}</div>
+        : <p className="muted small" style={{ margin: 0 }}>Never {d.crowd_at} or more people in view at once.</p>)}
+    </div>
+  );
+}
+
 function EventList({ missionId, recording }: { missionId: string; recording: string }) {
   const [recs, setRecs] = useState<any[]>([]);
   const [groups, setGroups] = useState<{ id: number; name: string; members: number[] }[]>([]);
@@ -140,6 +213,14 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
   const setRec = (v: string) => { setRecState(v); go(`/m/${missionId}/events${v ? `/rec-${v}` : ""}`); };
   const [status, setStatus] = useState("");
   const [flag, setFlag] = useState("");
+  const [dir, setDir] = useState("");
+  const [inView, setInView] = useState("");
+  const [stopped, setStopped] = useState("");
+  const [speed, setSpeed] = useState("");
+  const [colour, setColour] = useState("");
+  const [upper, setUpper] = useState("");
+  const [lower, setLower] = useState("");
+  const [reading, setReading] = useState(false);
   const [startTimes, setStartTimes] = useState<Record<number, string>>({});
   const [precisions, setPrecisions] = useState<Record<number, string>>({});
   const [timeRevision, setTimeRevision] = useState(0);
@@ -151,8 +232,14 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
     else if (rec) q.set("version_id", rec);
     if (status) q.set("status", status);
     if (flag) q.set("flag", flag);
-    api(`/missions/${missionId}/events?${q}`).then((r) => setEvs(r.events));
+    api(`/missions/${missionId}/events?${q}`).then((r) => { setEvs(r.events); setReading(!!r.reading_colours); });
   }, [missionId, rec, status, flag, timeRevision]);
+  // While colours are being read, the list fills in every few seconds.
+  useEffect(() => {
+    if (!reading) return;
+    const t = setTimeout(() => setTimeRevision((x) => x + 1), 4000);
+    return () => clearTimeout(t);
+  }, [reading, evs]);
   const saveStart = async (r: any) => {
     setMsg(null);
     try {
@@ -194,6 +281,21 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
       setMsg({ kind: "ok", text: `Exported: ${r.files.join(", ")}` });
     } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
   };
+  const has = (v: string[] | null | undefined, c: string) => !!v && v.includes(c);
+  const kmh = evs?.some((e) => e.attrs?.unit === "km/h");
+  const pxSpeeds = (evs ?? []).filter((e) => e.attrs?.unit === "px/s" && e.attrs.speed != null).map((e) => e.attrs!.speed!).sort((a, b) => a - b);
+  const third = (k: number) => pxSpeeds[Math.floor((pxSpeeds.length * k) / 3)] ?? 0;
+  const inSpeed = (a: Attrs) => {
+    if (!speed || a.speed == null) return !speed;
+    if (speed.startsWith("k")) { const [lo, hi] = speed.slice(1).split("-").map(Number); return a.unit === "km/h" && a.speed >= lo && a.speed < hi; }
+    if (a.unit !== "px/s") return false;
+    return speed === "slow" ? a.speed < third(1) : speed === "medium" ? a.speed >= third(1) && a.speed < third(2) : a.speed >= third(2);
+  };
+  const people = evs?.some((e) => e.attrs?.upper != null || e.cls === "person");
+  const shown = (evs ?? []).filter((e) => { const a = e.attrs; if (!a) return true;
+    return (!dir || a.direction === dir) && (!inView || a.dwell_s >= Number(inView)) && (!stopped || a.stopped_s >= Number(stopped))
+      && inSpeed(a) && (!colour || has(a.colour, colour) || has(a.upper, colour) || has(a.lower, colour)) && (!upper || has(a.upper, upper)) && (!lower || has(a.lower, lower)); });
+  const filtering = !!(dir || inView || stopped || speed || colour || upper || lower);
   // One tab per analysed video; the parts of a merged recording share one tab.
   const inGroup = new Set(groups.flatMap((g) => g.members));
   const done = new Set(recs.filter((r) => r.processing_state === "done").map((r) => r.id));
@@ -214,6 +316,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
               onClick={(e) => { e.preventDefault(); setRec(String(r.id)); }}>{r.rel_path.split("/").pop()}<span className="n">{r.events}</span></a>))}
         </nav>)}
       <CountsCard missionId={missionId} versionId={rec} refresh={timeRevision} />
+      <InViewCard missionId={missionId} versionId={rec} refresh={timeRevision} />
       <div className="card">
         <h2>Recordings</h2>
         <table className="t"><thead><tr><th>File</th><th>Start (UTC)</th><th className="num">Length</th><th>Frame rate</th><th>Processing</th><th className="num">Events</th><th>For learning</th></tr></thead>
@@ -269,18 +372,50 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
         <select value={flag} onChange={(e) => setFlag(e.target.value)} aria-label="Flag">
           <option value="">Any flag</option>{Object.entries(FLAG_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <span className="muted">{evs?.length ?? 0} events</span>
+        <span className="muted">{filtering ? `${shown.length} of ${evs?.length ?? 0}` : evs?.length ?? 0} events</span>
         <span style={{ flex: 1 }} />
         {rec && !rec.startsWith("g") && <button className="primary" onClick={() => go(`/m/${missionId}/events/play-${rec}`)}>▶ Play and review this video</button>}
         <button onClick={doExport}>Export events</button>
       </div>
+      {evs && evs.length > 0 && <div className="card row attr-filters">
+        <span className="muted small">What they did</span>
+        <select aria-label="Direction" value={dir} onChange={(e) => setDir(e.target.value)}>
+          <option value="">Any direction</option>{DIRS.map((d) => <option key={d} value={d}>{ARROW[d]} {d === "stayed" ? "stayed in place" : `went ${d}`}</option>)}
+        </select>
+        <select aria-label="Speed" value={speed} onChange={(e) => setSpeed(e.target.value)}>
+          <option value="">Any speed</option>
+          {kmh && KMH.map(([lo, hi]) => <option key={lo} value={`k${lo}-${hi}`}>{hi > 900 ? `over ${lo}` : `${lo} to ${hi}`} km/h</option>)}
+          {pxSpeeds.length > 2 && <><option value="slow">Slowest third{kmh ? " (camera not measured)" : ""}</option>
+            <option value="medium">Middle third</option><option value="fast">Fastest third</option></>}
+        </select>
+        <select aria-label="Time in view" value={inView} onChange={(e) => setInView(e.target.value)}>
+          <option value="">Any time in view</option>{IN_VIEW.map((s) => <option key={s} value={s}>In view {fmtDur(s)} or more</option>)}
+        </select>
+        <select aria-label="Time stopped" value={stopped} onChange={(e) => setStopped(e.target.value)}>
+          <option value="">Stopped or not</option>{STOPPED.map((s) => <option key={s} value={s}>Stopped {fmtDur(s)} or more</option>)}
+        </select>
+        <span className="muted small">How they looked</span>
+        <select aria-label="Colour" value={colour} onChange={(e) => setColour(e.target.value)}>
+          <option value="">Any colour</option>{COLOURS.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        {people && <>
+          <select aria-label="Upper body colour" value={upper} onChange={(e) => setUpper(e.target.value)}>
+            <option value="">Any top (people)</option>{COLOURS.map((c) => <option key={c} value={c}>{c} top</option>)}
+          </select>
+          <select aria-label="Lower body colour" value={lower} onChange={(e) => setLower(e.target.value)}>
+            <option value="">Any trousers or skirt</option>{COLOURS.map((c) => <option key={c} value={c}>{c} below</option>)}
+          </select></>}
+        {filtering && <button onClick={() => { setDir(""); setSpeed(""); setInView(""); setStopped(""); setColour(""); setUpper(""); setLower(""); }}>Clear</button>}
+        {reading && <span className="muted small">Reading colours…</span>}
+      </div>}
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
       {evs && evs.length === 0 && <div className="card muted">No events match. Events appear after the recordings are processed.</div>}
-      {evs && evs.length > 0 && (
+      {evs && evs.length > 0 && shown.length === 0 && <div className="card muted">No event matches these filters.</div>}
+      {evs && shown.length > 0 && (
         <div className="tablewrap">
           <table className="t">
-            <thead><tr><th style={{ width: 90 }}></th><th>Event</th><th>Recording</th><th>Start</th><th>End</th><th>Start (UTC)</th><th>Class</th><th>Review</th><th>Flags</th></tr></thead>
-            <tbody>{evs.map((e) => (
+            <thead><tr><th style={{ width: 90 }}></th><th>Event</th><th>Recording</th><th>Start</th><th>End</th><th>Start (UTC)</th><th>Class</th><th>Went</th><th className="num">Speed</th><th className="num">In view</th><th>Colour</th><th>Review</th><th>Flags</th></tr></thead>
+            <tbody>{shown.map((e) => (
               <tr key={e.id} className="click" onClick={() => go(`/m/${missionId}/events/${e.id}`)}>
                 <td><img loading="lazy" src={`/api/missions/${missionId}/events/${e.id}/thumb?h=48`} alt="" style={{ height: 40, display: "block", borderRadius: 3 }} /></td>
                 <td className="mono">{e.key}</td>
@@ -289,6 +424,12 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
                 <td className="mono">{fmtT(e.last_t)}</td>
                 <td className="mono">{e.first_utc ?? <span className="muted">unknown</span>}</td>
                 <td>{e.cls}{e.cls !== e.machine_cls ? <span className="muted"> (machine: {e.machine_cls})</span> : ""}</td>
+                <td title={e.attrs?.direction ?? ""}>{e.attrs?.direction ? `${ARROW[e.attrs.direction]} ${e.attrs.direction}` : ""}</td>
+                <td className="num mono">{e.attrs ? fmtSpeed(e.attrs) : ""}</td>
+                <td className="num mono">{e.attrs ? fmtDur(e.attrs.dwell_s) : ""}{e.attrs && e.attrs.stopped_s >= 3 ? <div className="muted small">stopped {fmtDur(e.attrs.stopped_s)}</div> : null}</td>
+                <td>{e.attrs && (e.attrs.upper !== null || e.attrs.lower !== null) && e.attrs.colour == null && (e.attrs.upper || e.attrs.lower)
+                  ? <span className="small">top <ColourChips v={e.attrs.upper} /> · below <ColourChips v={e.attrs.lower} /></span>
+                  : <ColourChips v={e.attrs?.colour} />}</td>
                 <td><span className={`badge ${e.status === "confirmed" ? "approved" : e.status === "rejected" ? "failed" : ""}`}>{STATUS_LABEL[e.status]}</span>{e.parts.length > 1 ? <span className="muted"> · {e.parts.length} parts</span> : ""}</td>
                 <td>{e.continues_key && <span className="badge part" style={{ marginRight: 4 }} title="The same target, carried on from the part before; counted once">continues {e.continues_key}</span>}
                   {e.flags.map((f) => <span key={f} className="badge flag" style={{ marginRight: 4 }}>{FLAG_LABEL[f] ?? f}</span>)}</td>
@@ -439,6 +580,16 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
               <tr><td>Start (UTC)</td><td className="mono">{ev.first_utc ?? "unknown: the file name has no start time"}</td></tr>
               <tr><td>Class</td><td>{ev.cls} <span className="muted">({Math.round(ev.cls_share * 100)}% of detections{ev.cls !== ev.machine_cls ? `, machine said ${ev.machine_cls}` : ""})</span></td></tr>
               <tr><td>Found by</td><td>{foundBy(ev.observations)}</td></tr>
+              {ev.attrs && <>
+                <tr><td>Went</td><td>{ev.attrs.direction ? `${ARROW[ev.attrs.direction]} ${ev.attrs.direction === "stayed" ? "stayed in place" : ev.attrs.direction}` : ""}</td></tr>
+                <tr><td>Speed</td><td>{ev.attrs.speed == null ? <span className="muted">too short to tell</span> : <>{fmtSpeed(ev.attrs)} <span className="muted">(top {Math.round(ev.attrs.top_speed ?? 0)})</span>
+                  {ev.attrs.unit === "px/s" && <span className="muted small"> · measure the camera in the player for km/h</span>}</>}</td></tr>
+                <tr><td>In view</td><td>{fmtDur(ev.attrs.dwell_s)}{ev.attrs.stopped_s >= 1 ? `, stopped ${fmtDur(ev.attrs.stopped_s)}` : ""}</td></tr>
+                <tr><td>Size</td><td className="mono">{ev.attrs.w} × {ev.attrs.h} {ev.attrs.size_unit}</td></tr>
+                {ev.attrs.colour == null && (ev.attrs.upper != null || ev.attrs.lower != null)
+                  ? <tr><td>Clothes</td><td>top <ColourChips v={ev.attrs.upper} /> · below <ColourChips v={ev.attrs.lower} /></td></tr>
+                  : <tr><td>Colour</td><td><ColourChips v={ev.attrs.colour} /></td></tr>}
+              </>}
               <tr><td>Ended because</td><td>{ev.end_reason.replace(/_/g, " ")}</td></tr>
               <tr><td>Flags</td><td>{ev.flags.length ? ev.flags.map((f) => FLAG_LABEL[f] ?? f).join(", ") : "none"}{ev.related.length > 0 && ` (${ev.related.join(", ")})`}</td></tr>
               {ev.parts.length > 1 && <tr><td>Parts</td><td className="mono">{ev.parts.map(([a, b]) => `${fmtT(a)}–${fmtT(b)}`).join(", ")}</td></tr>}

@@ -987,6 +987,23 @@ CREATE TABLE recording_group_member (
   PRIMARY KEY (group_id, source_version_id)
 );
 """,
+    20: """
+CREATE TABLE video_calibration (           -- measuring the camera: two points and the real distance between them
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  x1 REAL NOT NULL, y1 REAL NOT NULL, x2 REAL NOT NULL, y2 REAL NOT NULL,
+  meters REAL NOT NULL,
+  cleared INTEGER NOT NULL DEFAULT 0,      -- 1: the measure was removed (the newest row wins)
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE video_event_colour (          -- the colour read on an event's sharpest frame (video_attributes)
+  event_id INTEGER PRIMARY KEY REFERENCES video_event(id),
+  version TEXT NOT NULL,
+  data TEXT NOT NULL,                      -- JSON: {"colour"} or, for a person, {"upper", "lower"}
+  read_at TEXT NOT NULL
+);
+""",
 }
 
 
@@ -1075,6 +1092,7 @@ class MissionConfig:
     run_mode: str = "manual"         # learning: manual (the operator decides each step) | auto (see learning.auto_step)
     auto_min_reviews: int = 20       # auto: new review decisions since the last dataset version before a round starts
     auto_epochs: int = 30            # auto: training epochs per round
+    crowd_alert: int | None = None   # video: list the periods with this many people or more in view at once
     analyse_new: bool = False        # video: new videos in the input folder are analysed with the mission's model
                                      # as they arrive (always so in full auto)
 

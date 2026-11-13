@@ -123,6 +123,15 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 - The browser plays the original file (HTTP range requests). The event page draws the tracked box of its event over the video at the nearest analysed frame.
 - If the browser cannot play the codec (for example H.265 in some browsers), the page switches to frames decoded on the workstation, one at a time, with a slider and step buttons.
 
+## What targets did and looked like
+
+- Every event shows where it went in the picture (right, down-right, down, down-left, left, up-left, up, up-right, or "stayed" when it moved less than its own size), its speed (median and top), its time in view, its time stopped, its size, and its colour; a person's top and lower clothes are read apart (`video_attributes.py`). The events list filters on each with dropdowns; the export has them as columns.
+- Motion is measured on the bottom middle of the box, with the operator's boxes in place of the tracker's. Speed is the median over steps of at least 0.5 s; "top" is the 90th percentile. Stopped time adds the steps slower than a tenth of the target's height per second, or 1 km/h once the camera is measured.
+- Measuring the camera (player, "Measure" or M): drag a line between two points on the road whose distance is known and pick it from a list (a car's length, a lane's width, a bus's length, 1 to 100 m). Speeds become km/h and sizes metres, for that video and the other videos from the same folder without a measure of their own. One scale for the whole picture is approximate: the line should be at the depth where targets pass. Without a measure, speed is in pixels per second and the speed filter offers the slowest, middle and fastest third.
+- Colour is read once per target, in the background, on the frame shown as its picture, by the still-image colour reader (9 colours; observed, uncertain with the competing colours, or not observable, for example in infrared). A person's top is 15-50 % of the box height and the lower body 50-90 %.
+- "Most in view at once": per family (vehicles, people), the most counted targets in view at the same moment and when. The crowd alert (5 to 100 people, or off) lists the periods with that many people in view, with links to play them.
+- Not yet: hats, bags and other worn items (they need a model of their own), ground speed from a moving or airborne camera (phase 7), lines and areas in video (phase 6b).
+
 ## Workers on other computers
 
 - Other computers can analyse segments of a long recording. The operator turns "Other computers may help" on (Workers screen). Off by default; while off, nothing is shared and workers are refused.

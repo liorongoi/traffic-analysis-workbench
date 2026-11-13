@@ -288,6 +288,49 @@ class VideoService:
         tot["vehicles_counted"] = vehicles(tot["counted"])
         return {"classes": classes, "uncounted": uncounted, "bucket_s": bucket_s, "recordings": out, "total": tot}
 
+    # ---------- what each target did and looked like (phase 6a) ----------
+    def boxes_by_event(self, evs: list[Event]) -> dict[int, list[tuple[float, list[float]]]]:
+        """Each event's boxes by time, the operator's in place of the tracker's (as ``_track_boxes``), read in one
+        query per recording."""
+        out: dict[int, list] = {e.id: [] for e in evs}
+        runs = {(e.source_version_id, e.run_item_id) for e in evs}
+        for vid, rid in runs:
+            for r in self.con.execute(
+                    "SELECT e.id, o.t, o.x1, o.y1, o.x2, o.y2 FROM track_observation o JOIN video_event e "
+                    "ON e.track_id=o.track_id WHERE e.source_version_id=? AND e.run_item_id=? ORDER BY o.t",
+                    (vid, rid)):
+                if r[0] in out:
+                    out[r[0]].append((r[1], [float(v) for v in r[2:6]]))
+        for e in evs:
+            rows = [b for b in out[e.id] if not any(abs(b[0] - f["t"]) < 1e-3 for f in e.fixes)]
+            rows += [(f["t"], list(f["box"])) for f in e.fixes]
+            out[e.id] = sorted(b for b in rows if e.first_t - 1e-6 <= b[0] <= e.last_t + 1e-6)
+        return out
+
+    def attributes(self, evs: list[Event]) -> dict[int, dict]:
+        """Per event: direction, speed, time in view and stopped, size (in metres when the camera is measured),
+        colour (None until read)."""
+        from .video_attributes import Calibration, colour_summary, motion, stored_colours
+        cal = Calibration(self.m)
+        scales = {v: (cal.get(v) or {}).get("m_per_px") for v in {e.source_version_id for e in evs}}
+        boxes = self.boxes_by_event(evs)
+        colours = stored_colours(self.con, [e.id for e in evs])
+        return {e.id: motion(boxes[e.id], scales[e.source_version_id]) | colour_summary(colours.get(e.id))
+                for e in evs}
+
+    def in_view(self, version_id: int | None = None, group_id: int | None = None) -> dict:
+        from .video_attributes import in_view
+        evs = [e for e in self.events(version_id, group_id=group_id) if e.continues is None]
+        out: dict = {"recordings": []}
+        crowd_at = getattr(self.m.config(), "crowd_alert", None)
+        by_vid: dict[int, list[Event]] = {}
+        for e in evs:
+            by_vid.setdefault(e.source_version_id, []).append(e)
+        for vid, vs in sorted(by_vid.items()):
+            out["recordings"].append({"source_version_id": vid, "file": vs[0].file} | in_view(vs, crowd_at))
+        out["crowd_at"] = crowd_at
+        return out
+
     def event(self, event_id: int) -> Event:
         r = self.con.execute("SELECT source_version_id FROM video_event WHERE id=?", (event_id,)).fetchone()
         if r is None:
@@ -566,8 +609,12 @@ class VideoService:
             from .plates import PlateService
             plates = {p.object_uid: p for p in PlateService(self.m).plates()}
         rows = []
-        for e in self.events():
+        evs = self.events()
+        attrs = self.attributes(evs)
+        for e in evs:
             clips = ";".join(c["path"] for c in self.clips(e.id))
+            at = attrs[e.id]
+            look = lambda v: "" if v is None else ("not observable" if not v else "/".join(v))   # noqa: E731
             pl = plates.get(f"e{e.id}")
             for k, (a, b) in enumerate(e.parts, 1):
                 st = getattr(e, "_start", None)
@@ -579,12 +626,17 @@ class VideoService:
                     e.entry[0], e.entry[1], e.exit[0], e.exit[1], fmt_t(e.machine_first_t), fmt_t(e.machine_last_t),
                     e.revisions, clips,
                     (models.get(e.run_id, {}).get("vehicle_detection") or {}).get("name", ""),
-                    pl.text if pl else "", pl.readability if pl else "", pl.review if pl else "")])
+                    pl.text if pl else "", pl.readability if pl else "", pl.review if pl else "",
+                    at["direction"] or "", at["speed"] if at["speed"] is not None else "", at["top_speed"]
+                    if at["top_speed"] is not None else "", at["unit"], at["dwell_s"], at["stopped_s"], at["w"], at["h"],
+                    at["size_unit"], look(at["colour"]), look(at["upper"]), look(at["lower"]))])
         cols = ["mission_id", "run_id", "source_version_id", "file", "sha256", "event_id", "part", "start", "end",
                 "start_s", "end_s", "start_utc", "end_utc", "utc_precision", "class", "machine_class", "class_share",
                 "review_status", "duplicate_of", "merged_events", "flags", "possible_duplicate_of", "end_reason",
                 "entry_x", "entry_y", "exit_x", "exit_y", "machine_start", "machine_end", "operator_revisions", "clips",
-                "model", "plate_text", "plate_readability", "plate_review"]
+                "model", "plate_text", "plate_readability", "plate_review", "direction", "speed", "top_speed",
+                "speed_unit", "seconds_in_view", "seconds_stopped", "width", "height", "size_unit", "colour",
+                "upper_colour", "lower_colour"]
         stem = "".join(c if c.isalnum() or c in "-_." else "_"
                        for c in f"{cfg.name}_events_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
         cn = self.counts()
