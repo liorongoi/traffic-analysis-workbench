@@ -495,3 +495,9 @@ button.folderpick-add { min-height: 26px; padding: 0 10px; font-size: 12.5px; }
 .runmode .seg { margin-bottom: 4px; }
 .runmode .seg button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 12px; text-align: left; min-height: 52px; }
 .runmode .seg button small { color: var(--muted); font-size: 12.5px; }
+
+/* Video catalog and one tab per video (video thread). */
+.catalog .thumb { height: 48px; display: block; border-radius: 3px; }
+.catalog tbody tr.on td { background: var(--accent-soft); }
+.videotabs { overflow-x: auto; white-space: nowrap; }
+.videotabs a .n { margin-left: 6px; font-size: 11.5px; color: var(--muted); }

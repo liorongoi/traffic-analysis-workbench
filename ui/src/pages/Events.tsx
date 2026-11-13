@@ -35,8 +35,11 @@ const STATUS_LABEL: Record<string, string> = {
 };
 const CLASSES = ["car", "bus", "truck", "motorcycle", "bicycle"];
 
-export default function EventsTab({ missionId, eventId }: { missionId: string; eventId: number | null }) {
-  return eventId ? <EventDetail missionId={missionId} eventId={eventId} /> : <EventList missionId={missionId} />;
+export default function EventsTab({ missionId, extra }: { missionId: string; extra: string | null }) {
+  // "#/m/<id>/events/<event id>" opens one event; "#/m/<id>/events/rec-<video id>" opens that video's tab.
+  const eventId = extra && /^\d+$/.test(extra) ? Number(extra) : null;
+  const recording = extra?.startsWith("rec-") ? extra.slice(4) : "";
+  return eventId ? <EventDetail missionId={missionId} eventId={eventId} /> : <EventList missionId={missionId} recording={recording} />;
 }
 
 type Counts = {
@@ -112,10 +115,13 @@ function CountsCard({ missionId, versionId, refresh }: { missionId: string; vers
   );
 }
 
-function EventList({ missionId }: { missionId: string }) {
+function EventList({ missionId, recording }: { missionId: string; recording: string }) {
   const [recs, setRecs] = useState<any[]>([]);
   const [evs, setEvs] = useState<VEvent[] | null>(null);
-  const [rec, setRec] = useState("");
+  const [rec, setRecState] = useState(recording);
+  useEffect(() => { setRecState(recording); }, [recording]);
+  // One tab per analysed video; the tab is part of the address, so it can be linked and survives a reload.
+  const setRec = (v: string) => { setRecState(v); go(`/m/${missionId}/events${v ? `/rec-${v}` : ""}`); };
   const [status, setStatus] = useState("");
   const [flag, setFlag] = useState("");
   const [startTimes, setStartTimes] = useState<Record<number, string>>({});
@@ -173,6 +179,13 @@ function EventList({ missionId }: { missionId: string }) {
   };
   return (
     <div className="grid" style={{ gap: 10 }}>
+      {recs.filter((r) => r.processing_state === "done").length > 1 && (
+        <nav className="tabs videotabs" aria-label="Videos">
+          <a href={`#/m/${missionId}/events`} className={rec === "" ? "on" : ""} onClick={(e) => { e.preventDefault(); setRec(""); }}>All videos</a>
+          {recs.filter((r) => r.processing_state === "done").map((r) => (
+            <a key={r.id} href={`#/m/${missionId}/events/rec-${r.id}`} className={String(r.id) === rec ? "on" : ""} title={r.rel_path}
+              onClick={(e) => { e.preventDefault(); setRec(String(r.id)); }}>{r.rel_path.split("/").pop()}<span className="n">{r.events}</span></a>))}
+        </nav>)}
       <CountsCard missionId={missionId} versionId={rec} refresh={timeRevision} />
       <div className="card">
         <h2>Recordings</h2>

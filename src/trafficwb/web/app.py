@@ -98,6 +98,10 @@ class RunModeBody(BaseModel):
     auto_epochs: int | None = Field(None, ge=1, le=500)
 
 
+class AnalyseBody(BaseModel):
+    version_ids: list[int]                 # the videos ticked in the catalog
+
+
 class RecordingReviewBody(BaseModel):
     action: str                            # approve | confirm_rest_and_approve | reopen
 
@@ -1608,6 +1612,44 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         d = {k: v for k, v in e.__dict__.items() if not k.startswith("_")}
         d["parts"] = e.parts
         return d
+
+    # ---------- video catalog ----------
+    def _catalog(m: Mission):
+        from ..video_catalog import VideoCatalog
+        if m.input_type != "video":
+            raise ApiError(400, "not_video", "The catalog lists the videos of a video mission.")
+        return VideoCatalog(m)
+
+    @app.get("/api/missions/{mission_id}/catalog")
+    def catalog_list(refresh: bool = True, m: Mission = Depends(mission)):
+        """Every video in the source folders with its details; looks for new files first unless a job is running."""
+        cat = _catalog(m)
+        if refresh and not jobs.busy(m.id):
+            cat.refresh(stability_seconds=stability_seconds)
+        return {"videos": cat.items(), "busy": jobs.busy(m.id)}
+
+    @app.post("/api/missions/{mission_id}/catalog/analyse")
+    def catalog_analyse(body: AnalyseBody, m: Mission = Depends(mission)):
+        """Analyse exactly the ticked videos, in one job."""
+        from ..video_catalog import CatalogError
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "A job is running for this mission. Wait for it or cancel it first.")
+        cat = _catalog(m)
+        try:
+            ids = cat.queue(body.version_ids)
+        except CatalogError as exc:
+            raise ApiError(400, "catalog", str(exc)) from None
+        return jobs.start(m.id, kind="process", only=ids).snapshot()
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/thumb")
+    def recording_thumb(version_id: int, h: int = 96, m: Mission = Depends(mission)):
+        from ..video_catalog import CatalogError
+        cat = _catalog(m)
+        try:
+            data = cat.thumbnail(version_id, max(48, min(int(h), 360)))
+        except (CatalogError, TypeError) as exc:
+            raise ApiError(404, "no_thumb", str(exc)) from None
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
 
     @app.get("/api/missions/{mission_id}/recordings")
     def recordings(m: Mission = Depends(mission)):

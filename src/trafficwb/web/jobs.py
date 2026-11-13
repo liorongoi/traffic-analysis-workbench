@@ -331,7 +331,8 @@ class JobManager:
                 job.control.stage = "scanning source folder"
                 res, _ = cycle(m, stability_seconds=self.stability)
             job.total = m.con.execute(
-                "SELECT COUNT(*) FROM run_item WHERE processing_state IN ('queued','running')").fetchone()[0]
+                "SELECT COUNT(*) FROM run_item WHERE processing_state IN ('queued','running')").fetchone()[0] \
+                if not job.params.get("only") else len(job.params["only"])
             if job.kind == "scan_and_process":
                 job.result["scan"] = scan_summary(m, res, job.total)
             job.control.stage = "loading model"
@@ -349,7 +350,8 @@ class JobManager:
 
             if m.input_type == "video":
                 from ..video_process import VideoProcessor
-                proc = VideoProcessor(m, det, card, control=job.control, plate_models=self.plate_models)
+                proc = VideoProcessor(m, det, card, control=job.control, plate_models=self.plate_models,
+                                      only=job.params.get("only"))
             else:
                 proc = Processor(m, det, card, control=job.control, plate_models=self.plate_models,
                                  sam_engine=self._sam_if_available)

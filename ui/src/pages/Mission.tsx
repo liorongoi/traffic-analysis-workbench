@@ -60,7 +60,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
       {tab === "views" && !isVideo && <Views missionId={missionId} />}
       {tab === "learning" && <LearningTab missionId={missionId} job={m.job} reload={load} />}
       {tab === "plates" && m.config.mode === "plate_recognition" && <PlatesTab missionId={missionId} />}
-      {tab === "events" && isVideo && <EventsTab missionId={missionId} eventId={extra ? Number(extra) : null} />}
+      {tab === "events" && isVideo && <EventsTab missionId={missionId} extra={extra ?? null} />}
       {tab === "search" && <SearchTab missionId={missionId} runId={extra ? Number(extra) : null} />}
     </div>
   );
@@ -131,6 +131,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
       <div className="grid cols-4">
         {stats.map(([l, n, alert]) => <div key={l} className={`card stat${!n ? " zero" : alert ? " alert" : ""}`}><div className="n">{n}</div><div className="l">{l}</div></div>)}
       </div>
+      {m.config.input_type === "video" && <CatalogCard m={m} reload={reload} />}
       <div className="grid cols-2">
         <JobCard job={m.job} mid={m.id} reload={reload} unit={m.config.input_type === "video" ? "recordings" : "images"} />
         <div className="card">
@@ -853,6 +854,73 @@ function DeleteMission({ m }: { m: any }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+const STATE_TEXT: Record<string, string> = {
+  new: "New", queued: "Not analysed", running: "Analysing", done: "Analysed", failed: "Failed", cancelled: "Stopped",
+};
+
+/** Every video in the source folders: tick the ones to analyse (the new ones are ticked already) and run them in one job. */
+function CatalogCard({ m, reload }: { m: any; reload: () => void }) {
+  const [vids, setVids] = useState<any[] | null>(null);
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const [err, setErr] = useState<string | null>(null);
+  const busy = m.job && ["running", "paused"].includes(m.job.state);
+  const load = useCallback(async (refresh: boolean) => {
+    try {
+      const r = await api(`/missions/${m.id}/catalog?refresh=${refresh}`);
+      setVids(r.videos);
+      setSel((old) => (old.size && refresh === false ? old : new Set(r.videos.filter((v: any) => v.selected).map((v: any) => v.id))));
+    } catch (e) { setErr((e as ApiError).message); }
+  }, [m.id]);
+  useEffect(() => { load(true); }, [load]);
+  const jobState = m.job?.state;
+  useEffect(() => { if (jobState && !["running", "paused"].includes(jobState)) load(true); }, [jobState, load]);
+  useEffect(() => { if (!busy) return; const t = setInterval(() => load(false), 4000); return () => clearInterval(t); }, [busy, load]);
+  if (!vids) return <div className="card muted">Looking for videos…</div>;
+  const toggle = (id: number) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const all = vids.filter((v) => !v.error);
+  const allOn = all.length > 0 && all.every((v) => sel.has(v.id));
+  const total = vids.filter((v) => sel.has(v.id)).reduce((a, v) => a + (v.duration_s ?? 0), 0);
+  const analyse = async () => {
+    setErr(null);
+    try { await post(`/missions/${m.id}/catalog/analyse`, { version_ids: [...sel] }); reload(); load(false); }
+    catch (e) { setErr((e as ApiError).message); }
+  };
+  return (
+    <div className="card catalog">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 style={{ margin: 0 }}>Videos in the input folder</h2>
+        <div className="row">
+          <span className="muted">{sel.size} of {vids.length} ticked{total ? ` · ${fmtDuration(total)} of video` : ""}</span>
+          <button className="primary" disabled={busy || sel.size === 0} onClick={analyse}>
+            {busy ? "Analysing…" : `Analyse ${sel.size} video${sel.size === 1 ? "" : "s"}`}</button>
+        </div>
+      </div>
+      {err && <div className="msg err" role="alert">{err}</div>}
+      {vids.length === 0 ? <p className="muted">No videos in the source folder yet.</p> : (
+        <table className="t">
+          <thead><tr>
+            <th><input type="checkbox" aria-label="Tick all" checked={allOn} disabled={busy}
+              onChange={() => setSel(allOn ? new Set() : new Set(all.map((v) => v.id)))} /></th>
+            <th></th><th>Video</th><th className="num">Length</th><th>Picture</th><th>Start (UTC)</th><th>Status</th><th className="num">Events</th>
+          </tr></thead>
+          <tbody>{vids.map((v) => (
+            <tr key={v.id} className={sel.has(v.id) ? "on" : ""} onClick={() => !busy && !v.error && toggle(v.id)} style={{ cursor: busy || v.error ? "default" : "pointer" }}>
+              <td><input type="checkbox" aria-label={`Tick ${v.rel_path}`} checked={sel.has(v.id)} disabled={busy || !!v.error}
+                onClick={(e) => e.stopPropagation()} onChange={() => toggle(v.id)} /></td>
+              <td>{!v.error && <img loading="lazy" src={`/api/missions/${m.id}/recordings/${v.id}/thumb?h=96`} alt="" className="thumb" />}</td>
+              <td className="mono bidi">{v.rel_path}</td>
+              <td className="num mono">{fmtDuration(v.duration_s)}</td>
+              <td className="muted">{v.width ? `${v.width}×${v.height}` : ""}{v.nominal_fps ? ` · ${Number(v.nominal_fps).toFixed(0)} fps` : ""}</td>
+              <td className="mono muted">{v.start_utc ?? "unknown"}</td>
+              <td>{v.error ? <span className="badge failed" title={v.error}>cannot decode</span> : <span className={`badge ${v.state}`}>{STATE_TEXT[v.state] ?? v.state}</span>}</td>
+              <td className="num">{v.analysed ? <a href={`#/m/${m.id}/events/rec-${v.id}`} onClick={(e) => e.stopPropagation()}>{v.events}</a> : ""}</td>
+            </tr>))}</tbody>
+        </table>)}
+      <p className="muted" style={{ marginBottom: 0 }}>New videos are ticked for you. Tick an analysed video to analyse it again; its newest analysis is the one that counts.</p>
     </div>
   );
 }
