@@ -141,7 +141,9 @@ class _OnnxDetector:
         from .runtime import make_session  # imports onnxruntime here so the rest of the app starts without it
 
         self.pack = pack
-        self.classes = dict(COCO_VEHICLES)     # COCO id -> class name looked for
+        # A model trained on targets the operator marked names them in its card: {COCO slot: class name}.
+        self.own = {int(k): str(v) for k, v in (pack.card.get("own_classes") or {}).items()}
+        self.classes = {**COCO_VEHICLES, **self.own}     # COCO id -> class name looked for
         self.settings = settings or DetectorSettings()
         self.session, self.runtime = make_session(pack.weights, accelerator)
         self.input_name = self.session.get_inputs()[0].name

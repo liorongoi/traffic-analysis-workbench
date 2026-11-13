@@ -289,3 +289,24 @@ def test_find_areas_then_save_them_as_regions(api):
     state["installed"] = False
     r = c.post(url, json={"prompts": ["road"], "image_id": image_id}, headers=H1)
     assert r.status_code == 400 and r.json()["error"] == "sam3_missing"
+
+
+def test_sam_labels_unreviewed_images_for_a_dataset_version(api):
+    c, body, state = api
+    mid = c.post("/api/missions", json=body, headers=H1).json()["id"]
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    assert wait(c, f"/api/missions/{mid}", key="job")["state"] == "finished"
+    r = c.post(f"/api/missions/{mid}/learning/datasets", json={"name": "taught", "ratios": [1, 0, 0], "teacher": "sam3"},
+               headers=H1).json()
+    assert r["teaching"] and r["job"]["kind"] == "teach"
+    job = wait(c, f"/api/missions/{mid}", key="job")
+    assert job["state"] == "finished", job
+    assert job["result"]["labelled"] == 4 and job["result"]["dataset"]["stats"]["teacher"]["samples"] == 4
+    s = c.get(f"/api/missions/{mid}/learning", headers=H1).json()
+    assert s["eligibility"]["taught"]["sam3"] == {"samples": 4, "sources": 4, "untaught": 0}
+    assert s["datasets"][0]["name"] == "taught" and s["datasets"][0]["params"]["teacher"]["name"] == "sam3"
+    # Full auto may learn from SAM 3.1 too; unknown teachers are refused.
+    assert c.put(f"/api/missions/{mid}/run-mode", json={"run_mode": "manual", "teacher": "sam3"},
+                 headers=H1).json()["teacher"] == "sam3"
+    assert c.put(f"/api/missions/{mid}/run-mode", json={"run_mode": "manual", "teacher": "gpt"},
+                 headers=H1).status_code == 400

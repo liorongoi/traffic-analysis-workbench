@@ -80,6 +80,7 @@ function DatasetPicker({ s, missionId, value, onChange, split = "train", label =
 const RATIOS: [string, string][] = [["70/15/15", "70 / 15 / 15"], ["80/10/10", "80 / 10 / 10"], ["60/20/20", "60 / 20 / 20"],
   ["70/20/10", "70 / 20 / 10"], ["75/15/10", "75 / 15 / 10"], ["50/25/25", "50 / 25 / 25"]];
 const BLOCK_DAYS: [number, string][] = [[1, "1 day"], [2, "2 days"], [3, "3 days"], [7, "1 week"], [14, "2 weeks"], [30, "30 days"], [90, "90 days"]];
+const TEACHERS: [string, string][] = [["none", "Your reviews only"], ["sam3", "Your reviews, and SAM 3.1 on everything else"]];
 const EPOCHS = [5, 10, 20, 30, 50, 75, 100, 150, 200, 300];
 
 export default function LearningTab({ missionId, job, reload }: { missionId: string; job: any; reload: () => void }) {
@@ -88,6 +89,7 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
   const [name, setName] = useState(`Version of ${today()}`);
   const [ratios, setRatios] = useState("70/15/15");
   const [blockDays, setBlockDays] = useState(1);
+  const [teacher, setTeacher] = useState("none");
   const [evalRefs, setEvalRefs] = useState<Ref[] | null>(null);
   const [evalSplit, setEvalSplit] = useState("test");
   const [evalModel, setEvalModel] = useState("");
@@ -107,6 +109,15 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
   }, [training, checking, load]);
   const trainState = tj?.state;
   useEffect(() => { if (trainState && !["running", "paused"].includes(trainState)) reload(); }, [trainState, reload]);
+  const teaching = job?.kind === "teach" && ["running", "paused"].includes(job.state);
+  useEffect(() => {
+    if (job?.kind !== "teach" || teaching) return;
+    load();
+    setMsg((m) => (m?.text.startsWith("SAM 3.1 is labelling") ? (job.state === "finished"
+      ? { kind: "ok", text: job.result?.dataset ? `Dataset version “${job.result.dataset.name}” frozen: ${job.result.dataset.stats.images} images or frames, ${job.result.dataset.stats.teacher?.samples ?? 0} of them labelled by SAM 3.1.`
+        : `SAM 3.1 labelled ${job.result?.labelled ?? 0} images or frames.` }
+      : { kind: "err", text: `Labelling ${job.state}${job.error ? `: ${job.error}` : ""}.` }) : m));
+  }, [job?.state, job?.kind, teaching, load]);
   const evaluating = job?.kind === "evaluate" && ["running", "paused"].includes(job.state);
   useEffect(() => {
     if (job?.kind !== "evaluate" || evaluating) return;
@@ -137,7 +148,8 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
         <div className="grid cols-4">
           <div className="card stat"><div className="n">{e.recordings.full}</div><div className="l">Approved: full labels and background</div></div>
           <div className="card stat"><div className="n">{e.recordings.partial}</div><div className="l">Some events reviewed: those events only</div></div>
-          <div className="card stat"><div className="n">{e.recordings.none}</div><div className="l">Not reviewed: never used</div></div>
+          <div className="card stat"><div className="n">{e.recordings.none}</div><div className="l">Not reviewed: only with SAM 3.1 below</div></div>
+          <div className="card stat"><div className="n">{e.taught?.sam3?.samples ?? 0}</div><div className="l">Frames SAM 3.1 has labelled ({e.taught?.sam3?.untaught ?? 0} recordings not yet)</div></div>
         </div>
         <p className="muted" style={{ marginBottom: 0 }}>
           Each reviewed event gives its best frame and up to four more along its track. An approved recording (Events tab) also
@@ -151,8 +163,8 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
         <div className="grid cols-4">
           <div className="card stat"><div className="n">{e.images.full}</div><div className="l">Approved one by one: full labels</div></div>
           <div className="card stat"><div className="n">{e.images.partial}</div><div className="l">Corrected, not approved: corrected objects only</div></div>
-          <div className="card stat"><div className="n">{e.images.bulk}</div><div className="l">Bulk approved: never used</div></div>
-          <div className="card stat"><div className="n">{e.images.none}</div><div className="l">Not reviewed: never used</div></div>
+          <div className="card stat"><div className="n">{e.images.bulk + e.images.none}</div><div className="l">Bulk approved or not reviewed: only with SAM 3.1 below</div></div>
+          <div className="card stat"><div className="n">{e.taught?.sam3?.samples ?? 0}</div><div className="l">Labelled by SAM 3.1 ({e.taught?.sam3?.untaught ?? 0} not yet)</div></div>
         </div>
         <p className="muted" style={{ marginBottom: 0 }}>
           Approving an image on the investigation screen says every vehicle inside the included regions is marked, so the
@@ -174,11 +186,21 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
           <label>Date block
             <Choice label="Date block (days)" value={blockDays} onChange={setBlockDays} options={BLOCK_DAYS} />
           </label>
-          <button className="primary" disabled={!name.trim() || e.eligible === 0} onClick={() => act(() => {
+          <label>Labels from
+            <Choice label="Labels from" value={teacher} onChange={setTeacher} options={TEACHERS} />
+          </label>
+          <button className="primary" disabled={!name.trim() || (e.eligible === 0 && teacher === "none") || teaching} onClick={() => act(() => {
             const r = ratios.split("/").map((x) => Number(x) / 100);
-            return post(`/missions/${missionId}/learning/datasets`, { name, ratios: r, block_days: blockDays });
-          }, (r) => { setName(`Version of ${today()}`); return `Dataset version “${r.name}” frozen: ${r.stats.images} ${r.stats.frames ? "frames" : "images"} in ${r.stats.groups} groups.`; })}>Freeze a new version</button>
+            return post(`/missions/${missionId}/learning/datasets`, { name, ratios: r, block_days: blockDays, teacher });
+          }, (r) => { setName(`Version of ${today()}`); return r.teaching ? "SAM 3.1 is labelling what nobody reviewed. The version is frozen when it ends."
+            : `Dataset version “${r.name}” frozen: ${r.stats.images} ${r.stats.frames ? "frames" : "images"} in ${r.stats.groups} groups.`; })}>Freeze a new version</button>
+          {teaching && <span className="muted">{job.stage}: {job.done} of {job.total || "?"}…</span>}
         </div>
+        {teacher === "sam3" && <p className="muted">SAM 3.1 labels every {s.video ? "recording you did not approve (a frame every 3 seconds)" : "image you did not approve one by one"},
+          once; later versions reuse its labels. Wherever you confirmed, corrected, removed or rejected something, your decision
+          wins over SAM's. Boxes SAM is unsure of are left out rather than taught as empty road. Its labels go to training and
+          validation only: the test set stays your own reviews, so a model is always judged against you.
+          {e.eligible === 0 && " With no reviews at all there is no test set, so a model can be trained but not judged; approve a few to fix that."}</p>}
         <p className="muted">Images are split by camera view and date block, so frames of one view on one day never sit on both
           sides. Groups that were once in a test set stay in test in every later version.</p>
         {s.datasets.length === 0 ? <div className="muted">No dataset versions yet.</div> : (
@@ -186,7 +208,7 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
             <thead><tr><th>#</th><th>Name</th><th>Images</th><th>Train</th><th>Validation</th><th>Test</th><th>Duplicates dropped</th><th>By</th><th>Created (UTC)</th><th></th></tr></thead>
             <tbody>{s.datasets.map((d: any) => {
               const sp = d.stats.splits ?? {};
-              const cell = (k: string) => sp[k] ? `${sp[k].images} img · ${sp[k].objects} obj · ${sp[k].groups} grp` : "–";
+              const cell = (k: string) => sp[k] ? `${sp[k].images} img · ${sp[k].objects} obj · ${sp[k].groups} grp${sp[k].sam ? ` · ${sp[k].sam} by SAM` : ""}` : "–";
               return (
                 <tr key={d.id}>
                   <td>{d.id}</td><td className="bidi">{d.name}</td><td>{d.stats.images}</td>
@@ -660,11 +682,13 @@ function RunModeCard({ s, missionId, act }: { s: any; missionId: string; act: Ac
   const [need, setNeed] = useState<number>(a.auto_min_reviews);
   const [epochs, setEpochs] = useState<number>(a.auto_epochs);
   const [fresh, setFresh] = useState<boolean>(!!a.analyse_new);
-  const reset = () => { setMode(a.run_mode); setNeed(a.auto_min_reviews); setEpochs(a.auto_epochs); setFresh(!!a.analyse_new); };
-  useEffect(reset, [a.run_mode, a.auto_min_reviews, a.auto_epochs, a.analyse_new]);
-  const changed = mode !== a.run_mode || need !== a.auto_min_reviews || epochs !== a.auto_epochs || fresh !== !!a.analyse_new;
+  const [teach, setTeach] = useState<string>(a.teacher ?? "none");
+  const reset = () => { setMode(a.run_mode); setNeed(a.auto_min_reviews); setEpochs(a.auto_epochs); setFresh(!!a.analyse_new); setTeach(a.teacher ?? "none"); };
+  useEffect(reset, [a.run_mode, a.auto_min_reviews, a.auto_epochs, a.analyse_new, a.teacher]);
+  const changed = mode !== a.run_mode || need !== a.auto_min_reviews || epochs !== a.auto_epochs || fresh !== !!a.analyse_new
+    || teach !== (a.teacher ?? "none");
   const save = () => act(() => api(`/missions/${missionId}/run-mode`, { method: "PUT", body: {
-    run_mode: mode, auto_min_reviews: need, auto_epochs: epochs, ...(s.video ? { analyse_new: fresh } : {}) } }),
+    run_mode: mode, auto_min_reviews: need, auto_epochs: epochs, teacher: teach, ...(s.video ? { analyse_new: fresh } : {}) } }),
     (r) => (r.run_mode === "auto" ? `Full auto is on. ${AUTO_STATE[r.status?.state] ?? ""}` : "Manual decisions: nothing trains or changes model by itself.")
       + (s.video ? (r.analyse_new || r.run_mode === "auto" ? " New videos in the input folder are analysed as they arrive, with this mission's model."
         : " New videos wait in the catalog until you tick them.") : ""));
@@ -687,7 +711,15 @@ function RunModeCard({ s, missionId, act }: { s: any; missionId: string; act: Ac
             <select value={epochs} onChange={(e) => setEpochs(Number(e.target.value))}>
               {withValue([10, 20, 30, 50, 100], epochs).map((n) => <option key={n} value={n}>{n} epochs{n === 30 ? " (recommended)" : ""}</option>)}
             </select></label>
+          <label>Learn from
+            <select value={teach} onChange={(e) => setTeach(e.target.value)}>
+              {TEACHERS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+            </select></label>
         </div>)}
+      {mode === "auto" && teach === "sam3" && <p className="muted">SAM 3.1 labels new {s.video ? "recordings" : "images"} nobody
+        approved (up to 600 {s.video ? "frames" : "images"} a round), then the model trains on them together with your reviews. A round
+        also starts when new {s.video ? "recordings arrive" : `images (${need}) arrive`}, not only after reviews. Your decisions always win over SAM's, and
+        the model is judged on your own reviews only.</p>}
       {s.video && (
         <div className="row" style={{ marginTop: 8 }}>
           <label>New videos in the input folder
@@ -719,7 +751,7 @@ function RunModeCard({ s, missionId, act }: { s: any; missionId: string; act: Ac
 const withValue = (opts: number[], v: number) => (opts.includes(v) ? opts : [...opts, v].sort((a, b) => a - b));
 
 const AUTO_STATE: Record<string, string> = {
-  waiting: "It waits for more review decisions before the first round.", busy: "It starts a round when the current job ends.",
+  waiting: "It waits for more review decisions before the first round.", teaching: "SAM 3.1 is labelling; a round trains after it.", busy: "It starts a round when the current job ends.",
   blocked: "Training is not available on this computer yet; see the training card.", training: "A round has started.",
   skipped: "The new dataset version has no training frames yet.", failed: "The last step failed; see what the loop did.",
 };
@@ -732,6 +764,8 @@ function autoText(h: any): string {
     case "train": return `Round started on dataset version ${d.dataset_id} (${d.epochs} epochs, from ${d.start_from === "coco" ? "the released YOLOX-s" : d.start_from})`;
     case "adopted": return `Better: the mission now uses “${d.saved_as}”${d.previous_model ? ` instead of “${d.previous_model}”` : ""}`;
     case "kept": return `Kept the model in use: ${d.reason}`;
+    case "teach": return `SAM 3.1 started labelling what nobody reviewed (${d.untaught} new ${d.untaught === 1 ? "item" : "items"})`;
+    case "taught": return `SAM 3.1 labelled ${d.labelled}${d.left ? `; ${d.left} left for the next rounds` : ""}`;
     case "skipped": return `Skipped: ${d.reason}`;
     case "failed": return `Failed (${d.step}): ${d.reason}`;
     default: return h.action;

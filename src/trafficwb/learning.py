@@ -6,7 +6,11 @@ Rules (design package, deliverable 07):
   is marked, so unmarked areas there are background. An image with corrections
   but no approval is a **partial** review: only the corrected objects are
   labels, everything else is ignored, never treated as background. Bulk
-  approved and unreviewed images are never used.
+  approved and unreviewed images are never used, unless the operator chooses
+  to learn from SAM 3.1 too: then what SAM 3.1 finds on them (and on the
+  unreviewed frames of recordings) labels them for training and validation,
+  every reviewed box and every box the operator removed or rejected wins over
+  SAM's, and the test split stays reviewed labels only.
 - A dataset version is a frozen list of images, labels and splits. Splits are
   group-wise by camera view and date block, so near-duplicate frames of one
   view and day never sit in two splits. Once an image group is in a test set,
@@ -73,6 +77,19 @@ FRAMES_PER_EVENT = 5          # an event's best frame plus up to 4 more spread o
 BACKGROUND_EVERY_S = 5.0      # an approved recording: also a frame every 5 s, so empty road is learnt too
 FRAME_MIN_GAP_S = 0.4         # frames closer than this are one
 FRAMES_PER_RECORDING = 300
+# A teacher (SAM 3.1) labels what nobody reviewed, for training only (never the test split):
+TEACH_EVERY_S = 3.0           # a recording: a frame every 3 s that the analysis looked at
+TEACH_PER_RECORDING = 100
+TEACH_FLOOR = 0.30            # the teacher reports boxes from this score up ...
+TEACH_SURE = 0.50             # ... a box this sure is a label; a less sure one is ignored (neither label nor background)
+TEACH_OVERLAP = 0.30          # a teacher box this close to a reviewed box (or one the operator removed) gives way to it
+TEACHER_NAMES = {"sam3": "SAM 3.1"}
+
+
+def learnt(cls: str | None) -> str | None:
+    """The class a label is learnt and scored as: a vehicle class or person as ``trainable``; any other class (a
+    target the operator marked and followed) as itself."""
+    return trainable(cls) or cls
 
 
 def trainable(cls: str | None) -> str | None:
@@ -247,19 +264,9 @@ class LearningService:
                          (vid, "reopen", author, utcnow()))
         return {"source_version_id": vid, "review": self.review_kind(vid)}
 
-    def video_frames(self, vid: int) -> tuple[str, list[dict]]:
-        """The training frames of one recording and their labels: (review kind, [{t, positives, ignore_boxes}]).
-
-        - A reviewed event (confirmed, duplicate, merged, or given another class) gives its best frame and up to
-          four more spread over its track; its box on each frame is a label of its class.
-        - An approved recording (full review) also gives a frame every 5 s. There, a rejected detection and
-          everything nobody marked is background; a box the tracker saw outside any event, and an event's position
-          on a frame it was not matched on, are ignored (neither label nor background).
-        - Otherwise (partial review) only the reviewed events' boxes are labels; the rest of the frame is ignored.
-        """
-        kind = self.review_kind(vid)
-        if kind not in ("full", "partial"):
-            return kind, []
+    def _tracks(self, vid: int):
+        """A recording's events, every track's boxes by time (the operator's own boxes in place of the machine's),
+        each event's track, and the frame times the analysis looked at."""
         evs = self._events(vid)
         item = self._latest_item(vid)
         track_of = {r[0]: r[1] for r in self.con.execute("SELECT id, track_id FROM video_event WHERE run_item_id=?", (item,))}
@@ -275,6 +282,22 @@ class LearningService:
                 lst = [o for o in obs.get(tid, []) if not any(abs(o[0] - f["t"]) < 1e-3 for f in e.fixes)]
                 lst += [(round(f["t"], 6), [round(float(v), 2) for v in f["box"]]) for f in e.fixes]
                 obs[tid] = sorted(lst, key=lambda o: o[0])
+        return evs, obs, track_of, seen
+
+    def video_frames(self, vid: int) -> tuple[str, list[dict]]:
+        """The training frames of one recording and their labels: (review kind, [{t, positives, ignore_boxes}]).
+
+        - A reviewed event (confirmed, duplicate, merged, or given another class) gives its best frame and up to
+          four more spread over its track; its box on each frame is a label of its class.
+        - An approved recording (full review) also gives a frame every 5 s. There, a rejected detection and
+          everything nobody marked is background; a box the tracker saw outside any event, and an event's position
+          on a frame it was not matched on, are ignored (neither label nor background).
+        - Otherwise (partial review) only the reviewed events' boxes are labels; the rest of the frame is ignored.
+        """
+        kind = self.review_kind(vid)
+        if kind not in ("full", "partial"):
+            return kind, []
+        evs, obs, track_of, seen = self._tracks(vid)
         teach = [e for e in evs if e.status != "rejected" and self._reviewed(e)]
         times: list[float] = []
         for e in teach:
@@ -338,6 +361,178 @@ class LearningService:
             out.append({"t": t, "positives": pos, "ignore_boxes": ign})
         return kind, out
 
+    # ---------- a teacher labels what nobody reviewed ----------
+    def teach_targets(self) -> list[tuple[int, float | None]]:
+        """Every image and recording frame a teacher may label: images not approved one by one, and frames of
+        recordings not approved (a frame every 3 s the analysis looked at, away from the reviewed frames)."""
+        out: list[tuple[int, float | None]] = []
+        for r in self._images():
+            vid = r["id"]
+            kind = self.review_kind(vid)
+            if kind == "full":
+                continue
+            if not self.video:
+                out.append((vid, None))
+                continue
+            seen = self._tracks(vid)[3]
+            taken = [f["t"] for f in self.video_frames(vid)[1]] if kind == "partial" else []
+            times: list[float] = []
+            if seen:
+                k, end = 0.0, seen[-1]
+                while k <= end + 1e-6:
+                    near = min(seen, key=lambda t: abs(t - k))
+                    if abs(near - k) <= TEACH_EVERY_S / 2 and near not in times and \
+                            all(abs(near - q) >= FRAME_MIN_GAP_S for q in taken):
+                        times.append(near)
+                    k += TEACH_EVERY_S
+            if len(times) > TEACH_PER_RECORDING:
+                step = len(times) / TEACH_PER_RECORDING
+                times = [times[int(i * step)] for i in range(TEACH_PER_RECORDING)]
+            out += [(vid, t) for t in times]
+        return out
+
+    @staticmethod
+    def _fkey(t: float | None) -> float:
+        return -1.0 if t is None else round(float(t), 6)
+
+    def teach_pending(self, teacher: str, key: str) -> list[tuple[int, float | None]]:
+        """What the teacher has not labelled yet (or labelled as another model version or with other words), taken
+        in turns from each image and recording so that a partial round covers all of them a little."""
+        done = {(r[0], r[1]) for r in self.con.execute(
+            "SELECT source_version_id, frame_key FROM teacher_label WHERE teacher=? AND teacher_key=?", (teacher, key))}
+        per: dict[int, list] = {}
+        for vid, t in self.teach_targets():
+            if (vid, self._fkey(t)) not in done:
+                per.setdefault(vid, []).append(t)
+        out, queues = [], list(per.items())
+        i = 0
+        while queues:
+            vid, lst = queues[i % len(queues)]
+            out.append((vid, lst.pop(0)))
+            if not lst:
+                queues.pop(i % len(queues))
+            else:
+                i += 1
+        return out
+
+    def untaught(self, teacher: str) -> int:
+        """Images and recordings not approved one by one that the teacher has not looked at at all yet."""
+        done = {r[0] for r in self.con.execute("SELECT DISTINCT source_version_id FROM teacher_label WHERE teacher=?",
+                                               (teacher,))}
+        return sum(1 for r in self._images() if r["id"] not in done and self.review_kind(r["id"]) != "full")
+
+    def taught(self, teacher: str) -> dict:
+        r = self.con.execute("SELECT COUNT(*), COUNT(DISTINCT source_version_id) FROM teacher_label WHERE teacher=?",
+                             (teacher,)).fetchone()
+        return {"samples": r[0], "sources": r[1], "untaught": self.untaught(teacher)}
+
+    def teach(self, detector, teacher: str, key: str, control: RunControl | None = None,
+              progress: Callable[[int, int], None] | None = None, limit: int | None = None) -> dict:
+        """Run the teacher on what it has not labelled yet and keep what it found (every box from TEACH_FLOOR up).
+        A frame or image that cannot be read is skipped and named."""
+        control = control or RunControl()
+        pending = self.teach_pending(teacher, key)
+        todo = pending[:limit] if limit else pending
+        done, failed = 0, {}
+        for vid, t in todo:
+            control.checkpoint()
+            try:
+                img = self.image_of({"source_version_id": vid, "frame_t": t})
+                dets = detector.detect(img)
+            except Exception as exc:  # noqa: BLE001 - one unreadable frame does not stop the others
+                failed[f"{vid}@{t:.2f}" if t is not None else str(vid)] = f"{type(exc).__name__}: {exc}"[:200]
+                continue
+            boxes = [{"box": [round(float(v), 2) for v in d.box], "cls": d.cls, "score": round(float(d.score), 4)}
+                     for d in dets if d.score >= TEACH_FLOOR]
+            self.con.execute(
+                "INSERT OR REPLACE INTO teacher_label(source_version_id,frame_key,teacher,teacher_key,boxes,made_at) "
+                "VALUES (?,?,?,?,?,?)", (vid, self._fkey(t), teacher, key, json.dumps(boxes), utcnow()))
+            done += 1
+            if progress:
+                progress(done, len(todo))
+        return {"labelled": done, "left": len(pending) - done - len(failed), "failed": failed}
+
+    def _teacher_rows(self, vid: int, teacher: str) -> dict[float, list[dict]]:
+        return {r[0]: json.loads(r[1]) for r in self.con.execute(
+            "SELECT frame_key, boxes FROM teacher_label WHERE source_version_id=? AND teacher=? ORDER BY frame_key",
+            (vid, teacher))}
+
+    @staticmethod
+    def _merge_teacher(pos: list[dict], ignore: list[list[float]], vetoes: list[list[float]], boxes: list[dict],
+                       uid: str) -> tuple[list[dict], list[list[float]]]:
+        """The reviewed labels, plus each teacher box that no reviewed box (and no box the operator removed or
+        rejected) covers. Unsure teacher boxes, and classes no detector here learns, are ignored areas."""
+        pos, ignore = list(pos), list(ignore)
+        held = [p["box"] for p in pos] + list(vetoes)
+        for k, b in enumerate(sorted(boxes, key=lambda x: -x["score"])):
+            if any(_iou(b["box"], h) >= TEACH_OVERLAP for h in held):
+                continue
+            if b["score"] < TEACH_SURE or trainable(b["cls"]) is None:
+                ignore.append(b["box"])
+                continue
+            pos.append({"box": b["box"], "cls": b["cls"], "uid": f"{uid}#sam{k}", "source": "sam"})
+            held.append(b["box"])
+        return pos, ignore
+
+    def _teacher_samples(self, r, teacher: str, reviewed: list) -> list:
+        """The samples of one source with the teacher's labels added (training and validation only)."""
+        vid = r["id"]
+        kind = self.review_kind(vid)
+        rows = self._teacher_rows(vid, teacher) if kind != "full" else {}
+        if not rows:
+            return reviewed
+        if not self.video:
+            boxes = rows.get(-1.0)
+            if boxes is None:
+                return reviewed
+            pos, ign, vetoes, last = [], [], [], None
+            if kind == "partial":
+                lab = self.labels(vid)
+                pos, ign, last = lab.positives, lab.ignore_boxes, lab.last_revision_id
+                vetoes = [[float(v) for v in o.box] for o in self.rs.objects(vid, include_removed=True)
+                          if o.status == "removed"]
+                vetoes += [[float(v) for v in c.box] for c in self.rs.candidates(vid) if c.status == "rejected"]
+            pos, ign = self._merge_teacher(pos, ign, vetoes, boxes, str(vid))
+            return [(ItemLabels(vid, "sam", pos, ign, last), None, r["sha256"])]
+        evs, obs, track_of, _ = self._tracks(vid)
+        by_track = {track_of.get(e.id): e for e in evs}
+        taken = [t for _, t, _ in reviewed if t is not None]
+        from .follow import SURE, MarkedTargets
+        marked = MarkedTargets(self.m, self.views._path).list(vid, state="confirmed")
+        out = [x for x in reviewed if x[1] is not None]
+        for t, boxes in rows.items():
+            if any(abs(t - q) < FRAME_MIN_GAP_S for q in taken):
+                continue
+            pos, ign, vetoes = [], [], []
+            for tid, lst in obs.items():
+                e = by_track.get(tid)
+                if e is None or not self._reviewed(e):
+                    continue                           # the teacher decides there
+                alive = e.first_t - 1e-6 <= t <= e.last_t + 1e-6
+                box = next((b for tt, b in lst if abs(tt - t) < 1e-3), None) or \
+                    _between(lst, t, float("inf") if e.origin == "human" else 2.0)
+                if box is None:
+                    continue
+                if e.status == "rejected":
+                    vetoes.append(box)
+                elif not alive:                        # trimmed off the event by the operator: unsure
+                    ign.append(box)
+                    vetoes.append(box)
+                elif trainable(e.cls) is None:
+                    ign.append(box)
+                else:
+                    pos.append({"box": box, "cls": e.cls, "uid": f"{e.key}@{t:.3f}", "source": "human"})
+            for tg in marked:                          # a target the operator marked, where it was followed
+                if tg["start_t"] is None or not tg["start_t"] - 1e-6 <= t <= tg["end_t"] + 1e-6:
+                    continue
+                st = min(tg["steps"], key=lambda x: abs(x["t"] - t), default=None)
+                if st is not None and abs(st["t"] - t) < 0.05 and st["score"] >= SURE:
+                    pos.append({"box": st["box"], "cls": tg["cls"], "uid": f"M{tg['id']}@{t:.3f}", "source": "marked"})
+            pos, ign = self._merge_teacher(pos, ign, vetoes, boxes, f"{vid}@{t:.3f}")
+            out.append((ItemLabels(vid, "sam", pos, ign, None), t,
+                        hashlib.sha256(f"{r['sha256']}|{t:.6f}".encode()).hexdigest()))
+        return out or reviewed
+
     def _images(self) -> list:
         return self.con.execute(
             "SELECT v.id, v.sha256, v.capture_utc, f.rel_path FROM source_version v JOIN source_file f ON f.id=v.source_file_id "
@@ -348,13 +543,15 @@ class LearningService:
         counts = {"full": 0, "partial": 0, "bulk": 0, "none": 0}
         for r in self._images():
             counts[self.review_kind(r["id"])] += 1
+        taught = {"sam3": self.taught("sam3")}
         if self.video:
             return {"recordings": counts, "images": counts, "eligible": counts["full"] + counts["partial"],
+                    "taught": taught,
                     "rules": {"full": "approved recording: frames of every reviewed event, rejected detections and empty "
                                       "road taught as background",
                               "partial": "some events reviewed: frames of those events, their boxes only, the rest ignored",
                               "none": "no event reviewed: never used"}}
-        return {"images": counts, "eligible": counts["full"] + counts["partial"],
+        return {"images": counts, "eligible": counts["full"] + counts["partial"], "taught": taught,
                 "rules": {"full": "approved individually: positives and background inside included regions",
                           "partial": "corrected but not approved: corrected objects only, the rest ignored",
                           "bulk": "never used", "none": "never used"}}
@@ -383,10 +580,27 @@ class LearningService:
         if not self.video:
             return [(self.labels(r["id"]), None, r["sha256"])]
         kind, frames = self.video_frames(r["id"])
+        frames = self._with_marked(r["id"], frames)
         if not frames:
             return [(ItemLabels(r["id"], kind, [], [], None), None, r["sha256"])]
-        return [(ItemLabels(r["id"], kind, f["positives"], f["ignore_boxes"], None), f["t"],
+        return [(ItemLabels(r["id"], f.get("review", kind), f["positives"], f["ignore_boxes"], None), f["t"],
                  hashlib.sha256(f"{r['sha256']}|{f['t']:.6f}".encode()).hexdigest()) for f in frames]
+
+    def _with_marked(self, vid: int, frames: list[dict]) -> list[dict]:
+        """A recording's training frames with the confirmed targets the operator marked and followed (follow.py):
+        on a frame already taken their box joins its labels; otherwise their frame is a sample of its own where only
+        their box teaches ("marked": the rest of the frame is ignored)."""
+        from .follow import MarkedTargets
+        out = [dict(f) for f in frames]
+        for tg in MarkedTargets(self.m, self.views._path).list(vid, state="confirmed"):
+            for fr in MarkedTargets.frames(tg):
+                pos = {"box": fr["box"], "cls": tg["cls"], "uid": f"M{tg['id']}@{fr['t']:.3f}", "source": "marked"}
+                same = next((f for f in out if abs(f["t"] - fr["t"]) < 1e-3), None)
+                if same is not None:
+                    same["positives"] = [*same["positives"], pos]
+                else:
+                    out.append({"t": round(fr["t"], 6), "positives": [pos], "ignore_boxes": [], "review": "marked"})
+        return sorted(out, key=lambda f: f["t"])
 
     def image_of(self, row: dict):
         """The pixels of a dataset member: the still image, or the recording's frame at its time."""
@@ -401,13 +615,18 @@ class LearningService:
         return f.image
 
     def create_dataset(self, name: str, author: str, ratios: tuple[float, float, float] = (0.7, 0.15, 0.15),
-                       block_days: int = 1, seed: int = 0) -> dict:
+                       block_days: int = 1, seed: int = 0, teacher: str | None = None) -> dict:
+        """Freeze a dataset version. With a ``teacher`` (sam3), what it labelled (``teach``) joins the training and
+        validation splits wherever no review says otherwise; the test split stays reviewed labels only."""
         if not name.strip():
             raise LearningError("Give the dataset version a name.")
         if len(ratios) != 3 or any(x < 0 for x in ratios) or abs(sum(ratios) - 1) > 1e-6:
             raise LearningError("Split ratios must be three non-negative numbers that add up to 1.")
         if block_days < 1 or block_days > 366:
             raise LearningError("A date block is 1 to 366 days.")
+        teacher = teacher if teacher and teacher != "none" else None
+        if teacher is not None and teacher not in TEACHER_NAMES:
+            raise LearningError(f"Unknown teacher: {teacher}.")
         prev = self.con.execute("SELECT id FROM training_dataset ORDER BY id DESC LIMIT 1").fetchone()
         frozen = {}
         if prev:
@@ -416,9 +635,23 @@ class LearningService:
                 frozen[(r["view_key"], r["block"])] = "test"
             for r in self.con.execute("SELECT DISTINCT d.source_version_id FROM dataset_member d WHERE d.split='test'"):
                 frozen[("vid", str(r[0]))] = "test"
+        def split_for(g) -> str:
+            if g in frozen:
+                return "test"
+            b = self._bucket(seed, f"{g[0]}|{g[1]}")
+            return "train" if b < ratios[0] else ("val" if b < ratios[0] + ratios[1] else "test")
+
         members, seen_sha, dupes, skipped = [], {}, 0, {"bulk": 0, "none": 0, "no_labels": 0}
+        taught = {"samples": 0, "objects": 0, "kept_out_of_test": 0}
         for r in self._images():
-            for lab, frame_t, sha in self._samples(r):
+            g = self._group(r, block_days)
+            samples = self._samples(r)
+            if teacher is not None:
+                if split_for(g) != "test":
+                    samples = self._teacher_samples(r, teacher, samples)
+                elif self.review_kind(r["id"]) != "full":
+                    taught["kept_out_of_test"] += len(self._teacher_rows(r["id"], teacher))
+            for lab, frame_t, sha in samples:
                 if lab.review in ("bulk", "none"):
                     skipped[lab.review] += 1
                     continue
@@ -429,21 +662,20 @@ class LearningService:
                     dupes += 1            # identical bytes are one sample, kept with the first copy
                     continue
                 seen_sha[sha] = r["id"]
-                g = self._group(r, block_days)
+                if lab.review == "sam":
+                    taught["samples"] += 1
+                    taught["objects"] += sum(1 for p in lab.positives if p["source"] == "sam")
                 members.append((r, lab, g, frame_t, sha))
         groups = sorted({m[2] for m in members})
-        split_of = {}
-        for g in groups:
-            if g in frozen:
-                split_of[g] = "test"
-                continue
-            b = self._bucket(seed, f"{g[0]}|{g[1]}")
-            split_of[g] = "train" if b < ratios[0] else ("val" if b < ratios[0] + ratios[1] else "test")
+        split_of = {g: split_for(g) for g in groups}
         cond = {r[0]: r[1] for r in self.con.execute("SELECT source_version_id, condition FROM image_condition")}
         stats: dict = {"images": len(members), "groups": len(groups), "duplicates_dropped": dupes, "skipped": skipped,
                        "frames": sum(1 for m in members if m[3] is not None),
                        "recordings": len({m[0]["id"] for m in members if m[3] is not None}),
-                       "splits": {s: {"images": 0, "groups": 0, "objects": 0, "full": 0, "partial": 0} for s in SPLITS},
+                       "splits": {s: {"images": 0, "groups": 0, "objects": 0, "full": 0, "partial": 0, "sam": 0,
+                                      "marked": 0}
+                                  for s in SPLITS},
+                       **({"teacher": {"name": teacher, **taught}} if teacher else {}),
                        "by_condition": {}, "by_view": {}}
         for g in groups:
             stats["splits"][split_of[g]]["groups"] += 1
@@ -454,6 +686,9 @@ class LearningService:
                 (name.strip(), "vehicle_detection", json.dumps({"ratios": list(ratios), "block_days": block_days, "seed": seed,
                                                                 "classes": list(TRAINABLE),
                                                                 "review_marks": self._review_marks(),
+                                                                **({"teacher": {"name": teacher, "sure": TEACH_SURE,
+                                                                                "overlap": TEACH_OVERLAP}}
+                                                                   if teacher else {}),
                                                                 **({"frames": {"per_event": FRAMES_PER_EVENT,
                                                                                "background_every_s": BACKGROUND_EVERY_S,
                                                                                "min_gap_s": FRAME_MIN_GAP_S,
@@ -623,7 +858,10 @@ class LearningService:
             final, n = base / f"{stem}_{n}", n + 1
         tmp = final.with_name(final.name + ".partial")
         (tmp / "images").mkdir(parents=True)
-        cats = [{"id": i + 1, "name": c} for i, c in enumerate(TRAINABLE)]
+        own = sorted({p["cls"] for it in items for p in it["row"]["labels"]["positives"]
+                      if trainable(p["cls"]) is None and p["cls"]})
+        # the six classes every model learns, then targets the operator marked (7, 8, ...)
+        cats = [{"id": i + 1, "name": c} for i, c in enumerate((*TRAINABLE, *own))]
         cid = {c["name"]: c["id"] for c in cats}
         files = []
         multi = len({it["mission_id"] for it in items}) > 1
@@ -656,14 +894,15 @@ class LearningService:
                                "sha256": mrow["sha256"], "source_file": mrow["rel_path"], "frame_t": frame_t,
                                "view": mrow["view_key"],
                                "date_block": mrow["block"], "condition": mrow["condition"], "review": mrow["review"],
-                               "unlabelled_area": "background inside included regions" if mrow["review"] == "full" else "ignore",
+                               "unlabelled_area": "background inside included regions" if mrow["review"] in ("full", "sam")
+                               else "ignore",
                                "include_regions": [r.polygon for r in regions.include],
                                "exclude_regions": [r.polygon for r in regions.exclude],
                                "ignore_boxes": mrow["labels"]["ignore_boxes"]})
                 for p in mrow["labels"]["positives"]:
                     x1, y1, x2, y2 = p["box"]
                     ann_id += 1
-                    anns.append({"id": ann_id, "image_id": img_id, "category_id": cid.get(trainable(p["cls"]) or "car", cid["car"]),
+                    anns.append({"id": ann_id, "image_id": img_id, "category_id": cid.get(learnt(p["cls"]), cid["car"]),
                                  "bbox": [x1, y1, x2 - x1, y2 - y1], "area": (x2 - x1) * (y2 - y1), "iscrowd": 0,
                                  "label_source": p["source"]})
             f = tmp / f"annotations_{split}.json"
@@ -700,7 +939,7 @@ class LearningService:
              json.dumps([{"mission_id": s["mission_id"], "dataset_id": s["dataset_id"]} for s in sources]))).lastrowid
         # Labels of a class the detector does not look for (people, for a vehicle-only detector) are neither found
         # nor missed: they are scored as "ignore".
-        looks_for = {trainable(c) for c in (getattr(detector, "classes", None) or {}).values()} - {None} \
+        looks_for = {learnt(c) for c in (getattr(detector, "classes", None) or {}).values()} - {None} \
             or set(VEHICLE_CLASSES)
         per_image, took = [], []
         try:
@@ -714,7 +953,7 @@ class LearningService:
                 t0 = time.perf_counter()
                 found = detector.detect(img)
                 took.append(time.perf_counter() - t0)
-                dets = [(list(map(float, d.box)), trainable(d.cls) or d.cls, float(d.score)) for d in found]
+                dets = [(list(map(float, d.box)), learnt(d.cls), float(d.score)) for d in found]
                 view = ls.views.current_view(vid)
                 regions = RegionSet.load(ls.con, view) if view is not None and ls.views.regions_applicable(view) else RegionSet([])
                 per_image.append(self._score_image(mrow, dets, regions, iou, looks_for))
@@ -746,9 +985,9 @@ class LearningService:
         lab = mrow["labels"]
         full = mrow["review"] == "full"
         looks_for = looks_for or set(VEHICLE_CLASSES)
-        refs = [p | {"cls": trainable(p["cls"]) or p["cls"]} for p in lab["positives"]
-                if regions.contains_box(tuple(p["box"])) and trainable(p["cls"]) in looks_for]
-        ignore = list(lab["ignore_boxes"]) + [p["box"] for p in lab["positives"] if trainable(p["cls"]) not in looks_for]
+        refs = [p | {"cls": learnt(p["cls"])} for p in lab["positives"]
+                if regions.contains_box(tuple(p["box"])) and learnt(p["cls"]) in looks_for]
+        ignore = list(lab["ignore_boxes"]) + [p["box"] for p in lab["positives"] if learnt(p["cls"]) not in looks_for]
         dets = [d for d in dets if d[1] in looks_for]
         lab = {**lab, "ignore_boxes": ignore}
         preds = sorted([d for d in dets if regions.contains_box(tuple(d[0]))], key=lambda d: -d[2])
@@ -802,7 +1041,8 @@ class LearningService:
 
     # ---------- Run mode "full auto" ----------
     _REVIEW_TABLES = (("review_decision", " AND bulk_approval_id IS NULL"), ("annotation_revision", ""),
-                      ("candidate_revision", ""), ("event_revision", ""), ("recording_review", ""))
+                      ("candidate_revision", ""), ("event_revision", ""), ("recording_review", ""),
+                      ("marked_target", " AND state='confirmed' AND deleted_at IS NULL"))
 
     def _review_marks(self) -> dict:
         return {t: self.con.execute(f"SELECT COALESCE(MAX(id), 0) FROM {t}").fetchone()[0] for t, _ in self._REVIEW_TABLES}

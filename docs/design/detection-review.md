@@ -42,4 +42,5 @@ The table is computed on request. That is fine for thousands of images. Larger a
 - **Text safety:** all values are written as text, so leading zeros and Unicode survive.
 - **No overwriting:** each export gets a new name. Files are written as `.partial` and renamed when complete.
 - **Excel row limit:** rows past Excel's limit continue on `images_2`, `objects_2`, and so on. Rows are never dropped.
+- **Confidence slider:** "Export boxes with confidence … or more" (beside Export on the Results tab, any by default, 5% steps) leaves out the machine's boxes scoring under it, and the image's vehicle count follows. Boxes the operator added, moved or re-classed stay, and so does every box of an image the operator approved. The chosen value is recorded with the export.
 - **Records:** every export, including a failed one, is recorded in the mission database, and failures notify the operator.

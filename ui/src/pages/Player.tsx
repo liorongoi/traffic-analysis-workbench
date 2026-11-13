@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, post } from "../api";
 import { fmtT } from "./Events";
+import { NamePick } from "../components/Pick";
 
 // The player: a recording plays with every event's box drawn on it, and is reviewed and edited where it plays, as a
 // still image is. Click a box (or a bar on the timeline) to pick its event; drag on the paused picture to redraw the
@@ -11,6 +12,10 @@ type PEvent = {
   id: number; key: string; first_t: number; last_t: number; cls: string; machine_cls: string; status: string;
   origin: "machine" | "human"; fixes: { t: number; box: number[] }[]; boxes: PBox[]; flags: string[];
 };
+// A target the operator marked (one SAM 3.1 does not know): followed both ways from their boxes, then confirmed.
+type Marked = { id: number; cls: string; marks: { t: number; box: number[] }[]; steps: { t: number; box: number[]; score: number }[];
+  start_t: number | null; end_t: number | null; state: "suggested" | "confirmed" };
+const SURE = 0.55;
 type Overlay = {
   recording: { id: number; rel_path: string; width: number | null; height: number | null; duration_s: number | null;
     nominal_fps: number | null; review: string; approved: boolean; pending: number };
@@ -87,6 +92,15 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   const [zpts, setZpts] = useState<number[][]>([]);
   const video = useRef<HTMLVideoElement>(null);
   const svg = useRef<SVGSVGElement>(null);
+  // Teaching a new target: draw it once, the app follows it both ways; correct, set where it is in view, confirm.
+  const [marking, setMarking] = useState(false);
+  const [markCls, setMarkCls] = useState("");
+  const [marked, setMarked] = useState<Marked[]>([]);
+  const [selMark, setSelMark] = useState<number | null>(null);
+  const [following, setFollowing] = useState(false);
+  const loadMarks = useCallback(() => api(`/missions/${missionId}/recordings/${versionId}/marks`)
+    .then((r) => setMarked(r.targets)).catch(() => undefined), [missionId, versionId]);
+  useEffect(() => { loadMarks(); }, [loadMarks]);
 
   const load = useCallback(async () => {
     try { setOv(await api(`/missions/${missionId}/recordings/${versionId}/overlay`)); setErr(null); }
@@ -200,7 +214,8 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
     const x = (ev.clientX - r.left - (r.width - W * s) / 2) / s, y = (ev.clientY - r.top - (r.height - H * s) / 2) / s;
     return { x: Math.max(0, Math.min(W, x)), y: Math.max(0, Math.min(H, y)) };
   };
-  const drawing = adding || measuring || !!zoning || selEv != null;
+  const curMark = marked.find((x) => x.id === selMark) ?? null;
+  const drawing = adding || marking || measuring || !!zoning || selEv != null;
   const onDown = (ev: React.PointerEvent) => {
     if (!drawing || ev.button !== 0) return;
     pause();
@@ -229,6 +244,18 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
     }
     if (box[2] - box[0] < 4 || box[3] - box[1] < 4) { if (!adding) setSel(null); return; }   // a click on the picture: let go
     const t = fallback ? now : video.current?.currentTime ?? now;
+    if (marking) {
+      if (!curMark && !markCls.trim()) { setMsg({ kind: "err", text: "Choose what the target is first." }); return; }
+      setFollowing(true);
+      await act(async () => {
+        const r = curMark ? await post(`/missions/${missionId}/marks/${curMark.id}/correct`, { t, box })
+          : await post(`/missions/${missionId}/recordings/${versionId}/marks`, { cls: markCls, t, box });
+        await loadMarks(); setSelMark(r.id);
+      }, curMark ? "Followed again from all your boxes. Check the start and the end, then confirm."
+        : "Followed both ways. Play through it: where the box goes wrong, pause and draw it again. Then check the start and the end, and confirm.");
+      setFollowing(false);
+      return;
+    }
     if (adding) {
       await act(async () => {
         const e = await post(`/missions/${missionId}/recordings/${versionId}/targets`, { t, box, cls: addCls });
@@ -253,12 +280,13 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
       else if (k === "c" && selEv) decide("confirm");
       else if ((k === "x" || k === "delete" || k === "backspace") && selEv) decide("reject");
       else if (k === "b") { setAdding((a) => !a); setSel(null); setMeasuring(false); pause(); }
+      else if (k === "t") { setMarking((v) => !v); setSelMark(null); setAdding(false); setSel(null); pause(); }
       else if (k === "m") { setMeasuring((v) => !v); setLine(null); setAdding(false); setSel(null); pause(); }
       else if (k === "a") approve();
       else if (k === "h") setShow((s) => (s === "none" ? "all" : "none"));
       else if (k === "l") startZone(zoning === "line" ? "" : "line");
       else if (k === "enter" && zoning === "area" && zpts.length >= 3) saveZone(zpts);
-      else if (k === "escape") { setDrag(null); setAdding(false); setMeasuring(false); setLine(null); setZoning(""); setZpts([]); setSel(null); setHelp(false); }
+      else if (k === "escape") { setDrag(null); setAdding(false); setMarking(false); setSelMark(null); setMeasuring(false); setLine(null); setZoning(""); setZpts([]); setSel(null); setHelp(false); }
       else if (k === "?") setHelp((h) => !h);
       else if (/^[1-9]$/.test(k) && Number(k) <= classes.length) setClass(classes[Number(k) - 1]);
       else return;
@@ -349,6 +377,18 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
                     stroke="#000" strokeWidth={3 * px} textAnchor="middle">{lab}</text>}
                 </g>;
               })()}
+              {show !== "none" && marked.map((mk) => {
+                const st = mk.steps.reduce<Marked["steps"][number] | null>((b, x) => (!b || Math.abs(x.t - now) < Math.abs(b.t - now) ? x : b), null);
+                const inRange = mk.start_t != null && mk.end_t != null && now >= mk.start_t - 0.1 && now <= mk.end_t + 0.1;
+                if (!st || Math.abs(st.t - now) > 0.15 || !inRange) return null;
+                const b = st.box, on = mk.id === selMark;
+                return <g key={`m${mk.id}`} onPointerDown={(ev) => { if (!marking) { ev.stopPropagation(); setSelMark(mk.id); setMarking(true); setSel(null); pause(); } }}
+                  style={{ cursor: "pointer" }}>
+                  <rect x={b[0]} y={b[1]} width={b[2] - b[0]} height={b[3] - b[1]} fill="transparent" stroke="var(--accent, #4aa3ff)"
+                    strokeWidth={on ? sw * 2 : sw} strokeDasharray={st.score >= SURE ? undefined : `${2 * sw} ${2 * sw}`} />
+                  <text x={b[0]} y={Math.max(fs, b[1] - 3)} fontSize={fs} fill="var(--accent, #4aa3ff)" paintOrder="stroke" stroke="#000" strokeWidth={3 * px}>
+                    T{mk.id} {mk.cls}{st.score < SURE ? " · unsure" : ""}{mk.state === "confirmed" ? " · confirmed" : ""}</text></g>;
+              })}
               {drag && !measuring && !zoning && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)}
                 height={Math.abs(drag.y1 - drag.y0)} fill="none" stroke="var(--human)" strokeWidth={sw} strokeDasharray={`${4 * sw} ${2 * sw}`} />}
             </svg>
@@ -369,6 +409,10 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               title="Draw a target the analysis missed (B)">+ Missed target</button>
             {adding && <select aria-label="Class of the new target" value={addCls} onChange={(e) => setAddCls(e.target.value)}>
               {classes.map((c) => <option key={c}>{c}</option>)}</select>}
+            <button className={marking ? "primary" : ""} onClick={() => { setMarking(!marking); setSelMark(null); setAdding(false); setSel(null); pause(); }}
+              title="A kind of target the detectors do not find (a drone, a tractor): draw it once, the app follows it, and once you confirm it teaches the detector (T)">🎯 Teach a new target</button>
+            {marking && !curMark && <NamePick label="What the target is" value={markCls} onChange={setMarkCls}
+              suggestions={[...classes.filter((c) => !["car", "truck", "bus", "motorcycle", "bicycle"].includes(c)), "drone", "tractor", "scooter", "cart"]} />}
             <button className={measuring ? "primary" : ""} onClick={() => { setMeasuring(!measuring); setLine(null); setAdding(false); setSel(null); pause(); }}
               title="Measure the camera, for speeds in km/h and sizes in metres (M)">📏 {measuring ? "Measuring" : cal ? "Measured" : "Measure"}</button>
             {measuring && line && <select aria-label="Distance between the two points" value="" onChange={(e) => e.target.value && saveMeasure(Number(e.target.value))}>
@@ -399,11 +443,14 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
           {measuring && <div className="msg">{line ? "Pick the real distance between the two points." :
             "Pause where you can see the road. Drag a line between two points on the road whose distance you know (a car's length, a lane's width, road markings), at the depth where the targets pass."}
             {" "}One measure covers this video and the other videos from the same folder.</div>}
+          {marking && <div className="msg">{following ? "Following the target through the video…" : curMark
+            ? `Drawing now adds another box of T${curMark.id} (${curMark.cls}) on this frame and follows it again. Esc to let go.`
+            : "Pause where the target is clear and drag a box around all of it. The app follows it forwards and backwards and suggests where it enters and leaves."}</div>}
           {adding && <div className="msg">Drag a box around the target the analysis missed. It is added as a confirmed {addCls}.</div>}
           {help && <div className="msg small">
             Space play or pause · ← → one frame (Shift: one second) · J / K next or previous event to review · C confirm ·
             X or Delete reject · 1–{classes.length} class ({classes.map((c, i) => `${i + 1} ${c}`).join(", ")}) ·
-            B missed target · M measure the camera · L counting line · drag on the paused picture to redraw the picked event's box · A approve for learning ·
+            B missed target · T teach a new target · M measure the camera · L counting line · drag on the paused picture to redraw the picked event's box · A approve for learning ·
             H hide boxes · Esc let go</div>}
         </div>
         <div className="grid" style={{ gap: 10, alignContent: "start" }}>
@@ -428,6 +475,16 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               next event not reviewed yet.</div>}
           </div>
           {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
+          {curMark && <MarkCard mk={curMark} now={now} missionId={missionId}
+            onSeek={(t) => { pause(); seek(t); }} onClose={() => { setSelMark(null); setMarking(false); }}
+            onChange={async (fn, ok) => { await act(fn, ok); await loadMarks(); }} />}
+          {marked.length > 0 && !curMark && <div className="card grid" style={{ gap: 4 }}>
+            <strong className="small">Targets you are teaching</strong>
+            {marked.map((mk) => <div key={mk.id} className="row small click" style={{ justifyContent: "space-between" }}
+              onClick={() => { setSelMark(mk.id); setMarking(true); setSel(null); pause(); if (mk.start_t != null) seek(mk.start_t); }}>
+              <span>T{mk.id} {mk.cls} · {mk.start_t != null ? `${fmtT(mk.start_t)} to ${fmtT(mk.end_t ?? mk.start_t)}` : "not found"}</span>
+              <span className={`badge ${mk.state === "confirmed" ? "approved" : ""}`}>{mk.state === "confirmed" ? "teaches" : "to check"}</span></div>)}
+          </div>}
           {tel === null ? <button onClick={askFlight} title="Read the drone's or aircraft's own flight record (a DJI .srt beside the video, or KLV inside it)">Flight data</button>
             : tel.source ? <Aircraft tel={tel as any} t={now} /> : <div className="muted small">This recording carries no flight data.</div>}
           {zones.length > 0 && <div className="card grid" style={{ gap: 4 }}>
@@ -449,6 +506,42 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** One marked target: where it is in view (start and end, set from the playhead), its boxes, confirm or remove. */
+function MarkCard({ mk, now, missionId, onSeek, onClose, onChange }: {
+  mk: Marked; now: number; missionId: string; onSeek: (t: number) => void; onClose: () => void;
+  onChange: (fn: () => Promise<unknown>, ok?: string) => Promise<void>;
+}) {
+  const put = (body: object, ok: string) => onChange(() => api(`/missions/${missionId}/marks/${mk.id}`, { method: "PUT", body }), ok);
+  const sure = mk.steps.filter((s) => s.score >= SURE && mk.start_t != null && s.t >= mk.start_t && s.t <= (mk.end_t ?? 0)).length;
+  return (
+    <div className="card grid" style={{ gap: 8 }}>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <strong>T{mk.id} · {mk.cls}</strong>
+        <span className={`badge ${mk.state === "confirmed" ? "approved" : ""}`}>{mk.state === "confirmed" ? "teaches the detector" : "to check"}</span>
+      </div>
+      {mk.start_t == null ? <div className="muted small">It could not be followed from your box. Draw it again on a clearer frame.</div> : <>
+        <div className="row small">
+          <button onClick={() => onSeek(mk.start_t!)}>Enters {fmtT(mk.start_t)}</button>
+          <button onClick={() => put({ start_t: now }, `Starts at ${fmtT(now)} now.`)} disabled={now > (mk.end_t ?? now)}>Starts here</button>
+        </div>
+        <div className="row small">
+          <button onClick={() => onSeek(mk.end_t!)}>Leaves {fmtT(mk.end_t!)}</button>
+          <button onClick={() => put({ end_t: now }, `Ends at ${fmtT(now)} now.`)} disabled={now < (mk.start_t ?? now)}>Ends here</button>
+        </div>
+        <div className="muted small">{mk.marks.length} box{mk.marks.length === 1 ? "" : "es"} drawn by you · found surely on {sure} frames
+          in the range. A dashed box is where the app is unsure: pause there and draw it again.</div>
+        <div className="row">
+          {mk.state === "confirmed"
+            ? <button onClick={() => put({ state: "suggested" }, "It no longer teaches until you confirm it again.")}>Take back</button>
+            : <button className="primary" onClick={() => put({ state: "confirmed" }, `Confirmed: up to 60 frames between ${fmtT(mk.start_t)} and ${fmtT(mk.end_t!)} teach the detector what a ${mk.cls} is.`)}>Confirm for training</button>}
+          <button className="danger" onClick={() => onChange(() => api(`/missions/${missionId}/marks/${mk.id}`, { method: "DELETE" }), "Removed.").then(onClose)}>Remove</button>
+          <button onClick={onClose}>Done</button>
+        </div>
+      </>}
     </div>
   );
 }

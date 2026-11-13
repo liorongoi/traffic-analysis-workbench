@@ -28,7 +28,7 @@ from typing import Callable
 from .process import RunCancelled, RunControl, register_model
 from .store import Mission, utcnow
 from .tracker import Closed, Tracker, TrackerParams
-from .video import camera_motion, frames, is_scene_cut, motion_frame, probe, scene_signature
+from .video import compose, camera_motion, frames, is_scene_cut, motion_frame, probe, scene_signature
 from .views import ViewService
 
 MAX_ATTEMPTS = 3
@@ -163,10 +163,14 @@ class VideoProcessor:
         # itself is spaced out to the SAM 3.1 interval.
         self.kind = _kind(detector)
         sam_s = self.s.sam3_interval_s or getattr(mission.config(), "sam3_interval_s", None) or 1.0
-        self.sam_every = max(1, round(sam_s / self.s.interval_s)) if self.kind == "both" else 1
-        self.grid_s = max(self.s.interval_s, sam_s) if self.kind == "sam3" else self.s.interval_s
-        self.sam_s = sam_s
         self.camera = self.s.camera or getattr(mission.config(), "camera", None) or "fixed"
+        # A moving camera with SAM 3.1 alone: the picture is still read on the fine grid so the camera's motion is
+        # followed step by step (a second apart, a drone's or a walker's view shares too little to match); SAM 3.1
+        # looks at every Nth of those frames and the motion in between is added up.
+        fine = self.kind == "both" or (self.kind == "sam3" and self.camera == "moving")
+        self.sam_every = max(1, round(sam_s / self.s.interval_s)) if fine else 1
+        self.grid_s = max(self.s.interval_s, sam_s) if self.kind == "sam3" and not fine else self.s.interval_s
+        self.sam_s = sam_s
         self.workers = max(1, int(self.s.workers or getattr(mission.config(), "video_workers", None) or 1))
         if self.s.tracker.algo == "byte":
             self.detector = _low_threshold(detector, self.s.low_score)
@@ -174,6 +178,10 @@ class VideoProcessor:
             # SAM 3.1 sees a target about once a second: a person walks several body widths in that time.
             from dataclasses import replace
             self.s = replace(self.s, tracker=replace(self.s.tracker, jump_per_s=3.0))
+        if self.kind == "sam3" and self.s.tracker.min_hits > 3:
+            # SAM 3.1 alone gives the tracker a frame a second: 3 sightings are already 3 s
+            from dataclasses import replace
+            self.s = replace(self.s, tracker=replace(self.s.tracker, min_hits=3))
 
 
     def process_all(self, progress: Callable[[int, int], None] | None = None) -> list[VideoReport]:
@@ -324,6 +332,7 @@ class VideoProcessor:
         ids = {r["track_key"]: r["id"] for r in self.con.execute(
             "SELECT id, track_key FROM track WHERE run_item_id=?", (it["id"],))}
         in_chunk = 0
+        acc = None                                 # the camera's motion since the tracker last saw a frame
         self.con.execute("BEGIN")
         try:
             for fr, nxt_after in frames(path, self.grid_s, after_t=last_t, next_sample_t=nxt):
@@ -332,22 +341,32 @@ class VideoProcessor:
                 cut = is_scene_cut(prev, sig)
                 if moving:
                     # A moving camera: measure how the picture moved and take it out before tracking. A pan or
-                    # zoom is never a cut; a textured frame that matches the previous one nowhere is.
+                    # zoom is never a cut, nor is a step no single motion explains; a textured frame that shares
+                    # almost nothing with the previous one is.
                     mf = motion_frame(fr.image)
-                    motion, why = camera_motion(pm, mf, pr["width"], [t.box for t in tracker.tracks])
+                    step, why = camera_motion(pm, mf, pr["width"], [t.box for t in tracker.tracks])
                     cut = why == "no_match" or (why == "no_texture" and pm is not None and cut)
+                    motion = compose(acc, step)
                     pm = mf
                 if cut:
                     self.con.execute("INSERT INTO video_marker(run_item_id,t,kind) VALUES (?,?,?)",
                                      (it["id"], fr.t, "scene_cut"))
                     self._finish(it, tracker.close_all("scene_cut"), ids, pr, rep)
+                    motion = None
                 prev = sig
+                found_dets = self._detect(fr.image, count)
+                if found_dets is None:            # a frame between SAM 3.1 frames: only the camera's motion
+                    acc = motion
+                    last_t, nxt, count = fr.t, nxt_after, count + 1
+                    rep.frames += 1
+                    continue
+                acc = None
                 dets, found = [], {}
-                for d in self._detect(fr.image, count):
+                for d in found_dets:
                     box = list(map(float, d.box))
                     found[id(box)] = getattr(d, "found_by", None) or ("sam3" if self.kind == "sam3" else "standard")
                     dets.append((box, d.cls, float(d.score)))
-                obs, closed, new = tracker.update(fr.t, dets, motion=motion)
+                obs, closed, new = tracker.update(fr.t, dets, motion=motion, image=fr.image)
                 for tr in new:
                     ids[tr.key] = self.con.execute(
                         "INSERT INTO track(run_item_id,track_key,state) VALUES (?,?,?)",
@@ -406,7 +425,7 @@ class VideoProcessor:
             "SELECT idx, result FROM video_segment WHERE run_item_id=? AND state='done'", (it["id"],))}
         todo = [s for s in segs if s.idx not in done]
         moving = self.camera == "moving"
-        sam_every = self.sam_every if self.kind == "both" else 1
+        sam_every = self.sam_every
 
         detect = vs.make_detect(self.kind, self.detector)
         args = dict(width=pr["width"], height=pr["height"], grid_s=self.grid_s, moving=moving, sam_every=sam_every)
@@ -516,6 +535,8 @@ class VideoProcessor:
         if self.kind == "both" and count % self.sam_every:
             from dataclasses import replace
             return [replace(d, found_by="standard") for d in self.detector.standard.detect(img)]
+        if self.kind == "sam3" and count % self.sam_every:
+            return None                            # SAM 3.1 alone on a moving camera: this frame for motion only
         return self.detector.detect(img)
 
     def _checkpoint(self, item_id, last_t, nxt, count, tracker: Tracker, prev, pm=None) -> None:

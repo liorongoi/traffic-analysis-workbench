@@ -44,12 +44,11 @@ import cv2
 import numpy as np
 import torch
 
+from .own_classes import CAT_TO_COCO, OWN_SLOTS, OwnClassError, _init_own, category_map  # noqa: F401
 from .yolox_torch import YOLOX, ExportWrapper, load_checkpoint, yolox_loss
 
 SIZE = 640
 PAD = 114
-# Dataset categories (1 bicycle, 2 car, 3 motorcycle, 4 bus, 5 truck, 6 person) to the model's COCO class index.
-CAT_TO_COCO = {1: 1, 2: 2, 3: 3, 4: 5, 5: 7, 6: 0}
 COCO_WEIGHTS = {
     "url": "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.pth",
     "sha256": "f55ded7181e1b0c13285c56e7790b8f0e8f8db590fe4edb37f0b7f345c913a30",
@@ -119,7 +118,7 @@ def _polygon_mask(shape, polys) -> np.ndarray:
 
 def background_mask(img: dict, h: int, w: int) -> np.ndarray:
     """1 where nothing unlabelled is a vehicle (may learn "background"), 0 where nobody looked."""
-    if img.get("review") != "full":
+    if img.get("review") not in ("full", "sam"):
         return np.zeros((h, w), np.uint8)                   # partial review: only the corrected boxes teach
     m = _polygon_mask((h, w), img.get("include_regions") or []) if img.get("include_regions") else np.ones((h, w), np.uint8)
     if img.get("exclude_regions"):
@@ -132,8 +131,9 @@ def background_mask(img: dict, h: int, w: int) -> np.ndarray:
 class ExportedDataset(torch.utils.data.Dataset):
     """One split of a dataset exported by the learning page (annotations_<split>.json + images/)."""
 
-    def __init__(self, folder: Path, split: str, augment: bool):
+    def __init__(self, folder: Path, split: str, augment: bool, cmap: dict | None = None):
         self.folder, self.augment = Path(folder), augment
+        cmap = cmap if cmap is not None else category_map(self.folder)[0]
         f = self.folder / f"annotations_{split}.json"
         data = json.loads(f.read_text(encoding="utf-8")) if f.is_file() else {"images": [], "annotations": []}
         by_img: dict[int, list] = {}
@@ -145,7 +145,7 @@ class ExportedDataset(torch.utils.data.Dataset):
             for a in by_img.get(img["id"], []):
                 x, y, bw, bh = a["bbox"]
                 if bw > 1 and bh > 1:
-                    boxes.append([CAT_TO_COCO.get(a["category_id"], 2), x, y, x + bw, y + bh])
+                    boxes.append([cmap.get(a["category_id"], 2), x, y, x + bw, y + bh])
             self.items.append((img, np.asarray(boxes, np.float32).reshape(-1, 5)))
 
     def __len__(self):
@@ -399,8 +399,14 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, bat
     workers = workers if workers is not None else min(4, os.cpu_count() or 1)
     log(f"Device: {describe_device(dev)}")
 
-    tr = ExportedDataset(dataset, "train", augment=True)
-    va = ExportedDataset(dataset, "val", augment=False)
+    try:
+        cmap, own = category_map(dataset, _init_own(str(init)))
+    except OwnClassError as exc:
+        raise TrainError(str(exc)) from None
+    if own:
+        log("Marked targets learnt as their own classes: " + ", ".join(own.values()))
+    tr = ExportedDataset(dataset, "train", augment=True, cmap=cmap)
+    va = ExportedDataset(dataset, "val", augment=False, cmap=cmap)
     if len(tr) == 0:
         raise TrainError("The dataset has no training images.")
     nbox = sum(len(b) for _, b in tr.items)
@@ -474,7 +480,7 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, bat
                   "device": describe_device(dev), "torch": torch.__version__, "seed": seed,
                   "val_loss_before": None if base_val is None else round(base_val, 4),
                   "val_loss_after": None if vl is None else round(best, 4), "history": hist,
-                  "seconds": round(time.time() - t0)}
+                  "seconds": round(time.time() - t0), "own_classes": {str(k): v for k, v in sorted(own.items())}}
         return write_pack(final, out, name, version or datetime.now().strftime("%Y%m%d-%H%M"), record, log)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -483,6 +489,7 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, bat
 # ------------------------------------------------------------------ model pack
 
 def write_pack(model: YOLOX, out: Path, name: str, version: str, record: dict, log=print) -> Path:
+    own = {int(k): v for k, v in (record.get("own_classes") or {}).items()}
     """model.onnx (what the app runs), model.pt (to train further), model.json, LICENSE; and a .zip of it."""
     pack = out / name / version
     if pack.exists():
@@ -516,6 +523,7 @@ def write_pack(model: YOLOX, out: Path, name: str, version: str, record: dict, l
             "source": "trafficwb-train (fine-tuned YOLOX-s)", "input_size": SIZE,
             "input_format": "BGR uint8 values as float32, letterboxed top-left, pad value 114, no normalisation",
             "classes": "coco80", "weights": "model.onnx", "torch_weights": "model.pt",
+            **({"own_classes": {str(k): v for k, v in sorted(own.items())}} if own else {}),
             "files": {"model.pt": _sha256(tmp / "model.pt"), "LICENSE": _sha256(tmp / "LICENSE")},
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "training": record}
     (tmp / "model.json").write_text(json.dumps(card, indent=2, ensure_ascii=False), encoding="utf-8")

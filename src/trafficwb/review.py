@@ -58,6 +58,7 @@ class Filter:
     local_date_from: str | None = None    # YYYY-MM-DD, mission time zone
     local_date_to: str | None = None
     min_vehicles: int | None = None
+    min_score: float | None = None        # export only: the machine's boxes scoring under this are left out
 
     def describe(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}
