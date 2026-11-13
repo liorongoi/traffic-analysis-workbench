@@ -36,6 +36,7 @@ export type Filter = {
   local_date_from?: string;
   local_date_to?: string;
   min_vehicles?: number;
+  min_score?: number;    // export only: the machine's boxes scoring under this are left out
 };
 
 export type ResultRow = {

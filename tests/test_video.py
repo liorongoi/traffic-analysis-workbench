@@ -537,3 +537,15 @@ def test_plates_read_on_several_frames_of_each_event(tmp_path):
     VideoProcessor(m2, RedDetector(), {}, plate_models=lambda: (YellowFinder(), Reader(["1234567", "7654321"]))).process_all()
     (p,) = PlateService(m2).plates()
     assert p.readability == "partial" and any("disagree" in r for r in p.reasons)
+
+
+def test_export_leaves_out_events_under_the_chosen_confidence(two_cars):
+    m, vs = two_cars
+    a, b = vs.events()
+    assert a.score is not None and 0 < a.score <= 1
+    top = max(a.score, b.score) + 0.01
+    assert vs.events(min_score=top) == [] and vs.counts(min_score=top)["total"]["counted"] == {}
+    vs.revise(a.id, "confirm", "lior")                # what the operator confirmed stays
+    files = vs.export("lior", min_score=top)
+    rows = list(csv.DictReader(open(files[0], encoding="utf-8-sig")))
+    assert [r["event_id"] for r in rows] == [a.key] and float(rows[0]["score"]) == pytest.approx(a.score)

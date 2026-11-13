@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, Filter, fmtDuration, Job, post, REVIEW_LABEL, ResultRow } from "../api";
 import { go } from "../router";
+import { ScoreSlider } from "../components/ScoreSlider";
 import SearchTab from "./Search";
 import EventsTab from "./Events";
 import PlatesTab from "./Plates";
@@ -553,6 +554,8 @@ function Results({ missionId }: { missionId: string }) {
           {MIN_VEHICLES.map((n) => <option key={n} value={String(n)}>{n} or more vehicle{n === 1 ? "" : "s"}</option>)}
         </select>
         <span style={{ flex: 1 }} />
+        <ScoreSlider what="boxes" value={q.filter.min_score ?? 0}
+          onChange={(v) => setQ({ ...q, filter: { ...q.filter, min_score: v > 0 ? v : undefined } })} />
         <button onClick={async () => setBulk(await post(`/missions/${missionId}/approve-all/preview`, q.filter))}>Approve all and export…</button>
         <button onClick={doExport}>Export</button>
       </div>

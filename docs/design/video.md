@@ -60,6 +60,7 @@ Video uses the same detector choice, model choice and words as still images (`Jo
 - **Maybe the same**: of the counted events, those flagged as a possible duplicate (re-entry) that nobody has reviewed. The true count lies between the count minus these and the count.
 - Only the newest analysis of each recording counts. Classes the mission does not count as vehicles are counted and shown, and left out of the vehicle total.
 - Shown on the Events tab (per class, per recording, and new targets per minute) and exported as `counts` and `counts_per_minute` sheets beside `events`.
+- **Confidence**: each event's score is the detector's mean score over its boxes (an event the operator added has none). The slider "Export events with confidence … or more" beside Export events narrows the list and the export (events, counts and per-minute sheets) to events scoring at least that much; events the operator confirmed or re-classed always stay. The export has a `score` column.
 - A target that leaves and comes back later (beyond the re-linking and re-entry windows) counts twice.
 
 ## Teaching a new target (`trafficwb.follow`)

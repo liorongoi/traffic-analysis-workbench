@@ -181,6 +181,7 @@ class FilterBody(BaseModel):
     local_date_from: str | None = None
     local_date_to: str | None = None
     min_vehicles: int | None = None
+    min_score: float | None = Field(None, ge=0, le=1)
 
 
 class CommitBody(BaseModel):
@@ -208,6 +209,7 @@ class RegionBatchBody(BaseModel):
 class ExportBody(BaseModel):
     formats: list[str] | None = None
     filter: FilterBody | None = None
+    min_score: float | None = Field(None, ge=0, le=1)   # events: the machine's events scoring under this are left out
 
 
 class AskBody(BaseModel):
@@ -2405,7 +2407,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def events_export(body: ExportBody, m: Mission = Depends(mission), u: User = Depends(user)):
         svc = _video(m)
         try:
-            paths = svc.export(u.username, body.formats)
+            paths = svc.export(u.username, body.formats, min_score=body.min_score)
         except Exception as exc:
             raise ApiError(500, "export_failed", f"Export failed: {exc}",
                            "Check that the output folder exists, is writable and has free space.") from None
