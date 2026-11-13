@@ -72,6 +72,12 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [fallback, setFallback] = useState(false);
   const [help, setHelp] = useState(false);
+  // Measuring the camera: two points on the road and the real distance between them give km/h and metres.
+  type Cal = { own: boolean; points: number[]; meters: number; m_per_px: number; from_version_id: number } | null;
+  const [cal, setCal] = useState<Cal>(null);
+  const [distances, setDistances] = useState<number[]>([]);
+  const [measuring, setMeasuring] = useState(false);
+  const [line, setLine] = useState<number[] | null>(null);
   const video = useRef<HTMLVideoElement>(null);
   const svg = useRef<SVGSVGElement>(null);
 
@@ -80,6 +86,21 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
     catch (e) { setErr((e as ApiError).message); }
   }, [missionId, versionId]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    api(`/missions/${missionId}/recordings/${versionId}/calibration`)
+      .then((r) => { setCal(r.calibration); setDistances(r.distances_m); }).catch(() => undefined);
+  }, [missionId, versionId]);
+  const saveMeasure = async (meters: number) => {
+    if (!line) return;
+    await act(async () => {
+      const r = await api(`/missions/${missionId}/recordings/${versionId}/calibration`, { method: "PUT", body: { points: line, meters } });
+      setCal(r.calibration); setLine(null); setMeasuring(false);
+    }, `Measured: ${meters} m. Speeds of this video, and of the other videos from the same folder without a measure of their own, are now in km/h.`);
+  };
+  const clearMeasure = () => act(async () => {
+    const r = await api(`/missions/${missionId}/recordings/${versionId}/calibration`, { method: "DELETE" });
+    setCal(r.calibration); setLine(null);
+  }, "Measure removed: speeds of this video are in pixels per second again.");
 
   // The playhead follows the video every animation frame; in the frame-by-frame fallback a timer moves it.
   useEffect(() => {
@@ -150,7 +171,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
     const x = (ev.clientX - r.left - (r.width - W * s) / 2) / s, y = (ev.clientY - r.top - (r.height - H * s) / 2) / s;
     return { x: Math.max(0, Math.min(W, x)), y: Math.max(0, Math.min(H, y)) };
   };
-  const drawing = adding || selEv != null;
+  const drawing = adding || measuring || selEv != null;
   const onDown = (ev: React.PointerEvent) => {
     if (!drawing || ev.button !== 0) return;
     pause();
@@ -163,6 +184,10 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
     if (!drag) return;
     const box = [Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1), Math.max(drag.x0, drag.x1), Math.max(drag.y0, drag.y1)];
     setDrag(null);
+    if (measuring) {                                     // a line between two points, not a box
+      if (Math.hypot(drag.x1 - drag.x0, drag.y1 - drag.y0) >= 10) setLine([drag.x0, drag.y0, drag.x1, drag.y1]);
+      return;
+    }
     if (box[2] - box[0] < 4 || box[3] - box[1] < 4) { if (!adding) setSel(null); return; }   // a click on the picture: let go
     const t = fallback ? now : video.current?.currentTime ?? now;
     if (adding) {
@@ -188,10 +213,11 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
       else if (k === "k" && toReview.length) pick(toReview[(i - 1 + toReview.length) % toReview.length], true);
       else if (k === "c" && selEv) decide("confirm");
       else if ((k === "x" || k === "delete" || k === "backspace") && selEv) decide("reject");
-      else if (k === "b") { setAdding((a) => !a); setSel(null); pause(); }
+      else if (k === "b") { setAdding((a) => !a); setSel(null); setMeasuring(false); pause(); }
+      else if (k === "m") { setMeasuring((v) => !v); setLine(null); setAdding(false); setSel(null); pause(); }
       else if (k === "a") approve();
       else if (k === "h") setShow((s) => (s === "none" ? "all" : "none"));
-      else if (k === "escape") { setDrag(null); setAdding(false); setSel(null); setHelp(false); }
+      else if (k === "escape") { setDrag(null); setAdding(false); setMeasuring(false); setLine(null); setSel(null); setHelp(false); }
       else if (k === "?") setHelp((h) => !h);
       else if (/^[1-9]$/.test(k) && Number(k) <= classes.length) setClass(classes[Number(k) - 1]);
       else return;
@@ -241,7 +267,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
                 const look = LOOK[e.status === "rejected" ? "rejected" : e.origin === "human" || e.fixes.length ? "human" : e.status] ?? LOOK.pending;
                 const on = e.id === sel;
                 return (
-                  <g key={e.id} onPointerDown={(ev) => { if (!adding && e.id !== sel) { ev.stopPropagation(); pick(e); pause(); } }}
+                  <g key={e.id} onPointerDown={(ev) => { if (!adding && !measuring && e.id !== sel) { ev.stopPropagation(); pick(e); pause(); } }}
                     style={{ cursor: "pointer" }}>
                     <rect x={b[0]} y={b[1]} width={b[2] - b[0]} height={b[3] - b[1]} fill={on ? "rgba(255,255,255,0.06)" : "transparent"}
                       stroke={look.stroke} strokeDasharray={look.dash ? look.dash.split(" ").map((v) => Number(v) * sw / 2).join(" ") : undefined}
@@ -251,7 +277,18 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
                   </g>
                 );
               })}
-              {drag && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)}
+              {(() => {
+                const l = measuring ? (drag ? [drag.x0, drag.y0, drag.x1, drag.y1] : line) : cal ? cal.points : null;
+                if (!l) return null;
+                const lab = measuring ? (line && !drag ? "how far apart?" : "") : `${cal!.meters} m${cal!.own ? "" : " (same camera)"}`;
+                return <g className="measure-line">
+                  <line x1={l[0]} y1={l[1]} x2={l[2]} y2={l[3]} stroke="var(--warn, #f2b84b)" strokeWidth={sw} strokeDasharray={measuring ? undefined : `${3 * sw} ${2 * sw}`} />
+                  {[0, 2].map((k) => <circle key={k} cx={l[k]} cy={l[k + 1]} r={4 * px} fill="var(--warn, #f2b84b)" />)}
+                  {lab && <text x={(l[0] + l[2]) / 2} y={(l[1] + l[3]) / 2 - 6 * px} fontSize={fs} fill="var(--warn, #f2b84b)" paintOrder="stroke"
+                    stroke="#000" strokeWidth={3 * px} textAnchor="middle">{lab}</text>}
+                </g>;
+              })()}
+              {drag && !measuring && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)}
                 height={Math.abs(drag.y1 - drag.y0)} fill="none" stroke="var(--human)" strokeWidth={sw} strokeDasharray={`${4 * sw} ${2 * sw}`} />}
             </svg>
           </div>
@@ -271,15 +308,28 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               title="Draw a target the analysis missed (B)">+ Missed target</button>
             {adding && <select aria-label="Class of the new target" value={addCls} onChange={(e) => setAddCls(e.target.value)}>
               {classes.map((c) => <option key={c}>{c}</option>)}</select>}
+            <button className={measuring ? "primary" : ""} onClick={() => { setMeasuring(!measuring); setLine(null); setAdding(false); setSel(null); pause(); }}
+              title="Measure the camera, for speeds in km/h and sizes in metres (M)">📏 {measuring ? "Measuring" : cal ? "Measured" : "Measure"}</button>
+            {measuring && line && <select aria-label="Distance between the two points" value="" onChange={(e) => e.target.value && saveMeasure(Number(e.target.value))}>
+              <option value="">The two points are…</option>
+              <option value={4.5}>a car's length apart (4.5 m)</option>
+              <option value={3.5}>a lane's width apart (3.5 m)</option>
+              <option value={12}>a bus's length apart (12 m)</option>
+              {distances.map((d) => <option key={d} value={d}>{d} m apart</option>)}
+            </select>}
+            {measuring && cal && <button onClick={clearMeasure}>Remove the measure</button>}
             <button onClick={() => setHelp(!help)} title="Keys (?)">?</button>
           </div>
           <Timeline lanes={tl} dur={dur} now={now} sel={sel} onSeek={(t) => { pause(); seek(t); }} onPick={(e) => pick(e, true)} />
           {fallback && <div className="msg warn">This browser cannot play the video's format, so its frames are decoded on the workstation, five a second.</div>}
+          {measuring && <div className="msg">{line ? "Pick the real distance between the two points." :
+            "Pause where you can see the road. Drag a line between two points on the road whose distance you know (a car's length, a lane's width, road markings), at the depth where the targets pass."}
+            {" "}One measure covers this video and the other videos from the same folder.</div>}
           {adding && <div className="msg">Drag a box around the target the analysis missed. It is added as a confirmed {addCls}.</div>}
           {help && <div className="msg small">
             Space play or pause · ← → one frame (Shift: one second) · J / K next or previous event to review · C confirm ·
             X or Delete reject · 1–{classes.length} class ({classes.map((c, i) => `${i + 1} ${c}`).join(", ")}) ·
-            B missed target · drag on the paused picture to redraw the picked event's box · A approve for learning ·
+            B missed target · M measure the camera · drag on the paused picture to redraw the picked event's box · A approve for learning ·
             H hide boxes · Esc let go</div>}
         </div>
         <div className="grid" style={{ gap: 10, alignContent: "start" }}>

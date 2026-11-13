@@ -524,3 +524,11 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
 /* Pick-from-list controls (components/Pick.tsx) */
 .namepick, .zonepick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .namepick > input { min-width: 200px; }
+
+/* ---------- what targets did and looked like (phase 6a) ---------- */
+.attr-filters { flex-wrap: wrap; gap: 6px; }
+.chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.chip-colour { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
+.chip-colour i { width: 11px; height: 11px; border-radius: 3px; border: 1px solid var(--line-strong, #666); display: inline-block; }
+.measure-line { pointer-events: none; }
+.in-view .count-tile .small { overflow-wrap: anywhere; }

@@ -222,6 +222,15 @@ class ReviseBody(BaseModel):
     box: list[float] | None = None
 
 
+class CrowdAlertBody(BaseModel):
+    people: int | None = Field(None, ge=2, le=10000)
+
+
+class CalibrationBody(BaseModel):
+    points: list[float] = Field(..., min_length=4, max_length=4)
+    meters: float
+
+
 class WorkerSwitchBody(BaseModel):
     enabled: bool
 
@@ -1911,7 +1920,51 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                flag: str | None = None, group_id: int | None = None):
         svc = _video(m)
         evs = _video_call(lambda: svc.events(version_id, status, flag, group_id=group_id))
-        return {"events": [_event_dict(e) for e in evs], "classes": svc.classes()}
+        attrs = svc.attributes(evs)
+        reading = False
+        if any(a["colour"] is None for a in attrs.values()):
+            # Colours are read once per target, one frame each, in the background; the list fills in as they come.
+            from ..video_attributes import read_colours_soon
+            from ..video_review import VideoService
+            reading = read_colours_soon(m.id, lambda: VideoService(DataRoot(data_root).open_mission(m.id)))
+        return {"events": [_event_dict(e) | {"attrs": attrs[e.id]} for e in evs], "classes": svc.classes(),
+                "reading_colours": reading}
+
+    @app.get("/api/missions/{mission_id}/in-view")
+    def in_view(m: Mission = Depends(mission), version_id: int | None = None, group_id: int | None = None):
+        """The most targets in view at once, per family, and the crowd periods (the mission's crowd alert)."""
+        svc = _video(m)
+        return _video_call(lambda: svc.in_view(version_id, group_id))
+
+    @app.put("/api/missions/{mission_id}/crowd-alert")
+    def crowd_alert(body: CrowdAlertBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        _video(m)
+        m.update_config(u.username, f"crowd alert at {body.people}" if body.people else "crowd alert off",
+                        crowd_alert=body.people)
+        return {"crowd_alert": body.people}
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/calibration")
+    def calibration_get(version_id: int, m: Mission = Depends(mission)):
+        from ..video_attributes import DISTANCES_M, Calibration
+        _video(m)
+        return {"calibration": Calibration(m).get(version_id), "distances_m": DISTANCES_M}
+
+    @app.put("/api/missions/{mission_id}/recordings/{version_id}/calibration")
+    def calibration_set(version_id: int, body: CalibrationBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Measure the camera: two points on the picture and the real distance between them."""
+        from ..video_attributes import Calibration
+        _video(m)
+        try:
+            return {"calibration": Calibration(m).set(version_id, body.points, body.meters, u.username)}
+        except ValueError as exc:
+            raise ApiError(400, "calibration", str(exc)) from None
+
+    @app.delete("/api/missions/{mission_id}/recordings/{version_id}/calibration")
+    def calibration_clear(version_id: int, m: Mission = Depends(mission), u: User = Depends(user)):
+        from ..video_attributes import Calibration
+        _video(m)
+        Calibration(m).clear(version_id, u.username)
+        return {"calibration": Calibration(m).get(version_id)}
 
     @app.get("/api/missions/{mission_id}/counts")
     def counts(m: Mission = Depends(mission), version_id: int | None = None,
@@ -1924,7 +1977,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def event_get(event_id: int, m: Mission = Depends(mission)):
         svc = _video(m)
         e = _video_call(lambda: svc.event(event_id))
-        return _event_dict(e) | {"observations": svc.observations(event_id), "clips": svc.clips(event_id)}
+        return _event_dict(e) | {"observations": svc.observations(event_id), "clips": svc.clips(event_id),
+                                 "attrs": svc.attributes([e])[e.id]}
 
     @app.get("/api/missions/{mission_id}/events/{event_id}/thumb")
     def event_thumb(event_id: int, m: Mission = Depends(mission), h: int = Query(120, ge=32, le=400)):
