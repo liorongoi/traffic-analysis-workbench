@@ -41,7 +41,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   const isVideo = m.config.input_type === "video";
   const tabs = [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
     ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []),
-    ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"], ["learning", "Learning"]])];
+    ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"]]), ["learning", "Learning"]];
   return (
     <div className="page">
       <div className="page-head">
@@ -64,9 +64,9 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
       {tab === "results" && !isVideo && <Results missionId={missionId} />}
       {tab === "night" && !isVideo && <NightReviewTab missionId={missionId} />}
       {tab === "views" && !isVideo && <Views missionId={missionId} />}
-      {tab === "learning" && !isVideo && <LearningTab missionId={missionId} job={m.job} reload={load} />}
+      {tab === "learning" && <LearningTab missionId={missionId} job={m.job} reload={load} />}
       {tab === "plates" && m.config.mode === "plate_recognition" && <PlatesTab missionId={missionId} />}
-      {tab === "events" && isVideo && <EventsTab missionId={missionId} eventId={extra ? Number(extra) : null} />}
+      {tab === "events" && isVideo && <EventsTab missionId={missionId} extra={extra ?? null} />}
       {tab === "search" && <SearchTab missionId={missionId} runId={extra ? Number(extra) : null} />}
     </div>
   );
@@ -137,6 +137,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
       <div className="grid cols-4">
         {stats.map(([l, n, alert]) => <div key={l} className={`card stat${!n ? " zero" : alert ? " alert" : ""}`}><div className="n">{n}</div><div className="l">{l}</div></div>)}
       </div>
+      {m.config.input_type === "video" && <CatalogCard m={m} reload={reload} />}
       <div className="grid cols-2">
         <JobCard job={m.job} mid={m.id} reload={reload} unit={m.config.input_type === "video" ? "recordings" : "images"} />
         <div className="card">
@@ -868,6 +869,120 @@ function DeleteMission({ m }: { m: any }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+const STATE_TEXT: Record<string, string> = {
+  new: "New", queued: "Not analysed", running: "Analysing", done: "Analysed", failed: "Failed", cancelled: "Stopped",
+};
+
+/** Every video in the source folders: tick the ones to analyse (the new ones are ticked already) and run them in one job. */
+function CatalogCard({ m, reload }: { m: any; reload: () => void }) {
+  const [vids, setVids] = useState<any[] | null>(null);
+  const [groups, setGroups] = useState<any[]>([]);
+  const [suggestions, setSuggestions] = useState<{ members: number[]; reason: string }[]>([]);
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const [err, setErr] = useState<string | null>(null);
+  const busy = m.job && ["running", "paused"].includes(m.job.state);
+  const load = useCallback(async (refresh: boolean) => {
+    try {
+      const r = await api(`/missions/${m.id}/catalog?refresh=${refresh}`);
+      setVids(r.videos); setGroups(r.groups ?? []); setSuggestions(r.suggestions ?? []);
+      setSel((old) => (old.size && refresh === false ? old : new Set(r.videos.filter((v: any) => v.selected).map((v: any) => v.id))));
+    } catch (e) { setErr((e as ApiError).message); }
+  }, [m.id]);
+  useEffect(() => { load(true); }, [load]);
+  const jobState = m.job?.state;
+  useEffect(() => { if (jobState && !["running", "paused"].includes(jobState)) load(true); }, [jobState, load]);
+  useEffect(() => { if (!busy) return; const t = setInterval(() => load(false), 4000); return () => clearInterval(t); }, [busy, load]);
+  if (!vids) return <div className="card muted">Looking for videos…</div>;
+  const toggle = (id: number) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const all = vids.filter((v) => !v.error);
+  const allOn = all.length > 0 && all.every((v) => sel.has(v.id));
+  const total = vids.filter((v) => sel.has(v.id)).reduce((a, v) => a + (v.duration_s ?? 0), 0);
+  const analyse = async () => {
+    setErr(null);
+    try { await post(`/missions/${m.id}/catalog/analyse`, { version_ids: [...sel] }); reload(); load(false); }
+    catch (e) { setErr((e as ApiError).message); }
+  };
+  const merge = async (ids: number[]) => {
+    setErr(null);
+    try { await post(`/missions/${m.id}/catalog/merge`, { version_ids: ids }); load(false); }
+    catch (e) { setErr((e as ApiError).message); }
+  };
+  const separate = async (gid: number) => {
+    setErr(null);
+    try { await api(`/missions/${m.id}/catalog/groups/${gid}`, { method: "DELETE" }); load(false); }
+    catch (e) { setErr((e as ApiError).message); }
+  };
+  const name = (id: number) => vids.find((v) => v.id === id)?.rel_path.split("/").pop() ?? id;
+  const tickedFree = [...sel].filter((id) => !vids.find((v) => v.id === id)?.group_id);
+  // Parts of one merged recording are listed together, under a line that names it.
+  const rows: any[] = [];
+  const seen = new Set<number>();
+  for (const v of vids) {
+    if (seen.has(v.id)) continue;
+    const g = v.group_id ? groups.find((x) => x.id === v.group_id) : null;
+    if (g) {
+      rows.push({ group: g });
+      for (const id of g.members) { const p = vids.find((x) => x.id === id); if (p) { rows.push(p); seen.add(id); } }
+    } else rows.push(v);
+  }
+  return (
+    <div className="card catalog">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 style={{ margin: 0 }}>Videos in the input folder</h2>
+        <div className="row">
+          <span className="muted">{sel.size} of {vids.length} ticked{total ? ` · ${fmtDuration(total)} of video` : ""}</span>
+          <button className="primary" disabled={busy || sel.size === 0} onClick={analyse}>
+            {busy ? "Analysing…" : `Analyse ${sel.size} video${sel.size === 1 ? "" : "s"}`}</button>
+        </div>
+      </div>
+      {err && <div className="msg err" role="alert">{err}</div>}
+      {suggestions.map((sg) => (
+        <div key={sg.members.join("-")} className="msg suggest row">
+          <span><strong>Parts of one recording?</strong> {sg.members.map(name).join(", ")} <span className="muted">({sg.reason})</span></span>
+          <span style={{ flex: 1 }} />
+          <button className="primary" disabled={busy} onClick={() => merge(sg.members)}>Merge into one</button>
+        </div>))}
+      {tickedFree.length >= 2 && (
+        <div className="row"><button disabled={busy} onClick={() => merge(tickedFree)}
+          title="The ticked videos become parts of one recording: one job, a target crossing from one part into the next counts once, one results tab">
+          Merge the {tickedFree.length} ticked videos into one recording</button></div>)}
+      {vids.length === 0 ? <p className="muted">No videos in the source folder yet.</p> : (
+        <table className="t">
+          <thead><tr>
+            <th><input type="checkbox" aria-label="Tick all" checked={allOn} disabled={busy}
+              onChange={() => setSel(allOn ? new Set() : new Set(all.map((v) => v.id)))} /></th>
+            <th></th><th>Video</th><th className="num">Length</th><th>Picture</th><th>Start (UTC)</th><th>Status</th><th className="num">Events</th><th></th>
+          </tr></thead>
+          <tbody>{rows.map((v) => v.group ? (
+            <tr key={`g${v.group.id}`} className="grouprow">
+              <td></td><td colSpan={2}><strong>{v.group.name}</strong> <span className="muted">· merged recording, analysed as one</span></td>
+              <td className="num mono">{fmtDuration(v.group.members.reduce((a: number, id: number) => a + (vids.find((x) => x.id === id)?.duration_s ?? 0), 0))}</td>
+              <td colSpan={3}></td>
+              <td className="num">{v.group.members.every((id: number) => vids.find((x) => x.id === id)?.analysed)
+                ? <a href={`#/m/${m.id}/events/rec-g${v.group.id}`}>results</a> : ""}</td>
+              <td><button className="linkish" disabled={busy} onClick={() => separate(v.group.id)}>Separate</button></td>
+            </tr>
+          ) : (
+            <tr key={v.id} className={sel.has(v.id) ? "on" : ""} onClick={() => !busy && !v.error && toggle(v.id)} style={{ cursor: busy || v.error ? "default" : "pointer" }}>
+              <td><input type="checkbox" aria-label={`Tick ${v.rel_path}`} checked={sel.has(v.id)} disabled={busy || !!v.error}
+                onClick={(e) => e.stopPropagation()} onChange={() => toggle(v.id)} /></td>
+              <td>{!v.error && <img loading="lazy" src={`/api/missions/${m.id}/recordings/${v.id}/thumb?h=96`} alt="" className="thumb" />}</td>
+              <td className="mono bidi">{v.part ? <span className="badge part">part {v.part}</span> : null} {v.rel_path}</td>
+              <td className="num mono">{fmtDuration(v.duration_s)}</td>
+              <td className="muted">{v.width ? `${v.width}×${v.height}` : ""}{v.nominal_fps ? ` · ${Number(v.nominal_fps).toFixed(0)} fps` : ""}</td>
+              <td className="mono muted">{v.start_utc ?? "unknown"}</td>
+              <td>{v.error ? <span className="badge failed" title={v.error}>cannot decode</span> : <span className={`badge ${v.state}`}>{STATE_TEXT[v.state] ?? v.state}</span>}</td>
+              <td className="num">{v.analysed ? <a href={`#/m/${m.id}/events/rec-${v.id}`} onClick={(e) => e.stopPropagation()}>{v.events}</a> : ""}</td>
+              <td>{v.analysed && <a className="play-link" href={`#/m/${m.id}/events/play-${v.id}`} onClick={(e) => e.stopPropagation()}
+                title="Play with the detections drawn, review and edit them, and approve for learning">▶ Review</a>}</td>
+            </tr>))}</tbody>
+        </table>)}
+      <p className="muted" style={{ marginBottom: 0 }}>New videos are ticked for you. Tick an analysed video to analyse it again; its newest analysis is the one that counts.
+        Ticking one part of a merged recording analyses all of its parts.</p>
     </div>
   );
 }
