@@ -60,6 +60,45 @@ class TrackerParams:
     # nothing on the next frame. Such a track may still take the nearest box of its family within this many box
     # sizes per analysed frame ("byte" only).
     first_jump: float = 1.0
+    # Re-linking ("byte" only): a confirmed track that lost its target is kept this many seconds longer than
+    # gap_s, and takes a box no track overlaps when the box is within relink_dist box heights of where the track
+    # was heading, of a similar size, and (relink_app > 0) looks alike: the colours inside the box, compared with
+    # what the track looked like. So a person or vehicle hidden for a moment, or missed by the detector for a few
+    # frames, stays one event instead of two. 0 turns it off.
+    relink_s: float = 0.0
+    relink_dist: float = 1.0
+    relink_app: float = 0.0
+    # A box mostly inside a box a track holds on this frame (or holding one), of the same family, starts no track:
+    # half a person, or two people in one box, next to a person already followed. 0 turns it off.
+    nested_ioa: float = 0.0
+
+
+def appearance(img, box) -> list[float] | None:
+    """Colours inside the middle of a box: a hue-saturation histogram (8 x 4 bins) of its inner 60 %, summing to
+    1; None when the box is too small to say."""
+    import cv2
+    x1, y1, x2, y2 = box
+    w, h = x2 - x1, y2 - y1
+    a, b = int(max(0, x1 + 0.2 * w)), int(max(0, y1 + 0.2 * h))
+    c, d = int(min(img.shape[1], x2 - 0.2 * w)), int(min(img.shape[0], y2 - 0.2 * h))
+    if c - a < 3 or d - b < 3:
+        return None
+    hsv = cv2.cvtColor(np.ascontiguousarray(img[b:d, a:c]), cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1], None, [8, 4], [0, 180, 0, 256]).ravel()
+    tot = float(hist.sum())
+    return [round(float(v) / tot, 4) for v in hist] if tot else None
+
+
+def similarity(a, b) -> float:
+    """Bhattacharyya coefficient of two histograms: 1 alike, 0 nothing in common."""
+    return float(np.sum(np.sqrt(np.asarray(a, float) * np.asarray(b, float))))
+
+
+def ioa(a, b) -> float:
+    """How much of box a lies inside box b."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    return ix * iy / max((a[2] - a[0]) * (a[3] - a[1]), 1e-6)
 
 
 def iou(a, b) -> float:
@@ -90,6 +129,8 @@ class Track:
     mean: list | None = None        # Kalman state ("byte"), at time kf_t
     cov: list | None = None
     kf_t: float = 0.0
+    app: list | None = None         # what it looks like (appearance), when re-linking compares looks
+    relinked: int = 0               # times it took up its target again after losing it
 
     def predict(self, t: float) -> list[float]:
         """Constant-velocity prediction from the last match (the "iou" tracker)."""
@@ -162,9 +203,10 @@ class Tracker:
             rec["box"] = warp_box(rec["box"], a)
 
     def update(self, t: float, dets: list[tuple[list[float], str, float]],
-               motion=None) -> tuple[list[tuple[Track, list[float], str, float]], list[Closed], list[Track]]:
+               motion=None, image=None) -> tuple[list[tuple[Track, list[float], str, float]], list[Closed], list[Track]]:
         """Feed one analysed frame. dets: (box, cls, score). ``motion``: the camera's motion since the previous
-        analysed frame as a 2x3 affine (moving cameras), or None for a fixed camera.
+        analysed frame as a 2x3 affine (moving cameras), or None for a fixed camera. ``image``: the frame, for
+        comparing looks when re-linking.
 
         Returns (matched observations as (track, box, cls, score), closed tracks, newly created tracks).
         """
@@ -244,6 +286,21 @@ class Tracker:
                 used_d.add(j)
         for i, j in pairs_matched[n_iou:]:
             obs.append(self._match(self.tracks[i], dets[j], t))
+        looks = {}
+        if byte and self.p.relink_app > 0 and image is not None:
+            looks = {j: appearance(image, dets[j][0]) for j in range(len(dets))}
+        if byte and self.p.relink_s > 0:      # re-linking: a lost target taken up again
+            for i, j in self._relink(preds, dets, strong, used_t, used_d, looks, t):
+                used_t.add(i)
+                used_d.add(j)
+                tr = self.tracks[i]
+                tr.relinked += 1
+                tr.mean, tr.cov = kalman.initiate(dets[j][0])
+                tr.kf_t = t
+                obs.append(self._match(tr, dets[j], t))
+        for i, j in pairs_matched:
+            if looks.get(j) is not None:
+                self._look(self.tracks[i], looks[j])
         used_d |= set(weak)                   # a weak box never starts a track
         closed: list[Closed] = []
         keep: list[Track] = []
@@ -251,13 +308,16 @@ class Tracker:
             if i in used_t:
                 keep.append(tr)
                 continue
-            if t - tr.t > self.p.gap_s:
+            if t - tr.t > self.p.gap_s + (self.p.relink_s if byte and tr.state == "confirmed" else 0.0):
                 closed.append(self._close(tr, "left_frame" if self._touches_edge(tr.box) else "lost"))
             else:
                 keep.append(tr)
         new: list[Track] = []
+        held = [(tr.family, tr.box) for i, tr in enumerate(self.tracks) if i in used_t] if self.p.nested_ioa > 0 else []
         for j, (db, cls, score) in enumerate(dets):
             if j in used_d:
+                continue
+            if held and any(f == family(cls) and max(ioa(db, b), ioa(b, db)) >= self.p.nested_ioa for f, b in held):
                 continue
             self.counter += 1
             box = [round(float(x), 2) for x in db]
@@ -269,6 +329,8 @@ class Tracker:
                 tr.kf_t = t
             if self.p.min_hits <= 1:
                 tr.state = "confirmed"
+            if looks.get(j) is not None:
+                tr.app = looks[j]
             for r in self.recent:
                 if r.get("family", "vehicle") == tr.family and 0 <= t - r["t"] <= self.p.reentry_s:
                     cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
@@ -282,6 +344,56 @@ class Tracker:
         self.tracks = keep
         self.recent = [r for r in self.recent if t - r["t"] <= self.p.reentry_s]
         return obs, closed, new
+
+    @staticmethod
+    def _look(tr: Track, look: list[float]) -> None:
+        tr.app = look if tr.app is None else [round(0.8 * a + 0.2 * b, 4) for a, b in zip(tr.app, look)]
+
+    def _relink(self, preds, dets, strong, used_t, used_d, looks, t) -> list[tuple[int, int]]:
+        """Pairs (track, box) where a confirmed track that missed at least one frame takes up a box nothing else
+        took: near where it was heading (relink_dist box heights, plus a third of the way its speed explains),
+        a similar height, and looking alike when looks are compared."""
+        cands = []
+        for i, (tr, pb) in enumerate(zip(self.tracks, preds)):
+            if i in used_t or tr.state != "confirmed" or t - tr.t < 1.5 * self.p.frame_s:
+                continue
+            h = max(tr.box[3] - tr.box[1], 1.0)
+            dt = t - tr.t
+            # where it was heading, but never more than its last speed explains; a long gap trusts the last box more
+            lx, ly = (tr.box[0] + tr.box[2]) / 2, (tr.box[1] + tr.box[3]) / 2
+            px, py = (pb[0] + pb[2]) / 2, (pb[1] + pb[3]) / 2
+            for j in strong:
+                if j in used_d:
+                    continue
+                db, dcls, _ = dets[j]
+                if family(dcls) != tr.family:
+                    continue
+                dh = max(db[3] - db[1], 1.0)
+                ph = max(pb[3] - pb[1], 1.0)      # the height it was heading to: a car overtaken grows
+                if not (0.67 <= dh / h <= 1.5 or 0.67 <= dh / ph <= 1.5):
+                    continue
+                cx, cy = (db[0] + db[2]) / 2, (db[1] + db[3]) / 2
+                d = min(((cx - px) ** 2 + (cy - py) ** 2) ** 0.5, ((cx - lx) ** 2 + (cy - ly) ** 2) ** 0.5)
+                reach = self.p.relink_dist * h * min(1.0, 0.5 + dt)
+                if d > reach:
+                    continue
+                cost = d / reach
+                if self.p.relink_app > 0:
+                    if tr.app is None or looks.get(j) is None:
+                        continue
+                    sim = similarity(tr.app, looks[j])
+                    if sim < self.p.relink_app:
+                        continue
+                    cost += 2 * (1 - sim)
+                cands.append((cost, i, j))
+        out, ti, dj = [], set(), set()
+        for _, i, j in sorted(cands):
+            if i in ti or j in dj:
+                continue
+            ti.add(i)
+            dj.add(j)
+            out.append((i, j))
+        return out
 
     def _match(self, tr: Track, det, t: float):
         db, cls, score = det

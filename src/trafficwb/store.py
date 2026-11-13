@@ -1042,6 +1042,25 @@ CREATE TABLE teacher_label (
   PRIMARY KEY(source_version_id, frame_key, teacher)
 );
 """,
+    24: """
+-- A target the operator marked on a recording (follow.py): their boxes, where the app followed it, and the range
+-- it is in view. Once confirmed, the frames in that range are training labels of its class (learning).
+CREATE TABLE marked_target (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  cls TEXT NOT NULL,
+  marks TEXT NOT NULL,                     -- JSON [{"t", "box"}]: the operator's own boxes
+  steps TEXT NOT NULL,                     -- JSON [{"t", "box", "score"}]: where it was followed
+  start_t REAL,                            -- the range it is in view (suggested, then as the operator set it)
+  end_t REAL,
+  state TEXT NOT NULL,                     -- suggested | confirmed
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX ix_marked_target ON marked_target(source_version_id);
+""",
 }
 
 

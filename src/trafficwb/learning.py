@@ -86,6 +86,12 @@ TEACH_OVERLAP = 0.30          # a teacher box this close to a reviewed box (or o
 TEACHER_NAMES = {"sam3": "SAM 3.1"}
 
 
+def learnt(cls: str | None) -> str | None:
+    """The class a label is learnt and scored as: a vehicle class or person as ``trainable``; any other class (a
+    target the operator marked and followed) as itself."""
+    return trainable(cls) or cls
+
+
 def trainable(cls: str | None) -> str | None:
     """The class a model learns a label as, or None when it cannot learn it."""
     if cls in VEHICLE_CLASSES:
@@ -491,6 +497,8 @@ class LearningService:
         evs, obs, track_of, _ = self._tracks(vid)
         by_track = {track_of.get(e.id): e for e in evs}
         taken = [t for _, t, _ in reviewed if t is not None]
+        from .follow import SURE, MarkedTargets
+        marked = MarkedTargets(self.m, self.views._path).list(vid, state="confirmed")
         out = [x for x in reviewed if x[1] is not None]
         for t, boxes in rows.items():
             if any(abs(t - q) < FRAME_MIN_GAP_S for q in taken):
@@ -514,6 +522,12 @@ class LearningService:
                     ign.append(box)
                 else:
                     pos.append({"box": box, "cls": e.cls, "uid": f"{e.key}@{t:.3f}", "source": "human"})
+            for tg in marked:                          # a target the operator marked, where it was followed
+                if tg["start_t"] is None or not tg["start_t"] - 1e-6 <= t <= tg["end_t"] + 1e-6:
+                    continue
+                st = min(tg["steps"], key=lambda x: abs(x["t"] - t), default=None)
+                if st is not None and abs(st["t"] - t) < 0.05 and st["score"] >= SURE:
+                    pos.append({"box": st["box"], "cls": tg["cls"], "uid": f"M{tg['id']}@{t:.3f}", "source": "marked"})
             pos, ign = self._merge_teacher(pos, ign, vetoes, boxes, f"{vid}@{t:.3f}")
             out.append((ItemLabels(vid, "sam", pos, ign, None), t,
                         hashlib.sha256(f"{r['sha256']}|{t:.6f}".encode()).hexdigest()))
@@ -566,10 +580,27 @@ class LearningService:
         if not self.video:
             return [(self.labels(r["id"]), None, r["sha256"])]
         kind, frames = self.video_frames(r["id"])
+        frames = self._with_marked(r["id"], frames)
         if not frames:
             return [(ItemLabels(r["id"], kind, [], [], None), None, r["sha256"])]
-        return [(ItemLabels(r["id"], kind, f["positives"], f["ignore_boxes"], None), f["t"],
+        return [(ItemLabels(r["id"], f.get("review", kind), f["positives"], f["ignore_boxes"], None), f["t"],
                  hashlib.sha256(f"{r['sha256']}|{f['t']:.6f}".encode()).hexdigest()) for f in frames]
+
+    def _with_marked(self, vid: int, frames: list[dict]) -> list[dict]:
+        """A recording's training frames with the confirmed targets the operator marked and followed (follow.py):
+        on a frame already taken their box joins its labels; otherwise their frame is a sample of its own where only
+        their box teaches ("marked": the rest of the frame is ignored)."""
+        from .follow import MarkedTargets
+        out = [dict(f) for f in frames]
+        for tg in MarkedTargets(self.m, self.views._path).list(vid, state="confirmed"):
+            for fr in MarkedTargets.frames(tg):
+                pos = {"box": fr["box"], "cls": tg["cls"], "uid": f"M{tg['id']}@{fr['t']:.3f}", "source": "marked"}
+                same = next((f for f in out if abs(f["t"] - fr["t"]) < 1e-3), None)
+                if same is not None:
+                    same["positives"] = [*same["positives"], pos]
+                else:
+                    out.append({"t": round(fr["t"], 6), "positives": [pos], "ignore_boxes": [], "review": "marked"})
+        return sorted(out, key=lambda f: f["t"])
 
     def image_of(self, row: dict):
         """The pixels of a dataset member: the still image, or the recording's frame at its time."""
@@ -641,7 +672,8 @@ class LearningService:
         stats: dict = {"images": len(members), "groups": len(groups), "duplicates_dropped": dupes, "skipped": skipped,
                        "frames": sum(1 for m in members if m[3] is not None),
                        "recordings": len({m[0]["id"] for m in members if m[3] is not None}),
-                       "splits": {s: {"images": 0, "groups": 0, "objects": 0, "full": 0, "partial": 0, "sam": 0}
+                       "splits": {s: {"images": 0, "groups": 0, "objects": 0, "full": 0, "partial": 0, "sam": 0,
+                                      "marked": 0}
                                   for s in SPLITS},
                        **({"teacher": {"name": teacher, **taught}} if teacher else {}),
                        "by_condition": {}, "by_view": {}}
@@ -826,7 +858,10 @@ class LearningService:
             final, n = base / f"{stem}_{n}", n + 1
         tmp = final.with_name(final.name + ".partial")
         (tmp / "images").mkdir(parents=True)
-        cats = [{"id": i + 1, "name": c} for i, c in enumerate(TRAINABLE)]
+        own = sorted({p["cls"] for it in items for p in it["row"]["labels"]["positives"]
+                      if trainable(p["cls"]) is None and p["cls"]})
+        # the six classes every model learns, then targets the operator marked (7, 8, ...)
+        cats = [{"id": i + 1, "name": c} for i, c in enumerate((*TRAINABLE, *own))]
         cid = {c["name"]: c["id"] for c in cats}
         files = []
         multi = len({it["mission_id"] for it in items}) > 1
@@ -859,14 +894,15 @@ class LearningService:
                                "sha256": mrow["sha256"], "source_file": mrow["rel_path"], "frame_t": frame_t,
                                "view": mrow["view_key"],
                                "date_block": mrow["block"], "condition": mrow["condition"], "review": mrow["review"],
-                               "unlabelled_area": "background inside included regions" if mrow["review"] == "full" else "ignore",
+                               "unlabelled_area": "background inside included regions" if mrow["review"] in ("full", "sam")
+                               else "ignore",
                                "include_regions": [r.polygon for r in regions.include],
                                "exclude_regions": [r.polygon for r in regions.exclude],
                                "ignore_boxes": mrow["labels"]["ignore_boxes"]})
                 for p in mrow["labels"]["positives"]:
                     x1, y1, x2, y2 = p["box"]
                     ann_id += 1
-                    anns.append({"id": ann_id, "image_id": img_id, "category_id": cid.get(trainable(p["cls"]) or "car", cid["car"]),
+                    anns.append({"id": ann_id, "image_id": img_id, "category_id": cid.get(learnt(p["cls"]), cid["car"]),
                                  "bbox": [x1, y1, x2 - x1, y2 - y1], "area": (x2 - x1) * (y2 - y1), "iscrowd": 0,
                                  "label_source": p["source"]})
             f = tmp / f"annotations_{split}.json"
@@ -903,7 +939,7 @@ class LearningService:
              json.dumps([{"mission_id": s["mission_id"], "dataset_id": s["dataset_id"]} for s in sources]))).lastrowid
         # Labels of a class the detector does not look for (people, for a vehicle-only detector) are neither found
         # nor missed: they are scored as "ignore".
-        looks_for = {trainable(c) for c in (getattr(detector, "classes", None) or {}).values()} - {None} \
+        looks_for = {learnt(c) for c in (getattr(detector, "classes", None) or {}).values()} - {None} \
             or set(VEHICLE_CLASSES)
         per_image, took = [], []
         try:
@@ -917,7 +953,7 @@ class LearningService:
                 t0 = time.perf_counter()
                 found = detector.detect(img)
                 took.append(time.perf_counter() - t0)
-                dets = [(list(map(float, d.box)), trainable(d.cls) or d.cls, float(d.score)) for d in found]
+                dets = [(list(map(float, d.box)), learnt(d.cls), float(d.score)) for d in found]
                 view = ls.views.current_view(vid)
                 regions = RegionSet.load(ls.con, view) if view is not None and ls.views.regions_applicable(view) else RegionSet([])
                 per_image.append(self._score_image(mrow, dets, regions, iou, looks_for))
@@ -949,9 +985,9 @@ class LearningService:
         lab = mrow["labels"]
         full = mrow["review"] == "full"
         looks_for = looks_for or set(VEHICLE_CLASSES)
-        refs = [p | {"cls": trainable(p["cls"]) or p["cls"]} for p in lab["positives"]
-                if regions.contains_box(tuple(p["box"])) and trainable(p["cls"]) in looks_for]
-        ignore = list(lab["ignore_boxes"]) + [p["box"] for p in lab["positives"] if trainable(p["cls"]) not in looks_for]
+        refs = [p | {"cls": learnt(p["cls"])} for p in lab["positives"]
+                if regions.contains_box(tuple(p["box"])) and learnt(p["cls"]) in looks_for]
+        ignore = list(lab["ignore_boxes"]) + [p["box"] for p in lab["positives"] if learnt(p["cls"]) not in looks_for]
         dets = [d for d in dets if d[1] in looks_for]
         lab = {**lab, "ignore_boxes": ignore}
         preds = sorted([d for d in dets if regions.contains_box(tuple(d[0]))], key=lambda d: -d[2])
@@ -1005,7 +1041,8 @@ class LearningService:
 
     # ---------- Run mode "full auto" ----------
     _REVIEW_TABLES = (("review_decision", " AND bulk_approval_id IS NULL"), ("annotation_revision", ""),
-                      ("candidate_revision", ""), ("event_revision", ""), ("recording_review", ""))
+                      ("candidate_revision", ""), ("event_revision", ""), ("recording_review", ""),
+                      ("marked_target", " AND state='confirmed' AND deleted_at IS NULL"))
 
     def _review_marks(self) -> dict:
         return {t: self.con.execute(f"SELECT COALESCE(MAX(id), 0) FROM {t}").fetchone()[0] for t, _ in self._REVIEW_TABLES}

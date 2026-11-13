@@ -54,6 +54,7 @@ def test_background_only_where_someone_looked():
     assert m[5, 5] == 0             # excluded
     assert m[25, 25] == 0           # an unresolved candidate
     assert tr.background_mask({"review": "partial"}, 100, 100).max() == 0
+    assert tr.background_mask({"review": "sam"}, 100, 100).min() == 1       # SAM 3.1 says the rest is empty road
 
 
 def test_letterbox_matches_the_app_and_maps_classes(tmp_path):

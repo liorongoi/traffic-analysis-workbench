@@ -246,6 +246,7 @@ class JobManager:
         own = [c for c in words if c not in VEHICLE_CLASSES]
         classes = {i: c for i, c in standard_classes(own).items()
                    if not (c in VEHICLE_CLASSES and c in words and not words[c])}
+        classes |= getattr(det, "own", {})       # targets this model was trained on, by their own names
         return det.with_classes(classes), card
 
     # ---------- scan areas found by SAM 3.1 ----------

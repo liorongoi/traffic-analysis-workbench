@@ -170,7 +170,8 @@ def test_review_can_set_a_class_of_the_missions_own(tmp_path):
 
 _rng = np.random.default_rng(7)
 WORLD = cv2.GaussianBlur(_rng.integers(0, 255, (H, 1000, 3), dtype=np.uint8), (0, 0), 1.2)
-WORLD2 = cv2.GaussianBlur(np.random.default_rng(99).integers(0, 255, (H, 1000, 3), dtype=np.uint8), (0, 0), 1.2)
+# Another scene after the cut: a coarser texture (fine noise on both sides of a cut matches by chance in 20 % of corners).
+WORLD2 = cv2.GaussianBlur(np.random.default_rng(99).integers(0, 255, (H, 1000, 3), dtype=np.uint8), (0, 0), 4)
 
 
 def panning(t: float, cut_at: float | None = None) -> np.ndarray:

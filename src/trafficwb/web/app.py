@@ -104,6 +104,24 @@ class AnalyseBody(BaseModel):
     version_ids: list[int]                 # the videos ticked in the catalog
 
 
+class MarkBody(BaseModel):
+    cls: str                               # what the target is (a class of the mission, or a new one)
+    t: float                               # the frame the box was drawn on
+    box: list[float]                       # x1, y1, x2, y2 in the recording's pixels
+
+
+class MarkCorrectBody(BaseModel):
+    t: float
+    box: list[float]
+
+
+class MarkUpdateBody(BaseModel):
+    start_t: float | None = None
+    end_t: float | None = None
+    state: str | None = None               # suggested | confirmed
+    cls: str | None = None
+
+
 class RecordingReviewBody(BaseModel):
     action: str                            # approve | confirm_rest_and_approve | reopen
 
@@ -2207,6 +2225,61 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         if tel is None:
             return {"source": None}
         return {"source": tel.source, "summary": tel.summary(), "samples": tel.samples}
+
+    # ---------- targets the operator marks and the app follows (learning a target SAM 3.1 does not know) ----------
+    def _marks(m: Mission):
+        from ..follow import MarkedTargets
+        svc = _video(m)
+        return MarkedTargets(m, svc.path)
+
+    def _mark_call(fn):
+        from ..follow import MarkError
+        try:
+            return fn()
+        except MarkError as exc:
+            raise ApiError(400, "mark", str(exc)) from None
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/marks")
+    def marks_list(version_id: int, m: Mission = Depends(mission)):
+        return {"targets": _marks(m).list(version_id)}
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/marks")
+    def marks_add(version_id: int, body: MarkBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """A box around a target on one frame: the app follows it both ways and suggests where it is in view."""
+        mt = _marks(m)
+        if m.con.execute("SELECT 1 FROM source_version WHERE id=?", (version_id,)).fetchone() is None:
+            raise ApiError(404, "no_recording", "That recording is not in this mission.")
+        out = _mark_call(lambda: mt.add(version_id, body.cls, body.t, body.box, u.username))
+        own = getattr(m.config(), "sam3_words", None) or {}
+        from ..detect import VEHICLE_CLASSES
+        name = out["cls"]
+        if name not in VEHICLE_CLASSES and name != "person" and name not in own:
+            # a new kind of target: the mission lists it (SAM 3.1 is asked for it by name too)
+            try:
+                m.update_config(u.username, f"class {name} added by marking a target",
+                                sam3_words={**own, name: [name]})
+            except Exception:  # noqa: BLE001 - a name SAM 3.1 cannot take still works for marking and training
+                pass
+        return out
+
+    @app.post("/api/missions/{mission_id}/marks/{target_id}/correct")
+    def marks_correct(target_id: int, body: MarkCorrectBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Another box of the same target where following went wrong or lost it: followed again from every box."""
+        return _mark_call(lambda: _marks(m).correct(target_id, body.t, body.box, u.username))
+
+    @app.put("/api/missions/{mission_id}/marks/{target_id}")
+    def marks_update(target_id: int, body: MarkUpdateBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Set where the target is in view (start, end), confirm it for training, or rename what it is."""
+        out = _mark_call(lambda: _marks(m).update(target_id, u.username, body.start_t, body.end_t, body.state,
+                                                  body.cls))
+        if body.state == "confirmed":
+            _auto_soon(m.id)
+        return out
+
+    @app.delete("/api/missions/{mission_id}/marks/{target_id}")
+    def marks_delete(target_id: int, m: Mission = Depends(mission), u: User = Depends(user)):
+        _mark_call(lambda: _marks(m).remove(target_id, u.username))
+        return {"ok": True}
 
     @app.post("/api/missions/{mission_id}/recordings/{version_id}/zones")
     def zones_add(version_id: int, body: ZoneBody, m: Mission = Depends(mission), u: User = Depends(user)):
