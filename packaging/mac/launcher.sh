@@ -2,8 +2,8 @@
 # LanePulse.app: starts the LanePulse server if it is not running, then opens it in the browser.
 # Everything LanePulse keeps (data, backups, models, logs) is in ~/LanePulse; the app itself changes nothing
 # inside its own folder. The first time it is opened, and after an update, it sets up what it runs on (Python, the
-# packages and the models) in ~/LanePulse/runtime, from the internet, in a Terminal window that shows the progress.
-# After that it runs offline.
+# packages and the models) in ~/LanePulse/runtime, from the files the app carries (no internet), in a Terminal window
+# that shows the progress.
 APP="$(cd "$(dirname "$0")/../.." && pwd)"
 RES="$APP/Contents/Resources"
 VER="$(cat "$RES/version.txt")"
@@ -13,9 +13,30 @@ DATA="$HOME_DIR/data"; MODELS="$HOME_DIR/models"; BACKUPS="$HOME_DIR/backups"; L
 RT="$HOME_DIR/runtime"; PY="$RT/python/bin/python3"
 PORT="${LANEPULSE_PORT:-8765}"
 URL="http://127.0.0.1:$PORT"
-mkdir -p "$DATA" "$MODELS" "$BACKUPS" "$LOGS"
+LAUNCH="$HOME_DIR/.launch"
+mkdir -p "$DATA" "$MODELS" "$BACKUPS" "$LOGS" "$LAUNCH"
+
+# The launch screen: a page in the browser that shows the version and what the app is doing, then moves on to
+# LanePulse when it answers. It reads status.js, which lp_status rewrites: lp_status <state> [text] [detail] [step].
+# States: check, setup, start, ready, failed.
+js() { printf '%s' "$1" | tr '\r\n\t' '   ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | cut -c1-400; }
+lp_status() {
+  printf 'lpStatus({"state":"%s","text":"%s","detail":"%s","step":"%s","version":"%s","url":"%s"});\n' \
+    "$1" "$(js "${2:-}")" "$(js "${3:-}")" "${4:-}" "$VER" "$URL" > "$LAUNCH/status.js.tmp" && mv -f "$LAUNCH/status.js.tmp" "$LAUNCH/status.js"
+}
+PAGE=""
+if [ -z "${LANEPULSE_NO_BROWSER:-}" ] && [ -f "$RES/launch/index.html" ]; then
+  rm -rf "$LAUNCH/fonts"; [ ! -d "$RES/launch/fonts" ] || cp -R "$RES/launch/fonts" "$LAUNCH/fonts"
+  sed -e "s|__LP_VERSION__|$VER|g" -e "s|__LP_BUILD__|$BUILD|g" -e "s|__LP_URL__|$URL|g" "$RES/launch/index.html" > "$LAUNCH/index.html"
+  PAGE="$LAUNCH/index.html"
+fi
+# (While a setup runs, its window keeps the status up to date.)
+{ [ -f "$HOME_DIR/.setup.pid" ] && kill -0 "$(cat "$HOME_DIR/.setup.pid")" 2>/dev/null; } || lp_status check
+# Opened again by the setup window when it is done: the launch screen is already showing.
+[ -z "$PAGE" ] || [ -n "${LANEPULSE_PAGE_OPEN:-}" ] || open "$PAGE" 2>/dev/null || PAGE=""
 
 fail() {
+  lp_status failed "$1" "" "${2:-start}"
   osascript -e "display alert \"LanePulse\" message \"$1\" as critical" >/dev/null 2>&1 || echo "$1" >&2
   exit 1
 }
@@ -33,14 +54,16 @@ fi
 if [ "$(cat "$RT/.build" 2>/dev/null)" != "$BUILD" ]; then
   LOCK="$HOME_DIR/.setup.pid"
   if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK")" 2>/dev/null; then
-    fail "LanePulse is still being set up. The Terminal window shows the progress; LanePulse opens when it is done."
+    # The setup window keeps the launch screen up to date; the screen just opened follows it.
+    [ -n "$PAGE" ] && exit 0
+    fail "LanePulse is still being set up. The Terminal window shows the progress; LanePulse opens when it is done." setup
   fi
   if [ -n "${LANEPULSE_NO_BROWSER:-}" ]; then
     # Without a screen (tests): set up here, then continue.
     echo $$ > "$LOCK"
     "$RES/setup/setup.sh" "$HOME_DIR" "$BUILD" 2>&1 | tee "$LOGS/setup.log"
     rc="${PIPESTATUS[0]}"; rm -f "$LOCK"
-    [ "$rc" = 0 ] || fail "LanePulse could not be set up. Details are in $LOGS/setup.log"
+    [ "$rc" = 0 ] || fail "LanePulse could not be set up. Details are in $LOGS/setup.log" setup
   else
     cat > "$HOME_DIR/Set up LanePulse.command" <<'CMD'
 #!/bin/bash
@@ -50,20 +73,35 @@ APP="$(cat "$H/.app-path")"
 echo $$ > "$H/.setup.pid"
 printf '\033]0;Setting up LanePulse\007'
 echo "Setting up LanePulse. This downloads about 2 GB and takes a few minutes; keep this window open."
+VER="$(cat "$APP/Contents/Resources/version.txt")"
+js() { printf '%s' "$1" | tr '\r\n\t' '   ' | perl -pe 's/\e\[[0-9;?]*[A-Za-z]//g' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | cut -c1-400; }
+st() { printf 'lpStatus({"state":"%s","text":"%s","detail":"%s","step":"setup","version":"%s"});\n' "$1" "$(js "$2")" "$(js "$3")" "$VER" \
+  > "$H/.launch/status.js.tmp" && mv -f "$H/.launch/status.js.tmp" "$H/.launch/status.js"; }
+# Shows the setup's current step and its latest line on the launch screen while it runs.
+( while [ -f "$H/.setup.pid" ]; do
+    LOG="$H/logs/setup.log"
+    STEP="$(grep '^== ' "$LOG" 2>/dev/null | tail -1 | cut -c4-)"
+    LAST="$(tail -c 600 "$LOG" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' | tail -1)"
+    st setup "${STEP:-Checking the disk space}" "$LAST"
+    sleep 1
+  done ) &
 if "$APP/Contents/Resources/setup/setup.sh" "$H" "$(cat "$APP/Contents/Resources/build.txt")" 2>&1 | tee "$H/logs/setup.log"; [ "${PIPESTATUS[0]}" = 0 ]; then
-  rm -f "$H/.setup.pid"
+  rm -f "$H/.setup.pid"; wait
   echo "Opening LanePulse. You can close this window."
-  open "$APP"
-  sleep 3
+  LANEPULSE_PAGE_OPEN=1 "$APP/Contents/MacOS/LanePulse"
+  sleep 2
 else
-  rm -f "$H/.setup.pid"
+  rm -f "$H/.setup.pid"; wait
+  st failed "Setup did not finish. Open LanePulse again: it continues from where it stopped." \
+    "$(grep 'Setup did not finish' "$H/logs/setup.log" | tail -1)"
   echo
-  echo "Nothing was changed outside the LanePulse folder. Check the internet connection and open LanePulse again:"
+  echo "Nothing was changed outside the LanePulse folder. Open LanePulse again (see the reason above):"
   echo "it continues from where it stopped. The details are in $H/logs/setup.log"
   read -r -p "Press Return to close."
 fi
 CMD
     chmod +x "$HOME_DIR/Set up LanePulse.command"
+    lp_status setup "Preparing the setup" "" setup
     open -a Terminal "$HOME_DIR/Set up LanePulse.command" \
       || fail "LanePulse could not open Terminal to set itself up. Double-click \"Set up LanePulse.command\" in $HOME_DIR."
     exit 0
@@ -80,6 +118,7 @@ if up && [ "$running" != "$VER" ]; then
   for _ in $(seq 30); do up || break; sleep 1; done
 fi
 
+lp_status start
 if ! up; then
   if [ -f "$LOGS/server.log" ] && [ "$(stat -f%z "$LOGS/server.log" 2>/dev/null || echo 0)" -gt 10000000 ]; then
     mv -f "$LOGS/server.log" "$LOGS/server.old.log"
@@ -125,4 +164,6 @@ read -r -p "Press Return to close."
 CMD
 chmod +x "$HOME_DIR/Stop LanePulse.command" "$HOME_DIR/Import Model.command" "$HOME_DIR/Help another computer.command"
 
-[ -n "${LANEPULSE_NO_BROWSER:-}" ] || open "$URL"
+lp_status ready
+# The launch screen moves on to LanePulse by itself; without it, open LanePulse directly.
+[ -n "${LANEPULSE_NO_BROWSER:-}" ] || [ -n "$PAGE" ] || open "$URL"
