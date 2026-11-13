@@ -328,3 +328,69 @@ def test_saved_models_are_frozen_and_checked(tmp_path):
     assert not lib.saved()[0]["installed"]
     lib.remove("Night cars")
     assert lib.saved() == [] and (models / "det" / "1" / "model.onnx").exists()
+
+
+# ------------------------------------------------------------------ SAM 3.1 as the teacher
+
+class Teacher(FakeDetector):
+    """The red and blue boxes, plus an unsure box and one of a class no detector here learns, like SAM 3.1 would."""
+
+    def detect(self, img):
+        out = super().detect(img)
+        return out + [Detection((10.0, 10.0, 40.0, 40.0), "car", 0.4, {"car": 0.4}),
+                      Detection((500.0, 10.0, 560.0, 60.0), "tractor", 0.8, {"tractor": 0.8})]
+
+
+def test_sam_labels_what_nobody_reviewed_and_reviews_win(mission, monkeypatch):
+    m, _, _ = mission
+    rs, ls = ReviewService(m), LearningService(m)
+    v = vids(m)
+    rs.approve(v[0], "lior")
+    truck = next(o for o in rs.objects(v[1]) if o.cls == "truck")
+    rs.reclass(v[1], truck.uid, "bus", "lior")
+    car = next(o for o in rs.objects(v[1]) if o.cls == "car")
+    rs.remove(v[1], car.uid, "lior")
+    assert ls.taught("sam3") == {"samples": 0, "sources": 0, "untaught": len(v) - 1}
+
+    # Everything not approved one by one is labelled once per teacher version and words.
+    out = ls.teach(Teacher(), "sam3", "k1")
+    assert out["labelled"] == len(v) - 1 and out["left"] == 0
+    assert ls.teach(Teacher(), "sam3", "k1")["labelled"] == 0
+    part = ls.teach(Teacher(), "sam3", "k2", limit=3)
+    assert part["labelled"] == 3 and part["left"] == len(v) - 4
+    ls.teach(Teacher(), "sam3", "k2")
+    assert ls.taught("sam3") == {"samples": len(v) - 1, "sources": len(v) - 1, "untaught": 0}
+
+    # Without the teacher nothing changes: reviewed images only.
+    plain = ls.create_dataset("plain", "lior", ratios=(1, 0, 0))
+    assert plain["stats"]["images"] == 2 and "teacher" not in plain["stats"]
+
+    ds = ls.create_dataset("taught", "lior", ratios=(1, 0, 0), teacher="sam3")
+    assert ds["stats"]["images"] == len(v) and ds["stats"]["teacher"]["samples"] == len(v) - 1
+    mem = {r["source_version_id"]: r for r in ls.members(ds["id"])}
+    assert mem[v[0]]["review"] == "full"                        # an approved image keeps its own labels
+    lab = mem[v[1]]["labels"]
+    assert mem[v[1]]["review"] == "sam"
+    # The operator's bus stays a bus, the car they removed is not brought back, and the other car is SAM's.
+    assert sorted((p["cls"], p["source"]) for p in lab["positives"]) == [("bus", "human"), ("car", "sam")]
+    assert not any(p["box"] == [float(x) for x in car.box] for p in lab["positives"])
+    # Unsure boxes and classes nobody here learns are ignored, not taught as background.
+    assert [10.0, 10.0, 40.0, 40.0] in lab["ignore_boxes"] and [500.0, 10.0, 560.0, 60.0] in lab["ignore_boxes"]
+    lab = mem[v[5]]["labels"]
+    assert sorted(p["cls"] for p in lab["positives"]) == ["car", "car", "truck"]
+    assert {p["source"] for p in lab["positives"]} == {"sam"}
+
+
+def test_sam_labels_never_reach_the_test_split(mission):
+    m, _, _ = mission
+    ls = LearningService(m)
+    ReviewService(m).approve(vids(m)[0], "lior")
+    ls.teach(Teacher(), "sam3", "k1")
+    ds = ls.create_dataset("taught", "lior", ratios=(0.4, 0.2, 0.4), seed=3, teacher="sam3")
+    mem = ls.members(ds["id"])
+    assert {r["split"] for r in mem if r["review"] == "sam"} <= {"train", "val"}
+    test_groups = {(r["view_key"], r["block"]) for r in mem if r["split"] == "test"}
+    assert ds["stats"]["teacher"]["kept_out_of_test"] > 0 or not test_groups
+    assert all(r["review"] == "full" for r in mem if r["split"] == "test")
+    with pytest.raises(LearningError, match="teacher"):
+        ls.create_dataset("x", "lior", teacher="gpt")

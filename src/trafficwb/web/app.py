@@ -97,6 +97,7 @@ class RunModeBody(BaseModel):
     auto_min_reviews: int | None = Field(None, ge=1, le=100000)
     auto_epochs: int | None = Field(None, ge=1, le=500)
     analyse_new: bool | None = None        # video: analyse new videos in the input folder with the mission's model
+    teacher: str | None = None             # none | sam3: SAM 3.1 labels what nobody reviewed, for training
 
 
 class AnalyseBody(BaseModel):
@@ -373,6 +374,7 @@ class DatasetBody(BaseModel):
     ratios: list[float] = Field(default_factory=lambda: [0.7, 0.15, 0.15])
     block_days: int = 1
     seed: int = 0
+    teacher: str = "none"             # sam3: SAM 3.1 first labels what nobody reviewed (a background job)
 
 
 class EvaluateBody(BaseModel):
@@ -1561,7 +1563,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         installed = [md | {"saved_as": by_pack.get((md["name"], md["version"]))} for md in models.installed("vehicle_detection")]
         cfg = m.config()
         auto = {"run_mode": cfg.run_mode, "auto_min_reviews": cfg.auto_min_reviews, "auto_epochs": cfg.auto_epochs,
-                "analyse_new": cfg.analyse_new, "new_reviews": ls.reviews_since_last_dataset(), "history": ls.auto_history()}
+                "analyse_new": cfg.analyse_new, "teacher": cfg.teacher, "new_reviews": ls.reviews_since_last_dataset(),
+                "history": ls.auto_history()}
         return {"in_use": in_use, "eligibility": ls.eligibility(), "datasets": ls.datasets(), "evaluations": ls.evaluations(),
                 "auto": auto, "video": m.input_type == "video",
                 "all_datasets": ls.all_datasets(), "training_runs": ls.training_runs(), "carry_over": ls.carry_over(),
@@ -1575,12 +1578,15 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def run_mode_set(body: RunModeBody, m: Mission = Depends(mission), u: User = Depends(user)):
         """Manual decisions (the operator builds datasets, trains and chooses the model) or full auto (the loop does
         it and adopts a new model for this mission only when it did better)."""
-        from ..store import RUN_MODES
+        from ..store import RUN_MODES, TEACHERS
         if body.run_mode not in RUN_MODES:
             raise ApiError(400, "invalid", "Run mode must be manual or auto.")
+        if body.teacher is not None and body.teacher not in TEACHERS:
+            raise ApiError(400, "invalid", "Learn from must be none or sam3.")
         cfg = m.config()
         changes = {k: v for k, v in (("run_mode", body.run_mode), ("auto_min_reviews", body.auto_min_reviews),
-                                     ("auto_epochs", body.auto_epochs), ("analyse_new", body.analyse_new))
+                                     ("auto_epochs", body.auto_epochs), ("analyse_new", body.analyse_new),
+                                     ("teacher", body.teacher))
                    if v is not None and getattr(cfg, k) != v}
         if changes:
             what = ("run mode set to " + ("full auto" if body.run_mode == "auto" else "manual decisions")
@@ -1593,7 +1599,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         jobs.watch_new_videos(m.id)
         c2 = m.config()
         return {"run_mode": c2.run_mode, "auto_min_reviews": c2.auto_min_reviews, "auto_epochs": c2.auto_epochs,
-                "analyse_new": c2.analyse_new,
+                "analyse_new": c2.analyse_new, "teacher": c2.teacher,
                 "status": {k: v for k, v in status.items() if k != "job"}}
 
     @app.post("/api/missions/{mission_id}/recordings/{version_id}/review")
@@ -1614,7 +1620,25 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     @app.post("/api/missions/{mission_id}/learning/datasets")
     def dataset_create(body: DatasetBody, m: Mission = Depends(mission), u: User = Depends(user)):
         ls = _learn(m)
-        return _learn_call(lambda: ls.create_dataset(body.name, u.username, tuple(body.ratios), body.block_days, body.seed))
+        if body.teacher not in ("none", "sam3"):
+            raise ApiError(400, "invalid", "Learn from must be none or sam3.")
+        if body.teacher == "none":
+            return _learn_call(lambda: ls.create_dataset(body.name, u.username, tuple(body.ratios), body.block_days,
+                                                         body.seed))
+        if not body.name.strip():
+            raise ApiError(400, "invalid", "Give the dataset version a name.")
+        if len(body.ratios) != 3 or any(x < 0 for x in body.ratios) or abs(sum(body.ratios) - 1) > 1e-6:
+            raise ApiError(400, "invalid", "Split ratios must be three non-negative numbers that add up to 1.")
+        try:
+            jobs._sam_if_available()
+        except Exception as exc:  # noqa: BLE001
+            raise ApiError(409, "sam3_unavailable", f"SAM 3.1 cannot label here: {exc}") from None
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "Another job of this mission is running. Try again when it ends.")
+        job = jobs.start(m.id, kind="teach", teacher=body.teacher, author=u.username,
+                         dataset={"name": body.name.strip(), "ratios": list(body.ratios), "block_days": body.block_days,
+                                  "seed": body.seed})
+        return {"teaching": True, "job": job.snapshot()}
 
     @app.get("/api/missions/{mission_id}/learning/datasets/{dataset_id}")
     def dataset_get(dataset_id: int, m: Mission = Depends(mission)):

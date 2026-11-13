@@ -167,3 +167,81 @@ def test_full_auto_adopts_a_better_model_for_the_mission_only(tmp_path):
     assert m.config().vehicle_model == job.result["adopted"] == "v auto 2"
     h = ls.auto_history()[0]
     assert h["action"] == "adopted" and h["detail"]["saved_as"] == "v auto 2" and h["detail"]["previous_model"] is None
+
+
+# ------------------------------------------------------------------ SAM 3.1 as the teacher
+
+def test_sam_labels_frames_of_recordings_nobody_approved(tmp_path, monkeypatch):
+    m = analysed(tmp_path, {"CAM1_20261021T120000Z.mp4": (6.0, crowd, False)})
+    ls, svc = LearningService(m), VideoService(m)
+    (vid,) = [r["id"] for r in svc.recordings()]
+    cars = sorted((e for e in svc.events() if e.cls == "car"), key=lambda e: e.first_t)
+    svc.revise(cars[0].id, "confirm", "lior")
+    svc.revise(cars[1].id, "reject", "lior")
+    reviewed = [f["t"] for f in ls.video_frames(vid)[1]]
+
+    targets = ls.teach_targets()
+    times = [t for _, t in targets]
+    assert targets and all(v == vid for v, _ in targets)
+    assert all(abs(t - q) >= 0.4 - 1e-6 for t in times for q in reviewed)      # away from the reviewed frames
+    assert ls.teach(RedDetector(), "sam3", "k1")["labelled"] == len(targets)
+
+    monkeypatch.setattr(LearningService, "_bucket", staticmethod(lambda seed, key: 0.1))     # the group: train
+    ds = ls.create_dataset("taught", "lior", teacher="sam3")
+    mem = ls.members(ds["id"])
+    sam = [r for r in mem if r["review"] == "sam"]
+    assert len(sam) == len(targets) and len(mem) == len(targets) + len(reviewed)
+    assert ds["stats"]["teacher"]["samples"] == len(targets)
+    for r in sam:
+        pos = r["labels"]["positives"]
+        # The confirmed car keeps the operator's label and the rejected car is never brought back by SAM.
+        assert not any(p["uid"].startswith(cars[1].key + "@") for p in pos)
+        assert all(p["source"] in ("sam", "human") for p in pos)
+        assert all(p["uid"].startswith(cars[0].key + "@") for p in pos if p["source"] == "human")
+    # At 3 s SAM sees only the car the operator rejected: that frame teaches "no vehicle" there.
+    at3 = next(r for r in sam if abs(r["frame_t"] - 3.0) < 0.3)
+    assert ls._teacher_rows(vid, "sam3")[at3["frame_t"]] and at3["labels"]["positives"] == []
+    # Approving the recording makes SAM unnecessary there: its own labels, no SAM frames.
+    ls.approve_recording(vid, "lior", confirm_rest=True)
+    ds2 = ls.create_dataset("approved", "lior", teacher="sam3")
+    assert all(r["review"] == "full" for r in ls.members(ds2["id"]))
+
+
+def test_full_auto_lets_sam_label_then_trains(tmp_path, monkeypatch):
+    from trafficwb import training_env
+    from trafficwb.store import DataRoot
+    from trafficwb.web.jobs import Job, JobManager
+    m = analysed(tmp_path, {"CAM1_20261021T120000Z.mp4": (6.0, crowd, False)})
+    jobs = JobManager(tmp_path / "data", detector_factory=lambda: (RedDetector(), {}))
+    m.update_config("lior", "run mode", run_mode="auto", auto_min_reviews=50, auto_epochs=2, teacher="sam3")
+    monkeypatch.setattr(training_env, "status", lambda wait=False: {"state": "ready", "coco_weights": True})
+    monkeypatch.setattr(LearningService, "_bucket", staticmethod(lambda seed, key: 0.1))
+
+    class Eng:
+        def load(self):
+            pass
+    det = RedDetector()
+    det.engine = Eng()
+    monkeypatch.setattr(jobs, "_sam_if_available", lambda: None)
+    monkeypatch.setattr(jobs, "teacher_for", lambda mm, teacher: (det, "k1"))
+    started = []
+
+    def start(mid, kind="scan_and_process", **p):
+        started.append((kind, p))
+        if kind == "teach":                                     # run it here, not on a thread
+            job = Job(mid, kind, params=p)
+            jobs._teach(job, DataRoot(tmp_path / "data").open_mission(mid))
+            return job
+        return FakeJob({})
+    FakeJob.snapshot = lambda self: {}
+    monkeypatch.setattr(jobs, "start", start)
+
+    # No review at all, and still a round: SAM labels the recording, then a model trains on it.
+    st = jobs.auto_learn(m.id)
+    assert st["state"] == "teaching" and st["untaught"] == 1
+    assert [k for k, _ in started] == ["teach", "train"]
+    ls = LearningService(m)
+    assert [h["action"] for h in ls.auto_history()][:3] == ["train", "taught", "teach"]
+    ds = ls.dataset(started[1][1]["datasets"][-1]["dataset_id"])
+    assert ds["stats"]["teacher"]["samples"] > 0 and ds["params"]["teacher"]["name"] == "sam3"
+    assert jobs.auto_learn(m.id)["state"] == "waiting"          # nothing new to label or learn

@@ -84,7 +84,7 @@ function JobCard({ job, mid, reload, unit }: { job: Job | null; mid: string; rel
   const pct = job && job.total ? Math.round((100 * job.done) / job.total) : 0;
   return (
     <div className="card">
-      <h2>{job?.kind === "search" ? "Search" : "Processing"}</h2>
+      <h2>{job?.kind === "search" ? "Search" : job?.kind === "teach" ? "SAM 3.1 labelling for training" : "Processing"}</h2>
       {!job && <p className="muted">Nothing has run since the server started.</p>}
       {job && (
         <>

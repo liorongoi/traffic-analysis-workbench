@@ -18,6 +18,8 @@ from ..ingest import Monitor, cycle
 from ..process import Processor, RunControl
 from ..store import DataRoot, utcnow
 
+TEACH_PER_ROUND = 600       # full auto: images or frames SAM 3.1 labels before a round trains (the rest next round)
+
 _resource_lock = threading.Lock()
 _training_lock = threading.Lock()      # one training at a time on this computer: it uses the whole GPU or CPU
 _resource_process = None
@@ -333,6 +335,9 @@ class JobManager:
             if job.kind == "train":
                 self._train(job, m)
                 return
+            if job.kind == "teach":
+                self._teach(job, m)
+                return
             if job.kind == "compare_backgrounds":
                 self._compare(job, m)
                 return
@@ -454,6 +459,62 @@ class JobManager:
             if not isinstance(exc, RunCancelled):
                 raise
             job.state = "cancelled"
+
+    def teacher_for(self, m, teacher: str):
+        """The teacher detector and the key of what it labels: SAM 3.1 with the mission's words, reporting boxes from
+        TEACH_FLOOR up (the dataset decides which are sure)."""
+        import hashlib
+        import json as _json
+        from ..learning import TEACH_FLOOR
+        from ..sam3 import Sam3Detector, Sam3DetectorSettings, vehicle_prompts
+        if teacher != "sam3":
+            raise ValueError(f"Unknown teacher: {teacher}")
+        eng = self._sam_if_available()
+        prompts = vehicle_prompts(getattr(m.config(), "sam3_words", None))
+        det = Sam3Detector(eng, Sam3DetectorSettings(score_threshold=TEACH_FLOOR), prompts=prompts)
+        card = eng.pack.card
+        words = hashlib.sha256(_json.dumps({k: list(v) for k, v in sorted(prompts.items())}).encode()).hexdigest()[:12]
+        return det, f"{card.get('name')}/{card.get('version')}|{words}|{TEACH_FLOOR}"
+
+    def _teach(self, job: Job, m) -> None:
+        """SAM 3.1 labels what nobody reviewed (learning.LearningService.teach); then, as asked, a dataset version is
+        frozen with those labels, or (full auto) a training round starts."""
+        from ..learning import LearningService
+        from ..process import RunCancelled
+        p = job.params
+        ls = LearningService(m)
+        teacher = p.get("teacher", "sam3")
+        job.control.stage = "loading SAM 3.1 (about a minute the first time)"
+        det, key = self.teacher_for(m, teacher)
+        det.engine.load()
+        job.control.stage = "SAM 3.1 is labelling what nobody reviewed"
+
+        def progress(n, total):
+            job.total = total
+            job.done = n
+            job.rate_done += 1
+            if job.rate_start is None:
+                job.rate_start = time.time()
+                job.rate_done = 0
+        try:
+            job.result = ls.teach(det, teacher, key, control=job.control, progress=progress, limit=p.get("limit"))
+        except RunCancelled:
+            job.state = "cancelled"
+            return
+        if p.get("auto"):
+            ls.auto_log("taught", teacher=teacher, labelled=job.result["labelled"], left=job.result["left"])
+            a = p["auto"]
+            st = {"state": "waiting", "new_reviews": ls.reviews_since_last_dataset(),
+                  "needed": int(m.config().auto_min_reviews)}
+            # the training slot is separate from this job's, so the round can start while this job ends
+            out = self._auto_round(m, ls, m.config(), st, a["start_from"], a["init"], teacher)
+            job.result["round"] = {k: v for k, v in out.items() if k != "job"}
+        elif p.get("dataset"):
+            d = p["dataset"]
+            job.control.stage = "freezing the dataset version"
+            ds = ls.create_dataset(d["name"], p["author"], tuple(d["ratios"]), d["block_days"], d["seed"], teacher=teacher)
+            job.result["dataset"] = {"id": ds["id"], "name": ds["name"], "stats": ds["stats"]}
+        job.state = "finished"
 
     def _benchmark(self, job: Job, m) -> None:
         """Every candidate detector on the same images, one after another (phase 1c). A model already evaluated on
@@ -641,7 +702,7 @@ class JobManager:
         ls = LearningService(m)
         new, need = ls.reviews_since_last_dataset(), int(cfg.auto_min_reviews)
         st = {"state": "waiting", "new_reviews": new, "needed": need}
-        if new < need:
+        if new < need and getattr(cfg, "teacher", "none") == "none":
             return st
         if self.busy(mission_id) or self.training_busy():
             return st | {"state": "busy"}
@@ -666,8 +727,36 @@ class JobManager:
             if not last or last[0]["action"] != "waiting" or last[0]["detail"].get("reason") != reason:
                 ls.auto_log("waiting", reason=reason, new_reviews=new)
             return st | {"state": "blocked", "reason": reason}
+        teacher = getattr(cfg, "teacher", "none")
+        if teacher != "none":
+            untaught = ls.untaught(teacher)
+            st["untaught"] = untaught
+            left = next((h["detail"].get("left", 0) for h in ls.auto_history(30) if h["action"] == "taught"), 0)
+            if new < need and untaught < (1 if m.input_type == "video" else need) and not left:
+                return st
+            try:
+                self._sam_if_available()
+            except Exception as exc:  # noqa: BLE001 - learn from the reviews alone this time
+                why = f"SAM 3.1 cannot label here ({exc}), so this round learns from your reviews only"
+                last = ls.auto_history(1)
+                if not last or last[0]["detail"].get("reason") != why:
+                    ls.auto_log("waiting", reason=why, new_reviews=new)
+                if new < need:
+                    return st | {"state": "blocked", "reason": why}
+            else:
+                ls.auto_log("teach", teacher=teacher, untaught=untaught, limit=TEACH_PER_ROUND)
+                job = self.start(m.id, kind="teach", teacher=teacher, limit=TEACH_PER_ROUND, author="auto",
+                                 auto={"start_from": start, "init": init})
+                return st | {"state": "teaching", "job": job.snapshot()}
+        elif new < need:
+            return st
+        return self._auto_round(m, ls, cfg, st, start, init, None)
+
+    def _auto_round(self, m, ls, cfg, st: dict, start: str, init: str, teacher: str | None) -> dict:
+        """Freeze a dataset version and start a training round from the model the mission uses."""
+        from ..learning import LearningError
         try:
-            ds = ls.create_dataset(f"auto {utcnow()[:16].replace('T', ' ')}", "auto")
+            ds = ls.create_dataset(f"auto {utcnow()[:16].replace('T', ' ')}", "auto", teacher=teacher)
         except LearningError as exc:
             ls.auto_log("failed", step="dataset", reason=str(exc))
             return st | {"state": "failed", "reason": str(exc)}

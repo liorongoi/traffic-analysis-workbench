@@ -37,6 +37,7 @@ EXPORT_FORMATS = {"xlsx", "csv"}
 DETECTORS = {"standard", "sam3", "both"}
 CAMERAS = {"fixed", "moving"}
 RUN_MODES = {"manual", "auto"}
+TEACHERS = {"none", "sam3"}      # learning: what labels what nobody reviewed (none: only the operator's reviews teach)
 
 CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -1027,6 +1028,20 @@ CREATE TABLE video_telemetry (             -- where an airborne camera was and l
   read_at TEXT NOT NULL
 );
 """,
+    23: """
+-- What a teacher model (SAM 3.1) found on an image or a recording's frame nobody fully reviewed: training labels for
+-- the vehicle detector where no review says otherwise (learning.LearningService.teach). Kept until the teacher or
+-- its words change.
+CREATE TABLE teacher_label (
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  frame_key REAL NOT NULL,                 -- a recording's frame time; -1 for a still image
+  teacher TEXT NOT NULL,                   -- sam3
+  teacher_key TEXT NOT NULL,               -- the model version and its words: other values are labelled again
+  boxes TEXT NOT NULL,                     -- JSON [{"box", "cls", "score"}]
+  made_at TEXT NOT NULL,
+  PRIMARY KEY(source_version_id, frame_key, teacher)
+);
+""",
 }
 
 
@@ -1115,6 +1130,7 @@ class MissionConfig:
     run_mode: str = "manual"         # learning: manual (the operator decides each step) | auto (see learning.auto_step)
     auto_min_reviews: int = 20       # auto: new review decisions since the last dataset version before a round starts
     auto_epochs: int = 30            # auto: training epochs per round
+    teacher: str = "none"            # learning: none | sam3 (SAM 3.1 labels what nobody reviewed; reviews still win)
     crowd_alert: int | None = None   # video: list the periods with this many people or more in view at once
     analyse_new: bool = False        # video: new videos in the input folder are analysed with the mission's model
                                      # as they arrive (always so in full auto)
@@ -1179,6 +1195,8 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         v.errors.append("Workers must be 1 to 32.")
     if cfg.run_mode not in RUN_MODES:
         v.errors.append(f"Run mode must be one of {sorted(RUN_MODES)}.")
+    if cfg.teacher not in TEACHERS:
+        v.errors.append(f"Learn from must be one of {sorted(TEACHERS)}.")
     if not (1 <= cfg.auto_min_reviews <= 100000):
         v.errors.append("Reviews before an automatic round must be 1 to 100000.")
     if not (1 <= cfg.auto_epochs <= 500):
