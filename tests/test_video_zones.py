@@ -76,3 +76,35 @@ def test_zones_count_a_camera_and_reach_the_api_and_export(tmp_path):
     assert {r["zone"] for r in rows} >= {"Junction"}
     ev_rows = list(csv.DictReader(next(p for p in files if p.name.endswith("_events.csv")).open(encoding="utf-8-sig")))
     assert any("Junction" in r["path"] for r in ev_rows)
+
+
+def test_heatmap_and_path_map(tmp_path):
+    import base64
+
+    import cv2
+    import numpy as np
+    from fastapi.testclient import TestClient
+
+    from trafficwb.video_maps import background, heat
+    from trafficwb.web.app import create_app
+    m = mission(tmp_path, {"CAM1_20261021T120000Z.mp4": (7.0, painted_cars, False)})
+    run(m)
+    svc = VideoService(m)
+    vid = svc.events()[0].source_version_id
+    bg = background(svc, vid)
+    assert bg.shape[:2] == (180, 320) and float(np.abs(bg.astype(int) - 100).mean()) < 6   # the cars are gone
+    # a target that waits 3 s makes the hottest spot
+    acc = heat(bg.shape, [[(t * 0.1, [100, 80, 140, 100]) for t in range(31)], [(t * 0.1, [t * 10, 20, t * 10 + 40, 40]) for t in range(30)]])
+    y, x = np.unravel_index(int(acc.argmax()), acc.shape)
+    assert abs(x - 120) <= 3 and abs(y - 100) <= 3
+    c = TestClient(create_app(tmp_path / "data", start_monitoring=False))
+    h = {"X-TWB": "1"}
+    for kind in ("heat", "paths"):
+        r = c.post(f"/api/missions/{m.id}/recordings/{vid}/map", json={"kind": kind}, headers=h)
+        assert r.status_code == 200, r.text
+        img = cv2.imdecode(np.frombuffer(base64.b64decode(r.json()["image"].split(",")[1]), np.uint8), cv2.IMREAD_COLOR)
+        assert img.shape[:2] == (180, 320)
+    assert r.json()["legend"]["classes"] == {"car": "#4aa3e8"}
+    one = svc.events()[0].id
+    assert c.post(f"/api/missions/{m.id}/recordings/{vid}/map", json={"kind": "heat", "event_ids": [one]},
+                  headers=h).json()["legend"]["targets"] == 1

@@ -239,6 +239,40 @@ function ZonesCard({ missionId, versionId, refresh }: { missionId: string; versi
   );
 }
 
+/** Where the targets of one video spent time (heatmap), or the paths they took, over the empty road. */
+function MapCard({ missionId, versionId, ids }: { missionId: string; versionId: number; ids: number[] | null }) {
+  const [kind, setKind] = useState("");
+  const [m, setM] = useState<{ image: string; legend: any } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const key = ids ? ids.join(",") : "all";
+  useEffect(() => {
+    if (!kind) { setM(null); return; }
+    setErr(null);
+    post(`/missions/${missionId}/recordings/${versionId}/map`, { kind, event_ids: ids }).then(setM).catch((e) => setErr((e as ApiError).message));
+  }, [missionId, versionId, kind, key]);
+  return (
+    <div className="card grid" style={{ gap: 8 }}>
+      <div className="row">
+        <h2 style={{ margin: 0 }}>Map</h2>
+        <select aria-label="Map" value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="">No map</option>
+          <option value="heat">Where targets spent time (heatmap)</option>
+          <option value="paths">The paths they took</option>
+        </select>
+        <span className="muted small">{ids ? `the ${ids.length} events the filters show` : "every counted event of this video"}, over the empty road</span>
+      </div>
+      {err && <div className="msg err">{err}</div>}
+      {m && <>
+        <img src={m.image} alt={kind === "heat" ? "Heatmap of where targets spent time" : "Paths of the targets"} style={{ width: "100%", maxWidth: 960, borderRadius: 6 }} />
+        <div className="row small muted">
+          {m.legend.kind === "heat" ? <><span className="heat-scale" aria-hidden="true" /> from little time to {m.legend.max_s.toFixed(1)} s at one spot · {m.legend.targets} targets</>
+            : <>{Object.entries(m.legend.classes as Record<string, string>).map(([c, col]) => <span key={c} className="chip-colour"><i style={{ background: col }} />{c}</span>)}
+              <span>· a dot where each was first seen · {m.legend.targets} targets</span></>}
+        </div></>}
+    </div>
+  );
+}
+
 function EventList({ missionId, recording }: { missionId: string; recording: string }) {
   const [recs, setRecs] = useState<any[]>([]);
   const [groups, setGroups] = useState<{ id: number; name: string; members: number[] }[]>([]);
@@ -479,6 +513,8 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
         {filtering && <button onClick={() => { setDir(""); setSpeed(""); setInView(""); setStopped(""); setColour(""); setUpper(""); setLower(""); setZone(""); setFrom(""); setTo(""); }}>Clear</button>}
         {reading && <span className="muted small">Reading colours…</span>}
       </div>}
+      {rec && !rec.startsWith("g") && evs && evs.length > 0 &&
+        <MapCard missionId={missionId} versionId={Number(rec)} ids={filtering ? shown.map((e) => e.id) : null} />}
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
       {evs && evs.length === 0 && <div className="card muted">No events match. Events appear after the recordings are processed.</div>}
       {evs && evs.length > 0 && shown.length === 0 && <div className="card muted">No event matches these filters.</div>}

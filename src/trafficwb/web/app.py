@@ -222,6 +222,12 @@ class ReviseBody(BaseModel):
     box: list[float] | None = None
 
 
+class MapBody(BaseModel):
+    kind: str = Field("heat", pattern="^(heat|paths)$")
+    event_ids: list[int] | None = Field(None, max_length=100000)
+    zones: bool = True
+
+
 class ZoneBody(BaseModel):
     kind: str = Field(..., pattern="^(line|area)$")
     name: str = Field("", max_length=60)
@@ -1954,6 +1960,24 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         out = tally(svc, evs)
         out.pop("events")
         return out
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/map")
+    def recording_map(version_id: int, body: MapBody, m: Mission = Depends(mission)):
+        """A heatmap (where targets spent time) or a path map of one video, over its empty road, as a JPEG data URL.
+        ``event_ids`` narrows it to the events the events page shows; otherwise every counted event."""
+        import base64
+        from ..video_maps import render
+        from ..video_zones import Zones
+        svc = _video(m)
+        evs = [e for e in _video_call(lambda: svc.events(version_id)) if e.counted]
+        if body.event_ids is not None:
+            keep = set(body.event_ids)
+            evs = [e for e in evs if e.id in keep]
+        try:
+            data, legend = render(svc, version_id, body.kind, evs, Zones(m).of(version_id) if body.zones else [])
+        except ValueError as exc:
+            raise ApiError(400, "map", str(exc)) from None
+        return {"image": "data:image/jpeg;base64," + base64.b64encode(data).decode(), "legend": legend}
 
     @app.get("/api/missions/{mission_id}/recordings/{version_id}/zones")
     def zones_get(version_id: int, m: Mission = Depends(mission)):

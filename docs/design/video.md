@@ -139,6 +139,12 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 - A target is in an area while that point is inside; entries shorter than 0.5 s are ignored. Its path is the order of the lines it crossed and areas it entered.
 - The events page shows "Lines and areas": each line's crossings in and out, and each area's entries and average time inside, by class (counted events only). The filters add "Crossed X (in, out)", "Was in X" and "From X to Y"; the events list has a Path column. The export adds a path column and a `lines_and_areas` sheet.
 
+## Heatmaps and path maps
+
+- On a video's tab, "Map" shows where its targets spent time (heatmap) or the paths they took, over the empty road (the median of nine frames, so moving targets vanish), with the camera's lines and areas on top (`video_maps.py`, `POST .../recordings/{vid}/map`).
+- Heatmap: each box adds the time until the next box at the bottom middle of the box, over a disc a third of its width; one hue from faint to strong, and the scale gives the most seconds at one spot. Path map: each target's path as a thin line coloured by class (a legend names each), with a dot where it was first seen.
+- Only counted events are drawn; when the events page filters are set, the map shows just the events they leave.
+
 ## Workers on other computers
 
 - Other computers can analyse segments of a long recording. The operator turns "Other computers may help" on (Workers screen). Off by default; while off, nothing is shared and workers are refused.
