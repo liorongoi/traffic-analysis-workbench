@@ -87,7 +87,13 @@ jobs:
           $log = Get-Content $logf
           if ("${{ matrix.ort }}" -eq "auto" -and -not ($log -match "ONNX Runtime build: directml")) { throw "auto bundle did not choose DirectML on a runner without NVIDIA" }
           if (-not (Test-Path "$env:RUNNER_TEMP\twb\start.cmd")) { throw "start.cmd was not written" }
-          if (-not ($log -match '"inference": "ok"')) { throw "SAM 3.1 did not run in the install check" }
+          if (-not ($log -match '"inference": "ok"')) {
+            # GitHub's Windows runners differ in processor; on one without an instruction SAM 3.1's runtime needs, the
+            # installer must say so and carry on (checked here). Any other SAM 3.1 failure still fails this step.
+            if (($log -match 'illegal instruction') -and ($log -match 'SAM 3.1 does not run on this computer.s processor')) {
+              Write-Host "::warning::This runner's processor cannot run SAM 3.1 (illegal instruction); the installer reported it and carried on."
+            } else { throw "SAM 3.1 did not run in the install check" }
+          }
           Get-Content "$env:RUNNER_TEMP\twb\start.cmd"
       - name: Manual start and optional power-on task
         shell: pwsh
