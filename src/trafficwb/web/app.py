@@ -257,6 +257,15 @@ class PreviewBody(BaseModel):
     limit: int = 20
 
 
+class QuickBody(BaseModel):
+    source_dir: str
+    include_subdirs: bool = True
+
+
+class FolderBody(BaseModel):
+    path: str
+
+
 class BandsBody(BaseModel):
     far_below: float
     close_from: float
@@ -318,6 +327,68 @@ class RollbackBody(BaseModel):
 
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp", ".mp4", ".mkv", ".avi", ".mov", ".ts"}
+VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".ts"}
+# Folder names that say nothing about the camera: a mission is then named after the folder above.
+GENERIC_FOLDERS = {"images", "image", "img", "photos", "pictures", "videos", "video", "recordings", "frames", "data", "src",
+                   "source", "input", "export", "exports", "dcim"}
+
+
+def quick_start(source_dir: str, include_subdirs: bool, data_root: Path, limit: int = 5000) -> dict:
+    """What a new mission for this folder most likely is, so it can be created on one screen: a name, still images or
+    video, how many names give a capture time and over what span, the time zone of the latest mission, and an
+    exports folder beside the source."""
+    root = Path(source_dir.strip()).expanduser()
+    if not root.is_dir():
+        raise ApiError(400, "no_folder", f"{root} is not a folder on this workstation.")
+    images = videos = readable = 0
+    first = last = None
+    pattern = None
+    unreadable: list[dict] = []
+    more = False
+    for p in (root.rglob("*") if include_subdirs else root.glob("*")):
+        if p.name.startswith(".") or p.suffix.lower() not in IMAGE_EXTS or not p.is_file():
+            continue
+        if images + videos >= limit:
+            more = True
+            break
+        if p.suffix.lower() in VIDEO_EXTS:
+            videos += 1
+        else:
+            images += 1
+        try:
+            ct = parse_capture_time(p.name)
+        except MalformedName as exc:
+            if len(unreadable) < 3:
+                unreadable.append({"file": p.name, "reason": exc.reason})
+            continue
+        readable += 1
+        pattern = pattern or ct.pattern
+        first = ct.utc if first is None or ct.utc < first else first
+        last = ct.utc if last is None or ct.utc > last else last
+    named = root.parent if root.name.lower() in GENERIC_FOLDERS and root.parent != root else root
+    words = named.name.replace("_", " ").replace("-", " ").split()
+    if first is not None:
+        # A date already in the folder name is said once, in words, at the end.
+        words = [w for w in words if not (w.isdigit() and len(w) == 8 and w.startswith(("19", "20")))]
+    name = " ".join(words) or "New mission"
+    if first is not None:
+        name += f", {first.day} {first:%b %Y}"
+    zone, country = "Asia/Jerusalem", "IL"
+    zone_from = None
+    dr = DataRoot(data_root)
+    rows = sorted(dr.missions(), key=lambda r: r["created_at"])
+    if rows:
+        cfg = dr.open_mission(rows[-1]["id"]).config()
+        zone, country, zone_from = cfg.iana_zone, cfg.country, rows[-1]["name"]
+    out = (root.parent if root.parent != root else root) / f"{root.name} LanePulse exports"
+    return {
+        "source_dir": str(root), "name": name, "input_type": "video" if videos > images else "images",
+        "images": images, "videos": videos, "readable": readable, "more": more, "pattern": pattern,
+        "first_utc": first.isoformat().replace("+00:00", "Z") if first else None,
+        "last_utc": last.isoformat().replace("+00:00", "Z") if last else None,
+        "unreadable": unreadable, "iana_zone": zone, "country": country, "zone_from": zone_from,
+        "output_dir": str(out), "output_exists": out.is_dir(),
+    }
 
 
 def folder_roots() -> list[dict]:
@@ -520,6 +591,22 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                 break
         return {"files": out}
 
+    @app.post("/api/quick-start")
+    def quick_start_get(body: QuickBody, _u: User = Depends(user)):
+        return quick_start(body.source_dir, body.include_subdirs, data_root)
+
+    @app.post("/api/quick-start/output")
+    def quick_start_output(body: FolderBody, _u: User = Depends(user)):
+        """Make the suggested exports folder: one new folder inside a folder that already exists, nothing deeper."""
+        p = Path(body.path.strip()).expanduser()
+        if not p.parent.is_dir():
+            raise ApiError(400, "no_folder", f"{p.parent} is not a folder on this workstation.")
+        try:
+            p.mkdir(exist_ok=True)
+        except OSError as exc:
+            raise ApiError(400, "no_access", f"{p} could not be made: {exc.strerror or exc}.") from None
+        return {"path": str(p)}
+
     def _saved_or_none(name: str):
         from ..learning import ModelLibrary
         return ModelLibrary(data_root).get(name)
@@ -587,8 +674,18 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             cfg = m.config()
             out.append({"id": r["id"], "name": r["name"], "input_type": r["input_type"], "mode": r["mode"],
                         "processing": cfg.processing, "monitoring": cfg.monitoring_enabled, "created_at": r["created_at"],
-                        "status": m.status(), "job": jobs.current(r["id"]).snapshot() if jobs.current(r["id"]) else None})
+                        "status": m.status(), "job": jobs.current(r["id"]).snapshot() if jobs.current(r["id"]) else None,
+                        "review": _review_summary(m) if r["input_type"] == "images" else None})
         return {"missions": out}
+
+    def _review_summary(m: Mission) -> dict:
+        """For the missions list: how many processed images wait for review, the first of them, and the latest image."""
+        rows = ReviewService(m).results(Filter(), "capture_utc", False)
+        waiting = [r.source_version_id for r in rows if r.processing_state == "done" and r.review_status == "unreviewed"]
+        done = [r for r in rows if r.processing_state == "done"]
+        return {"unreviewed": len(waiting), "first_unreviewed": waiting[0] if waiting else None,
+                "approved": sum(1 for r in rows if r.review_status != "unreviewed"), "processed": len(done),
+                "latest": rows[-1].source_version_id if rows else None}
 
     @app.post("/api/missions/validate")
     def mission_validate(body: MissionBody, _u: User = Depends(user)):

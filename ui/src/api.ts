@@ -134,7 +134,9 @@ export type Item = {
   lights: Light[];
   bands: NightBands | null;
   regions: Region[];
-  position: { index: number | null; total: number; prev: number | null; next: number | null };
+  position: { index: number | null; total: number; prev: number | null; next: number | null;
+    next_unreviewed?: number | null; unreviewed?: number;
+    around?: { id: number; index: number; review_status: string; processing_state: string }[] };
   classes?: string[];
   uncounted_classes?: string[];
 };

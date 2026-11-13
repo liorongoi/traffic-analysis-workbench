@@ -137,7 +137,12 @@ def test_wizard_preview_create_process_review_export(env):
     assert res["total"] == 6 and all(r["vehicle_count"] == 2 for r in res["rows"])
     vid = res["rows"][0]["source_version_id"]
     item = c.post(f"/api/missions/{mid}/items/{vid}", json={}, headers=H1).json()
-    assert item["position"] == {"index": 1, "total": 6, "prev": None, "next": res["rows"][1]["source_version_id"]}
+    ids = [r["source_version_id"] for r in res["rows"]]
+    pos = item["position"]
+    assert {k: pos[k] for k in ("index", "total", "prev", "next")} == {"index": 1, "total": 6, "prev": None, "next": ids[1]}
+    assert pos["next_unreviewed"] == ids[1] and pos["unreviewed"] == 6 and [a["id"] for a in pos["around"]] == ids
+    listed = c.get("/api/missions").json()["missions"][0]["review"]
+    assert listed == {"unreviewed": 6, "first_unreviewed": ids[0], "approved": 0, "processed": 6, "latest": ids[-1]}
     assert item["local"]["time"].endswith("+03:00") and len(item["objects"]) == 2
     uid = item["objects"][0]["uid"]
     assert c.patch(f"/api/missions/{mid}/items/{vid}/objects/{uid}", json={"action": "remove"}, headers=H1).status_code == 200
@@ -158,6 +163,26 @@ def test_wizard_preview_create_process_review_export(env):
     assert th.status_code == 200 and cv2.imdecode(np.frombuffer(th.content, np.uint8), 1).shape[1] == 160
     ex = c.post(f"/api/missions/{mid}/export", json={}, headers=H1).json()
     assert len(ex["files"]) == 2 and all(os.path.isfile(f) for f in ex["files"])
+
+
+def test_quick_start_fills_in_a_mission_from_its_folder(env):
+    tmp, src, out = env
+    c = direct_access(client(tmp))
+    q = c.post("/api/quick-start", json={"source_dir": str(src)}, headers=H1).json()
+    assert q["images"] == 7 and q["readable"] == 6 and q["input_type"] == "images"
+    # "src" says nothing about the camera, so the name comes from the folder above it.
+    assert q["name"] == f"{' '.join(tmp.name.replace('_', ' ').split())}, 21 Oct 2026"
+    assert q["first_utc"] == "2026-10-21T00:00:00Z" and q["last_utc"] == "2026-10-21T00:50:00Z"
+    assert q["unreadable"][0]["file"] == "notes.jpg" and q["iana_zone"] == "Asia/Jerusalem" and q["zone_from"] is None
+    assert q["output_dir"] == str(tmp / "src LanePulse exports") and q["output_exists"] is False
+    made = c.post("/api/quick-start/output", json={"path": q["output_dir"]}, headers=H1).json()["path"]
+    assert os.path.isdir(made)
+    body = {k: q[k] for k in ("name", "input_type", "country", "iana_zone", "source_dir", "output_dir")}
+    mid = c.post("/api/missions", json=body | {"include_subdirs": False}, headers=H1).json()["id"]
+    assert c.post("/api/quick-start", json={"source_dir": str(src)}, headers=H1).json()["zone_from"] == q["name"]
+    assert c.get(f"/api/missions/{mid}").status_code == 200
+    deep = c.post("/api/quick-start/output", json={"path": str(tmp / "no" / "such")}, headers=H1)
+    assert deep.status_code == 400
 
 
 def test_job_pause_resume_cancel(env):
