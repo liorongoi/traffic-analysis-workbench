@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, post } from "../api";
 import { go } from "../router";
+import Player from "./Player";
 
 // Video events: one row per continuous appearance of a vehicle. Times are seconds from the start of the recording,
 // read from the frames' presentation timestamps. Absolute UTC is shown only when the file name gave the start.
@@ -39,6 +40,8 @@ export default function EventsTab({ missionId, extra }: { missionId: string; ext
   // "#/m/<id>/events/<event id>" opens one event; "#/m/<id>/events/rec-<video id>" opens that video's tab.
   const eventId = extra && /^\d+$/.test(extra) ? Number(extra) : null;
   const recording = extra?.startsWith("rec-") ? extra.slice(4) : "";
+  // "#/m/<id>/events/play-<video id>" plays that video with its boxes, to review and edit there.
+  if (extra?.startsWith("play-")) return <Player missionId={missionId} versionId={Number(extra.slice(5))} />;
   return eventId ? <EventDetail missionId={missionId} eventId={eventId} /> : <EventList missionId={missionId} recording={recording} />;
 }
 
@@ -192,7 +195,8 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
         <table className="t"><thead><tr><th>File</th><th>Start (UTC)</th><th className="num">Length</th><th>Frame rate</th><th>Processing</th><th className="num">Events</th><th>For learning</th></tr></thead>
           <tbody>{recs.map((r) => (
             <tr key={r.id}>
-              <td className="mono bidi">{r.rel_path}</td>
+              <td className="mono bidi">{r.rel_path}
+                {r.processing_state === "done" && <div><a className="play-link" href={`#/m/${missionId}/events/play-${r.id}`}>▶ Play and review</a></div>}</td>
               <td>
                 <div className="mono">{r.start_utc ?? <span className="muted" title="No confirmed UTC start">unknown</span>}</div>
                 <div className="muted">{r.start_source === "manual" ? `operator confirmed by ${r.start_revision_author} · ${r.start_revision_created_at}` : r.start_source === "filename" ? "from filename" : "no UTC start"}</div>
@@ -241,6 +245,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
         </select>
         <span className="muted">{evs?.length ?? 0} events</span>
         <span style={{ flex: 1 }} />
+        {rec && <button className="primary" onClick={() => go(`/m/${missionId}/events/play-${rec}`)}>▶ Play and review this video</button>}
         <button onClick={doExport}>Export events</button>
       </div>
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}

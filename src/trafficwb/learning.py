@@ -206,7 +206,7 @@ class LearningService:
 
     @staticmethod
     def _reviewed(e) -> bool:
-        return e.status != "pending" or e.cls != e.machine_cls
+        return e.status != "pending" or e.cls != e.machine_cls or bool(getattr(e, "fixes", None))
 
     def recording_approved(self, vid: int) -> bool:
         r = self.con.execute("SELECT action FROM recording_review WHERE source_version_id=? ORDER BY id DESC LIMIT 1",
@@ -267,6 +267,13 @@ class LearningService:
                 "SELECT o.track_id, o.t, o.x1, o.y1, o.x2, o.y2 FROM track_observation o JOIN track k ON k.id=o.track_id "
                 "WHERE k.run_item_id=? ORDER BY o.t", (item,)):
             obs.setdefault(r[0], []).append((round(r[1], 6), [round(float(v), 2) for v in r[2:6]]))
+        seen = sorted({t for lst in obs.values() for t, _ in lst})        # frames the analysis looked at
+        for e in evs:                       # a box the operator drew replaces the machine's on that frame
+            if e.fixes:
+                tid = track_of.get(e.id)
+                lst = [o for o in obs.get(tid, []) if not any(abs(o[0] - f["t"]) < 1e-3 for f in e.fixes)]
+                lst += [(round(f["t"], 6), [round(float(v), 2) for v in f["box"]]) for f in e.fixes]
+                obs[tid] = sorted(lst, key=lambda o: o[0])
         teach = [e for e in evs if e.status != "rejected" and self._reviewed(e)]
         times: list[float] = []
         for e in teach:
@@ -280,7 +287,6 @@ class LearningService:
             times += pick
         if kind == "full":
             dur = self.con.execute("SELECT duration_s FROM video_probe WHERE source_version_id=?", (vid,)).fetchone()
-            seen = sorted({t for lst in obs.values() for t, _ in lst})
             k = 0.0
             while dur and dur[0] and k < dur[0]:
                 # a frame the analysis looked at (so every target on it is known) nearest to every 5 s
@@ -288,10 +294,13 @@ class LearningService:
                 if near is not None and abs(near - k) <= BACKGROUND_EVERY_S / 2:
                     times.append(near)
                 k += BACKGROUND_EVERY_S
-        chosen: list[float] = []
-        for t in sorted(set(times)):
-            if not chosen or t - chosen[-1] >= FRAME_MIN_GAP_S:
+        # frames the operator drew on come first (the surest labels), then the others kept apart from every one taken
+        must = sorted({round(f["t"], 6) for e in teach for f in e.fixes})
+        chosen = list(must)
+        for t in sorted(set(times) - set(must)):
+            if all(abs(t - c) >= FRAME_MIN_GAP_S for c in chosen):
                 chosen.append(t)
+        chosen.sort()
         if len(chosen) > FRAMES_PER_RECORDING:
             step = len(chosen) / FRAMES_PER_RECORDING
             chosen = [chosen[int(i * step)] for i in range(FRAMES_PER_RECORDING)]
@@ -320,7 +329,7 @@ class LearningService:
                     else:
                         pos.append({"box": box, "cls": e.cls, "uid": f"{e.key}@{t:.3f}", "source": "human"})
                 elif alive and kind == "full":
-                    gap = _between(lst, t)
+                    gap = _between(lst, t, float("inf") if e.origin == "human" else 2.0)
                     if gap is not None:
                         ign.append(gap)
                 elif box is not None and kind == "full":

@@ -302,8 +302,10 @@ class Monitor:
     """
 
     def __init__(self, mission: Mission, interval_seconds: float = 60, stability_seconds: int = DEFAULT_STABILITY_SECONDS,
-                 on_cycle: Callable[[ScanResult, int | None], None] | None = None):
+                 on_cycle: Callable[[ScanResult, int | None], None] | None = None,
+                 active: Callable[[MissionConfig], bool] | None = None):
         self.mission = mission
+        self.active = active or (lambda cfg: cfg.monitoring_enabled)
         self.interval = interval_seconds
         self.stability = stability_seconds
         self.on_cycle = on_cycle
@@ -353,7 +355,7 @@ class Monitor:
         # The mission's SQLite connection belongs to the creating thread; use our own.
         m = Mission(type(self.mission.root)(self.mission.root.path), self.mission.id)
         while not self._stop.is_set():
-            if m.config().monitoring_enabled:
+            if self.active(m.config()):
                 try:
                     res, run_id = cycle(m, stability_seconds=self.stability)
                     if self.on_cycle:

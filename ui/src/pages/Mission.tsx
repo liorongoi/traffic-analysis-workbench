@@ -905,7 +905,7 @@ function CatalogCard({ m, reload }: { m: any; reload: () => void }) {
           <thead><tr>
             <th><input type="checkbox" aria-label="Tick all" checked={allOn} disabled={busy}
               onChange={() => setSel(allOn ? new Set() : new Set(all.map((v) => v.id)))} /></th>
-            <th></th><th>Video</th><th className="num">Length</th><th>Picture</th><th>Start (UTC)</th><th>Status</th><th className="num">Events</th>
+            <th></th><th>Video</th><th className="num">Length</th><th>Picture</th><th>Start (UTC)</th><th>Status</th><th className="num">Events</th><th></th>
           </tr></thead>
           <tbody>{vids.map((v) => (
             <tr key={v.id} className={sel.has(v.id) ? "on" : ""} onClick={() => !busy && !v.error && toggle(v.id)} style={{ cursor: busy || v.error ? "default" : "pointer" }}>
@@ -918,6 +918,8 @@ function CatalogCard({ m, reload }: { m: any; reload: () => void }) {
               <td className="mono muted">{v.start_utc ?? "unknown"}</td>
               <td>{v.error ? <span className="badge failed" title={v.error}>cannot decode</span> : <span className={`badge ${v.state}`}>{STATE_TEXT[v.state] ?? v.state}</span>}</td>
               <td className="num">{v.analysed ? <a href={`#/m/${m.id}/events/rec-${v.id}`} onClick={(e) => e.stopPropagation()}>{v.events}</a> : ""}</td>
+              <td>{v.analysed && <a className="play-link" href={`#/m/${m.id}/events/play-${v.id}`} onClick={(e) => e.stopPropagation()}
+                title="Play with the detections drawn, review and edit them, and approve for learning">▶ Review</a>}</td>
             </tr>))}</tbody>
         </table>)}
       <p className="muted" style={{ marginBottom: 0 }}>New videos are ticked for you. Tick an analysed video to analyse it again; its newest analysis is the one that counts.</p>

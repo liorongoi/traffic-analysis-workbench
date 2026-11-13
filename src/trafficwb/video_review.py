@@ -14,6 +14,12 @@ Rules:
   "reencode" (frame-exact). Clip files are never overwritten.
 - Absolute UTC appears only when the recording start is known, with its
   precision; otherwise only times within the recording are given.
+- Box edits, as on still images: a box drawn on a frame of an event replaces the
+  machine's box on that frame (set_box; clear_box takes it back). A target the
+  machine missed is added as an operator event (its track is marked "human"),
+  confirmed, with the drawn box; more boxes on other frames extend it, and its
+  box between two drawn frames is filled in. Only the newest analysis of a
+  recording is listed.
 """
 from __future__ import annotations
 
@@ -27,7 +33,8 @@ from .store import Mission, utcnow
 from .video import frame_at, start_utc, utc_at
 from .views import ViewService
 
-ACTIONS = ("confirm", "reject", "duplicate", "set_times", "set_class", "merge_into", "split_at", "reopen")
+ACTIONS = ("confirm", "reject", "duplicate", "set_times", "set_class", "merge_into", "split_at", "reopen",
+           "set_box", "clear_box")
 CLASSES = ("car", "bus", "truck", "motorcycle", "bicycle")
 
 
@@ -76,6 +83,8 @@ class Event:
     thumb_box: list[float] = field(default_factory=list)
     revisions: int = 0
     run_item_id: int | None = None
+    origin: str = "machine"            # machine | human (a target the operator added)
+    fixes: list[dict] = field(default_factory=list)   # operator boxes: {"t", "box"}, by time
 
     @property
     def counted(self) -> bool:
@@ -101,15 +110,18 @@ class VideoService:
     # ---------- reading ----------
     def _base(self, where: str = "", args: tuple = ()) -> list[Event]:
         rows = self.con.execute(
-            "SELECT e.*, f.rel_path, i.run_id, "
+            "SELECT e.*, f.rel_path, i.run_id, k.state AS track_state, "
             "CASE WHEN sr.action='set' THEN sr.start_utc ELSE p.start_utc END AS effective_start_utc, "
             "CASE WHEN sr.action='set' THEN sr.precision ELSE p.start_precision END AS effective_start_precision "
             "FROM video_event e "
             "JOIN source_version v ON v.id=e.source_version_id JOIN source_file f ON f.id=v.source_file_id "
-            "JOIN run_item i ON i.id=e.run_item_id LEFT JOIN video_probe p ON p.source_version_id=e.source_version_id "
+            "JOIN run_item i ON i.id=e.run_item_id JOIN track k ON k.id=e.track_id "
+            "LEFT JOIN video_probe p ON p.source_version_id=e.source_version_id "
             "LEFT JOIN video_start_revision sr ON sr.id=(SELECT MAX(r.id) FROM video_start_revision r "
             "WHERE r.source_version_id=e.source_version_id) "
-            f"{where} ORDER BY f.rel_path, e.first_t, e.id", args).fetchall()
+            f"{where} {'AND' if where else 'WHERE'} e.run_item_id=(SELECT MAX(i2.id) FROM run_item i2 "
+            "WHERE i2.source_version_id=e.source_version_id AND i2.processing_state='done') "
+            "ORDER BY f.rel_path, e.first_t, e.id", args).fetchall()
         out = []
         for r in rows:
             out.append(Event(r["id"], r["event_key"], r["source_version_id"], r["rel_path"], r["run_id"], r["first_t"],
@@ -119,6 +131,7 @@ class VideoService:
                              thumb_box=json.loads(r["thumb_box"])))
             out[-1]._start = start_utc(r["effective_start_utc"])  # type: ignore[attr-defined]
             out[-1].run_item_id = r["run_item_id"]
+            out[-1].origin = "human" if r["track_state"] == "human" else "machine"
         return out
 
     def _apply(self, events: list[Event]) -> list[Event]:
@@ -148,6 +161,12 @@ class VideoService:
                 e.split_at = sorted(set(e.split_at) | {p["t"]})
             elif a == "reopen":
                 e.status, e.duplicate_of, e.merged_into = "pending", None, None
+            elif a == "set_box":
+                e.fixes = sorted([f for f in e.fixes if abs(f["t"] - p["t"]) > 1e-3] + [{"t": p["t"], "box": p["box"]}],
+                                 key=lambda f: f["t"])
+                e.first_t, e.last_t = min(e.first_t, p["t"]), max(e.last_t, p["t"])
+            elif a == "clear_box":
+                e.fixes = [f for f in e.fixes if abs(f["t"] - p["t"]) > 1e-3]
         # Merges extend the target (only when both are loaded; a single-event read re-queries below).
         for e in events:
             if e.status == "merged" and e.merged_into in by_id:
@@ -230,10 +249,16 @@ class VideoService:
         return next(e for e in self.events(r[0]) if e.id == event_id)
 
     def observations(self, event_id: int) -> list[dict]:
-        return [dict(r) for r in self.con.execute(
+        """The event's boxes by time: the tracker's, with the operator's box in place of it on a frame they drew on."""
+        e = self.event(event_id)
+        rows = [dict(r) for r in self.con.execute(
             "SELECT o.t, o.x1, o.y1, o.x2, o.y2, o.cls, o.score, o.appearance, COALESCE(o.found_by, 'standard') AS found_by "
             "FROM track_observation o "
             "JOIN video_event e ON e.track_id=o.track_id WHERE e.id=? ORDER BY o.t", (event_id,))]
+        rows = [r for r in rows if not any(abs(r["t"] - f["t"]) < 1e-3 for f in e.fixes)]
+        rows += [{"t": f["t"], "x1": f["box"][0], "y1": f["box"][1], "x2": f["box"][2], "y2": f["box"][3], "cls": e.cls,
+                  "score": 1.0, "appearance": "body", "found_by": "operator"} for f in e.fixes]
+        return sorted(rows, key=lambda r: r["t"])
 
     def recordings(self) -> list[dict]:
         rows = self.con.execute(
@@ -329,11 +354,87 @@ class VideoService:
             if not e.first_t < t < e.last_t:
                 raise VideoError("Split inside the event's interval.")
             payload = {"t": t}
+        elif action == "set_box":
+            t = self.snap(e.source_version_id, float(payload["t"]))
+            payload = {"t": t, "box": self._check_box(e.source_version_id, payload.get("box"))}
+        elif action == "clear_box":
+            t = float(payload["t"])
+            fix = next((f for f in e.fixes if abs(f["t"] - t) < 0.02), None)
+            if fix is None:
+                raise VideoError("There is no box of yours on this frame to take back.")
+            payload = {"t": fix["t"]}
         else:
             payload = {}
         self.con.execute("INSERT INTO event_revision(event_id,action,payload,author,note,created_at) VALUES (?,?,?,?,?,?)",
                          (event_id, action, json.dumps(payload), author, note, utcnow()))
         return self.event(event_id)
+
+    def _check_box(self, version_id: int, box) -> list[float]:
+        try:
+            x1, y1, x2, y2 = (float(v) for v in box)
+        except (TypeError, ValueError):
+            raise VideoError("Draw a box: four numbers, left, top, right and bottom.") from None
+        size = self.con.execute("SELECT width, height FROM video_probe WHERE source_version_id=?", (version_id,)).fetchone()
+        if size and size[0] and size[1]:
+            x1, x2 = max(0.0, min(x1, x2)), min(float(size[0]), max(x1, x2))
+            y1, y2 = max(0.0, min(y1, y2)), min(float(size[1]), max(y1, y2))
+        if x2 - x1 < 4 or y2 - y1 < 4:
+            raise VideoError("The box is too small: draw it around the whole target.")
+        return [round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2)]
+
+    def add_target(self, version_id: int, t: float, box, cls: str, author: str, note: str | None = None) -> Event:
+        """A target the machine missed: a new operator event, confirmed, with the box drawn on the frame at t."""
+        if cls not in self.classes():
+            raise VideoError(f"Class must be one of {', '.join(self.classes())}.")
+        item = self.con.execute("SELECT MAX(id) FROM run_item WHERE source_version_id=? AND processing_state='done'",
+                                (version_id,)).fetchone()[0]
+        if item is None:
+            raise VideoError("Analyse the recording first; then add what the analysis missed.")
+        b = self._check_box(version_id, box)
+        t = self.snap(version_id, float(t))
+        n = 1 + self.con.execute("SELECT COUNT(*) FROM track WHERE run_item_id=? AND state='human'", (item,)).fetchone()[0]
+        size = self.con.execute("SELECT width, height FROM video_probe WHERE source_version_id=?", (version_id,)).fetchone()
+        w, h = (size[0] or 1, size[1] or 1) if size else (1, 1)
+        centre = [round((b[0] + b[2]) / 2 / w, 4), round((b[1] + b[3]) / 2 / h, 4)]
+        tid = self.con.execute("INSERT INTO track(run_item_id,track_key,state,closed_reason) VALUES (?,?,?,NULL)",
+                               (item, f"H{n}", "human")).lastrowid
+        eid = self.con.execute(
+            "INSERT INTO video_event(run_item_id,source_version_id,event_key,track_id,first_t,last_t,cls,cls_share,"
+            "class_votes,entry,exit,end_reason,flags,related,thumb_t,thumb_box,created_at) "
+            "VALUES (?,?,?,?,?,?,?,1.0,'{}',?,?,'added_by_operator','[]','[]',?,?,?)",
+            (item, version_id, f"H-{n:04d}", tid, t, t, cls, json.dumps(centre), json.dumps(centre), t, json.dumps(b),
+             utcnow())).lastrowid
+        now = utcnow()
+        self.con.executemany(
+            "INSERT INTO event_revision(event_id,action,payload,author,note,created_at) VALUES (?,?,?,?,?,?)",
+            [(eid, "set_box", json.dumps({"t": t, "box": b}), author, note, now), (eid, "confirm", "{}", author, note, now)])
+        return self.event(eid)
+
+    def overlay(self, version_id: int) -> dict:
+        """Everything the player draws over a recording: each event of the newest analysis with its boxes by time
+        ([t, x1, y1, x2, y2], the operator's box replacing the machine's on that frame), in one read."""
+        evs = self.events(version_id)
+        tracks = {r[0]: r[1] for r in self.con.execute(
+            "SELECT id, track_id FROM video_event WHERE source_version_id=?", (version_id,))}
+        obs: dict[int, list] = {}
+        if evs:
+            q = ",".join("?" * len(evs))
+            for r in self.con.execute(
+                    f"SELECT track_id, t, x1, y1, x2, y2 FROM track_observation WHERE track_id IN ({q}) ORDER BY t",
+                    tuple(tracks[e.id] for e in evs)):
+                obs.setdefault(r[0], []).append([round(r[1], 4), *(round(float(v), 1) for v in r[2:6])])
+        out = []
+        for e in evs:
+            boxes = [b for b in obs.get(tracks[e.id], []) if not any(abs(b[0] - f["t"]) < 1e-3 for f in e.fixes)]
+            boxes += [[round(f["t"], 4), *f["box"]] for f in e.fixes]
+            d = {k: v for k, v in e.__dict__.items() if not k.startswith("_")}
+            out.append(d | {"parts": e.parts, "boxes": sorted(boxes)})
+        rec = next((r for r in self.recordings() if r["id"] == version_id), None)
+        if rec is None:
+            raise VideoError("That recording does not exist in this mission.")
+        return {"recording": {k: rec.get(k) for k in ("id", "rel_path", "width", "height", "duration_s", "nominal_fps",
+                                                       "start_utc", "processing_state")},
+                "events": out, "classes": self.classes()}
 
     def classes(self) -> list[str]:
         """The vehicle classes, then the mission's own (people, or anything named by words), as for still images."""

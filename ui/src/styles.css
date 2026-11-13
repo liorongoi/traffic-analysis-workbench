@@ -501,3 +501,10 @@ button.folderpick-add { min-height: 26px; padding: 0 10px; font-size: 12.5px; }
 .catalog tbody tr.on td { background: var(--accent-soft); }
 .videotabs { overflow-x: auto; white-space: nowrap; }
 .videotabs a .n { margin-left: 6px; font-size: 11.5px; color: var(--muted); }
+
+/* ---------- video player: review and edit the detections on the playing video ---------- */
+.player .stage { width: 100%; margin: 0 auto; }
+.player .stage svg text { pointer-events: none; font-family: var(--mono, ui-monospace, monospace); }
+.player tr.sel td { background: var(--accent-soft, rgba(74, 163, 255, 0.14)); }
+.player .timeline { display: block; border-radius: 4px; }
+a.play-link { white-space: nowrap; font-weight: 600; font-size: 12.5px; }

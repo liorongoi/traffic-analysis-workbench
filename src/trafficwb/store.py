@@ -1031,6 +1031,8 @@ class MissionConfig:
     run_mode: str = "manual"         # learning: manual (the operator decides each step) | auto (see learning.auto_step)
     auto_min_reviews: int = 20       # auto: new review decisions since the last dataset version before a round starts
     auto_epochs: int = 30            # auto: training epochs per round
+    analyse_new: bool = False        # video: new videos in the input folder are analysed with the mission's model
+                                     # as they arrive (always so in full auto)
 
     def sources(self) -> list[str]:
         """Every source folder of the mission, the first being source_dir."""

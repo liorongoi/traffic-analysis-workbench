@@ -96,6 +96,7 @@ class RunModeBody(BaseModel):
     run_mode: str                          # manual | auto
     auto_min_reviews: int | None = Field(None, ge=1, le=100000)
     auto_epochs: int | None = Field(None, ge=1, le=500)
+    analyse_new: bool | None = None        # video: analyse new videos in the input folder with the mission's model
 
 
 class AnalyseBody(BaseModel):
@@ -218,6 +219,14 @@ class ReviseBody(BaseModel):
     cls: str | None = None
     target: int | None = None
     t: float | None = None
+    box: list[float] | None = None
+
+
+class AddTargetBody(BaseModel):
+    t: float = Field(..., ge=0)
+    box: list[float]
+    cls: str
+    note: str | None = None
 
 
 class PlateReviseBody(BaseModel):
@@ -666,7 +675,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         if cfg.processing != "continuous":
             raise ApiError(400, "one_time", "Monitoring applies to continuous missions only.")
         m.update_config(u.username, "monitoring " + ("on" if body.enabled else "off"), monitoring_enabled=body.enabled)
-        jobs.set_monitoring(m.id, body.enabled)
+        jobs.watch_new_videos(m.id)
         return {"enabled": body.enabled}
 
     @app.put("/api/missions/{mission_id}/sam3-words")
@@ -1380,7 +1389,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         installed = [md | {"saved_as": by_pack.get((md["name"], md["version"]))} for md in models.installed("vehicle_detection")]
         cfg = m.config()
         auto = {"run_mode": cfg.run_mode, "auto_min_reviews": cfg.auto_min_reviews, "auto_epochs": cfg.auto_epochs,
-                "new_reviews": ls.reviews_since_last_dataset(), "history": ls.auto_history()}
+                "analyse_new": cfg.analyse_new, "new_reviews": ls.reviews_since_last_dataset(), "history": ls.auto_history()}
         return {"in_use": in_use, "eligibility": ls.eligibility(), "datasets": ls.datasets(), "evaluations": ls.evaluations(),
                 "auto": auto, "video": m.input_type == "video",
                 "all_datasets": ls.all_datasets(), "training_runs": ls.training_runs(), "carry_over": ls.carry_over(),
@@ -1399,7 +1408,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "invalid", "Run mode must be manual or auto.")
         cfg = m.config()
         changes = {k: v for k, v in (("run_mode", body.run_mode), ("auto_min_reviews", body.auto_min_reviews),
-                                     ("auto_epochs", body.auto_epochs)) if v is not None and getattr(cfg, k) != v}
+                                     ("auto_epochs", body.auto_epochs), ("analyse_new", body.analyse_new))
+                   if v is not None and getattr(cfg, k) != v}
         if changes:
             what = ("run mode set to " + ("full auto" if body.run_mode == "auto" else "manual decisions")
                     if "run_mode" in changes else "automatic learning settings changed")
@@ -1408,8 +1418,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             LearningService(m).auto_log("mode", run_mode=body.run_mode, author=u.username, **{
                 k: v for k, v in changes.items() if k != "run_mode"})
         status = jobs.auto_learn(m.id) if body.run_mode == "auto" else {"state": "manual"}
+        jobs.watch_new_videos(m.id)
         c2 = m.config()
         return {"run_mode": c2.run_mode, "auto_min_reviews": c2.auto_min_reviews, "auto_epochs": c2.auto_epochs,
+                "analyse_new": c2.analyse_new,
                 "status": {k: v for k, v in status.items() if k != "job"}}
 
     @app.post("/api/missions/{mission_id}/recordings/{version_id}/review")
@@ -1721,6 +1733,27 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             e = _video_call(lambda: svc.revise(event_id, body.action, u.username, body.note, **payload))
         except KeyError as exc:
             raise ApiError(400, "video", f"Missing field: {exc.args[0]}") from None
+        if getattr(m.config(), "run_mode", "manual") == "auto":
+            _auto_soon(m.id)
+        return _event_dict(e)
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/overlay")
+    def recording_overlay(version_id: int, m: Mission = Depends(mission)):
+        """The player's data: every event of the recording's newest analysis with its boxes by time."""
+        svc = _video(m)
+        out = _video_call(lambda: svc.overlay(version_id))
+        from ..learning import LearningService
+        ls = LearningService(m)
+        out["recording"] |= {"review": ls.review_kind(version_id), "approved": ls.recording_approved(version_id),
+                             "pending": sum(1 for e in out["events"] if e["status"] == "pending")}
+        return out
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/targets")
+    def recording_add_target(version_id: int, body: AddTargetBody, m: Mission = Depends(mission),
+                             u: User = Depends(user)):
+        """A target the analysis missed, drawn on one frame: a new confirmed event of the operator's."""
+        svc = _video(m)
+        e = _video_call(lambda: svc.add_target(version_id, body.t, body.box, body.cls, u.username, body.note))
         if getattr(m.config(), "run_mode", "manual") == "auto":
             _auto_soon(m.id)
         return _event_dict(e)

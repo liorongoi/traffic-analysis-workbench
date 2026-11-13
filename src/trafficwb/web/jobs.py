@@ -711,22 +711,56 @@ class JobManager:
             m = DataRoot(self.data_root).open_mission(mission_id)
 
             def on_cycle(res, run_id, mid=mission_id):
-                if run_id is not None and not self.busy(mid):
-                    self.start(mid, kind="process")
+                if self.busy(mid):
+                    return
+                if run_id is None:          # no new files: anything left waiting while something else ran?
+                    own = DataRoot(self.data_root).open_mission(mid)     # this thread's own connection
+                    try:
+                        if own.con.execute("SELECT 1 FROM run_item WHERE processing_state='queued' LIMIT 1").fetchone() is None:
+                            return
+                    finally:
+                        own.con.close()
+                self.start(mid, kind="process")
 
-            mon = Monitor(m, interval_seconds=self.monitor_interval, stability_seconds=self.stability, on_cycle=on_cycle)
+            mon = Monitor(m, interval_seconds=self.monitor_interval, stability_seconds=self.stability, on_cycle=on_cycle,
+                          active=self._watches)
             mon.start()
             self.monitors[mission_id] = mon
         elif not enabled and mission_id in self.monitors:
             self.monitors.pop(mission_id).stop()
 
+    @staticmethod
+    def _watches(cfg) -> bool:
+        """Whether new files are picked up and analysed as they arrive: continuous monitoring, or a video mission set
+        to analyse new videos with its model (always so in full auto)."""
+        if cfg.processing == "continuous" and cfg.monitoring_enabled:
+            return True
+        return cfg.input_type == "video" and (cfg.analyse_new or cfg.run_mode == "auto")
+
+    def watch_new_videos(self, mission_id: str) -> bool:
+        """Start or stop watching the input folders to match the mission's settings. When it starts, videos already
+        waiting are analysed too, with the mission's model."""
+        m = DataRoot(self.data_root).open_mission(mission_id)
+        on = self._watches(m.config())
+        if on and mission_id not in self.monitors:
+            self.set_monitoring(mission_id, True)
+            queued = m.con.execute("SELECT 1 FROM run_item WHERE processing_state='queued' LIMIT 1").fetchone()
+            if queued and not self.busy(mission_id):
+                self.start(mission_id, kind="process")
+        elif not on and mission_id in self.monitors:
+            self.set_monitoring(mission_id, False)
+        return on
+
     def resume_monitoring(self) -> list[str]:
-        """After a restart, monitoring resumes for every continuous mission that had it on."""
+        """After a restart, monitoring resumes for every continuous mission that had it on, and for every video
+        mission that analyses new videos as they arrive."""
         root = DataRoot(self.data_root)
         started = []
         for row in root.missions():
+            if row["state"] != "active":
+                continue
             cfg = root.open_mission(row["id"]).config()
-            if cfg.processing == "continuous" and cfg.monitoring_enabled:
+            if self._watches(cfg):
                 self.set_monitoring(row["id"], True)
                 started.append(row["id"])
         return started

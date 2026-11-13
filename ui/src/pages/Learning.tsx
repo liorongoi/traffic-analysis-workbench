@@ -565,10 +565,15 @@ function RunModeCard({ s, missionId, act }: { s: any; missionId: string; act: Ac
   const [mode, setMode] = useState<string>(a.run_mode);
   const [need, setNeed] = useState<number>(a.auto_min_reviews);
   const [epochs, setEpochs] = useState<number>(a.auto_epochs);
-  useEffect(() => { setMode(a.run_mode); setNeed(a.auto_min_reviews); setEpochs(a.auto_epochs); }, [a.run_mode, a.auto_min_reviews, a.auto_epochs]);
-  const changed = mode !== a.run_mode || need !== a.auto_min_reviews || epochs !== a.auto_epochs;
-  const save = () => act(() => api(`/missions/${missionId}/run-mode`, { method: "PUT", body: { run_mode: mode, auto_min_reviews: need, auto_epochs: epochs } }),
-    (r) => r.run_mode === "auto" ? `Full auto is on. ${AUTO_STATE[r.status?.state] ?? ""}` : "Manual decisions: nothing trains or changes model by itself.");
+  const [fresh, setFresh] = useState<boolean>(!!a.analyse_new);
+  const reset = () => { setMode(a.run_mode); setNeed(a.auto_min_reviews); setEpochs(a.auto_epochs); setFresh(!!a.analyse_new); };
+  useEffect(reset, [a.run_mode, a.auto_min_reviews, a.auto_epochs, a.analyse_new]);
+  const changed = mode !== a.run_mode || need !== a.auto_min_reviews || epochs !== a.auto_epochs || fresh !== !!a.analyse_new;
+  const save = () => act(() => api(`/missions/${missionId}/run-mode`, { method: "PUT", body: {
+    run_mode: mode, auto_min_reviews: need, auto_epochs: epochs, ...(s.video ? { analyse_new: fresh } : {}) } }),
+    (r) => (r.run_mode === "auto" ? `Full auto is on. ${AUTO_STATE[r.status?.state] ?? ""}` : "Manual decisions: nothing trains or changes model by itself.")
+      + (s.video ? (r.analyse_new || r.run_mode === "auto" ? " New videos in the input folder are analysed as they arrive, with this mission's model."
+        : " New videos wait in the catalog until you tick them.") : ""));
   return (
     <div className="card runmode">
       <h2 style={{ marginTop: 0 }}>Run mode</h2>
@@ -589,6 +594,15 @@ function RunModeCard({ s, missionId, act }: { s: any; missionId: string; act: Ac
               {withValue([10, 20, 30, 50, 100], epochs).map((n) => <option key={n} value={n}>{n} epochs{n === 30 ? " (recommended)" : ""}</option>)}
             </select></label>
         </div>)}
+      {s.video && (
+        <div className="row" style={{ marginTop: 8 }}>
+          <label>New videos in the input folder
+            <select value={mode === "auto" || fresh ? "auto" : "wait"} disabled={mode === "auto"} onChange={(e) => setFresh(e.target.value === "auto")}>
+              <option value="auto">Analyse them as they arrive, with this mission's model</option>
+              <option value="wait">Wait until I tick them in the catalog</option>
+            </select></label>
+          {mode === "auto" && <span className="muted small">Always so in full auto.</span>}
+        </div>)}
       {mode === "auto" && <p className="muted">In full auto, once enough new decisions have built up (confirmed or rejected events,
         approved images or recordings, corrected boxes), a dataset version is frozen, the model this mission uses is trained further
         and both are tested on the same test images. The mission switches to the new model only if it scored better; otherwise
@@ -596,7 +610,7 @@ function RunModeCard({ s, missionId, act }: { s: any; missionId: string; act: Ac
         changes by itself. To undo a switch, choose the earlier model under Saved models.</p>}
       {a.run_mode === "auto" && !changed && <p><strong>{a.new_reviews}</strong> of {a.auto_min_reviews} new decisions toward the next round.</p>}
       {changed && <div className="row"><button className="primary" onClick={save}>Save run mode</button>
-        <button onClick={() => { setMode(a.run_mode); setNeed(a.auto_min_reviews); setEpochs(a.auto_epochs); }}>Cancel</button></div>}
+        <button onClick={reset}>Cancel</button></div>}
       {a.history.length > 0 && (
         <details style={{ marginTop: 8 }}>
           <summary>What the automatic loop did ({a.history.length})</summary>
