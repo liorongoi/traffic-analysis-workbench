@@ -66,7 +66,11 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: python scripts/build_ui.py
-      - run: python scripts/fetch_models.py
+      - name: Tools to export RF-DETR to ONNX on this staging machine (CPU PyTorch is enough)
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install "rfdetr[train]>=1.12.1,<1.13" "onnx>=1.16"
+      - run: python scripts/fetch_models.py --require-rfdetr
       - run: python scripts/make_bundle.py --platform win_amd64 --python 3.12 --ort ${{ matrix.ort }} --out dist
       - name: Install offline and check
         shell: pwsh

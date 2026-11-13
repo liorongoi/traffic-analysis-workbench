@@ -175,9 +175,11 @@ def fetch_rfdetr(dest: Path, weights_dir: Path, sizes: list[str]) -> int:
         import rfdetr  # noqa: F401
         from trafficwb import rfdetr_train as rt
     except ImportError as exc:
-        print(f"error: RF-DETR needs PyTorch and the rfdetr package here ({exc}); pip install \"rfdetr[train,onnx]\", "
-              "or pass --no-rfdetr", file=sys.stderr)
-        return 1
+        # Exporting RF-DETR needs PyTorch and rfdetr on this machine. Without them the other packs are still written and
+        # the installation offers RF-DETR as "not installed here"; --require-rfdetr makes this an error instead.
+        print(f"warning: RF-DETR skipped: it needs PyTorch and the rfdetr package here ({exc}); "
+              "pip install \"rfdetr[train]\" onnx", file=sys.stderr)
+        return 2
     weights_dir.mkdir(parents=True, exist_ok=True)
     for size in sizes:
         info = rt.SIZES[size]
@@ -243,6 +245,7 @@ def main(argv=None) -> int:
     ap.add_argument("--training-weights", default=str(Path(__file__).resolve().parents[1] / "training_weights"))
     ap.add_argument("--no-sam3", action="store_true", help="skip SAM 3.1 (about 880 MB), e.g. for unit tests")
     ap.add_argument("--no-rfdetr", action="store_true", help="skip RF-DETR (needs PyTorch and rfdetr on this machine)")
+    ap.add_argument("--require-rfdetr", action="store_true", help="fail when RF-DETR cannot be exported here")
     ap.add_argument("--rfdetr-sizes", default=RFDETR_SIZES_DEFAULT,
                     help="comma-separated RF-DETR sizes to fetch: nano, small, medium (default small)")
     a = ap.parse_args(argv)
@@ -276,8 +279,10 @@ def main(argv=None) -> int:
         print(f"error: checksum mismatch for {w.name}: {got}", file=sys.stderr)
         return 1
     print(f"ok {w}")
-    if not a.no_rfdetr and fetch_rfdetr(Path(a.dest), t, [x.strip() for x in a.rfdetr_sizes.split(",") if x.strip()]):
-        return 1
+    if not a.no_rfdetr:
+        r = fetch_rfdetr(Path(a.dest), t, [x.strip() for x in a.rfdetr_sizes.split(",") if x.strip()])
+        if r == 1 or (r == 2 and a.require_rfdetr):
+            return 1
     return 0
 
 
