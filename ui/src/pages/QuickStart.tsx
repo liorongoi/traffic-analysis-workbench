@@ -3,6 +3,7 @@ import { api, ApiError, post } from "../api";
 import { go } from "../router";
 import FolderPicker from "../components/FolderPicker";
 import { NamePick } from "../components/Pick";
+import { DETECTOR_LABEL, GradeLine, partsOf, toggleDetector, type Grades } from "./Wizard";
 
 // A new mission on one screen. The person chooses the folder; LanePulse reads it and fills in the rest (name, still
 // images or video, the time zone the last mission used, an exports folder beside the source), then Create and start
@@ -10,7 +11,7 @@ import { NamePick } from "../components/Pick";
 // setup stays one link away for anything else.
 
 type Ref = { countries: Record<string, string>; modes: Record<string, string[]>; zones: string[];
-  sam3?: { installed: boolean; reason: string | null } };
+  sam3?: { installed: boolean; reason: string | null }; rfdetr?: { installed: boolean; reason: string | null } };
 type Guess = { source_dir: string; name: string; input_type: string; images: number; videos: number; readable: number; more: boolean;
   pattern: string | null; first_utc: string | null; last_utc: string | null; unreadable: { file: string; reason: string }[];
   iana_zone: string; country: string; zone_from: string | null; output_dir: string; output_exists: boolean };
@@ -56,6 +57,7 @@ export default function QuickStart() {
   const [err, setErr] = useState<string[]>([]);
 
   useEffect(() => { api("/reference").then(setRef).catch(() => setRef(null)); }, []);
+  const grades: Grades | undefined = (ref as any)?.grades?.scenes ? (ref as any).grades : undefined;
   // Read the folder once the path stops changing (the picker reports every key typed in its field).
   useEffect(() => {
     const dir = folder[0]?.trim();
@@ -79,6 +81,7 @@ export default function QuickStart() {
   const files = g ? g.images + g.videos : 0;
   const video = g?.input_type === "video";
   const samOk = !!ref?.sam3?.installed;
+  const rfOk = !!ref?.rfdetr?.installed;
 
   const create = async () => {
     if (!g) return;
@@ -164,13 +167,17 @@ export default function QuickStart() {
           <div style={{ marginTop: 16 }}>
             <div>
               <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>Detector</div>
-              <div className="seg" role="radiogroup" aria-label="Detector">
-                {([["standard", "Standard", "Fastest, works on any computer"], ["sam3", "SAM 3.1", samOk ? "Finds things by name" : "Not installed here"],
-                  ["both", "Both", samOk ? "Finds the most, slowest" : "Needs SAM 3.1"]] as const).map(([k, l, d]) => (
-                  <button key={k} type="button" role="radio" aria-checked={detector === k} className={detector === k ? "on" : ""}
-                    disabled={!g || (k !== "standard" && !samOk)} onClick={() => setDetector(k)}><b>{l}</b><small>{d}</small></button>
-                ))}
+              <div className="muted" style={{ fontSize: 12.5, margin: "-4px 0 8px" }}>Tick one fast detector, SAM 3.1, or a fast one with SAM 3.1 (their findings are merged).</div>
+              <div className="seg" role="group" aria-label="Detector">
+                {([["standard", "YOLOX-s", "Fastest, works on any computer"], ["rfdetr", "RF-DETR", rfOk ? "Finds more, a little slower" : "Not installed here"],
+                  ["sam3", "SAM 3.1", samOk ? "Finds things by name, slowest" : "Not installed here"]] as const).map(([k, l, d]) => {
+                  const on = k === "sam3" ? partsOf(detector).sam : partsOf(detector).fast === k;
+                  return <button key={k} type="button" role="checkbox" aria-checked={on} className={on ? "on" : ""}
+                    disabled={!g || (k === "rfdetr" ? !rfOk : k === "sam3" && !samOk)} onClick={() => setDetector(toggleDetector(detector, k))}>
+                    <b><span aria-hidden="true">{on ? "\u2611" : "\u2610"}</span> {l}</b><small>{d}</small><GradeLine g={grades} k={k} /></button>;
+                })}
               </div>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Runs: {DETECTOR_LABEL[detector] ?? detector}</div>
             </div>
           </div>
 

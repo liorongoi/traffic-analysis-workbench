@@ -248,7 +248,8 @@ class Worker:
             pack = self._pack(spec["standard"])
             std = JobManager._with_classes((make_detector(pack), pack.card), spec.get("words"))
         det = std[0] if std else None
-        if spec["detector"] in ("sam3", "both"):
+        from .detectors import uses_sam
+        if uses_sam(spec["detector"]):
             from .sam3 import Sam3Detector, engine, vehicle_prompts
             sam = Sam3Detector(engine(), prompts=vehicle_prompts(spec.get("words")))
             if spec["detector"] == "sam3":

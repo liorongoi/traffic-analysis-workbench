@@ -1,5 +1,7 @@
 # Benchmarks on public datasets
 
+RF-DETR (a detector choice since 13 Nov 2026) against YOLOX-s and SAM 3.1, before and after training: [rf-detr.md](rf-detr.md).
+
 Date: 13 Nov 2026. Code: `main` at `10badef` (video phase 6a); the standard detector gives the same scores on `4ee72e7` (phase 1c). Machine: Linux cloud container, 4 CPU cores, no GPU.
 Script: `scripts/benchmark.py`. Raw results, with every setting and the exact image or sequence list: `results/*.json`.
 

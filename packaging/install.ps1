@@ -270,15 +270,16 @@ function Install-Env([string]$build) {
   # Starting weights for training: kept in <install>\training (so a small update finds them too) and put next to
   # this environment's Python, where trafficwb.train looks.
   $kept = Join-Path $Target "training"
-  $weights = Join-Path $Bundle "training\yolox_s.pth"
-  if (Test-Path $weights) {
+  $weights = @(Get-ChildItem -Path (Join-Path $Bundle "training") -Filter *.pth -ErrorAction SilentlyContinue)
+  if ($weights.Count -gt 0) {
     New-Item -ItemType Directory -Force -Path $kept | Out-Null
-    Copy-Item $weights $kept -Force
+    $weights | ForEach-Object { Copy-Item $_.FullName $kept -Force }
   }
-  if (Test-Path (Join-Path $kept "yolox_s.pth")) {
+  $keptWeights = @(Get-ChildItem -Path $kept -Filter *.pth -ErrorAction SilentlyContinue)
+  if ($keptWeights.Count -gt 0) {
     $share = Join-Path $Venv "share\lanepulse"
     New-Item -ItemType Directory -Force -Path $share | Out-Null
-    Copy-Item (Join-Path $kept "yolox_s.pth") $share -Force
+    $keptWeights | ForEach-Object { Copy-Item $_.FullName $share -Force }   # YOLOX-s, and RF-DETR when shipped
   }
   $site = Join-Path $Venv "Lib\site-packages"
   Install-VcRuntime (Join-Path $site "onnxruntime\capi")

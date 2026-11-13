@@ -35,8 +35,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--output", required=True)
     c.add_argument("--formats", default="xlsx,csv")
     c.add_argument("--author", default="operator")
-    c.add_argument("--detector", default="standard", choices=["standard", "sam3"],
-                   help="vehicle detector for still images: standard (YOLOX-s) or sam3 (SAM 3.1)")
+    c.add_argument("--detector", default="standard", choices=["standard", "rfdetr", "sam3"],
+                   help="vehicle detector for still images: standard (YOLOX-s), rfdetr (RF-DETR) or sam3 (SAM 3.1)")
     s = sub.add_parser("scan")
     s.add_argument("--data", required=True)
     s.add_argument("--mission", required=True)
@@ -93,12 +93,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "detect":
         from . import models
-        from .detect import DetectorSettings, YoloxDetector, make_detector
+        from .detect import DetectorSettings, make_detector
         from .process import Processor
         cols, rows = (int(x) for x in a.tiles.lower().split("x"))
         m = root.open_mission(a.mission)
         chosen = m.config().detector if m.input_type == "images" else "standard"
-        model = a.model or (chosen if chosen in ("sam3", "both") else "yolox-s")
+        from .detectors import fast_of, uses_sam
+        model = a.model or (chosen if chosen == "sam3" else "both" if uses_sam(chosen) else "yolox-s")
+        fast = "yolox-s"
+        if not a.model and fast_of(chosen) == "rfdetr":
+            from .detectors import rfdetr_pack
+            fast = rfdetr_pack(a.data).name
+            model = "both" if uses_sam(chosen) else fast
         card = None
         if model in ("sam3", "sam3.1"):
             from .sam3 import Sam3Detector, engine
@@ -108,8 +114,8 @@ def main(argv: list[str] | None = None) -> int:
             from .combined import CombinedDetector
             from .sam3 import Sam3Detector, engine
             eng = engine()
-            pack = models.find("yolox-s", a.model_version)
-            det = CombinedDetector(YoloxDetector(pack, DetectorSettings(tiles=(cols, rows))), pack.card,
+            pack = models.find(fast, a.model_version)
+            det = CombinedDetector(make_detector(pack, DetectorSettings(tiles=(cols, rows))), pack.card,
                                    Sam3Detector(eng), eng.pack.card)
             card = det.card()
         else:
