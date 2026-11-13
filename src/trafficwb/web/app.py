@@ -2168,6 +2168,22 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         except ZoneError as exc:
             raise ApiError(404, "zone", str(exc)) from None
 
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/telemetry")
+    def telemetry_get(version_id: int, m: Mission = Depends(mission)):
+        """Where a drone or aircraft camera was and looked (DJI subtitle file or KLV), when the recording has it."""
+        from ..video_meta import stored
+        svc = _video(m)
+        if m.con.execute("SELECT 1 FROM source_version WHERE id=?", (version_id,)).fetchone() is None:
+            raise ApiError(404, "no_recording", "That recording is not in this mission.")
+        try:
+            path = svc.path(version_id)
+        except Exception:  # noqa: BLE001 - the file has gone: what was read before is still shown
+            path = None
+        tel = stored(m.con, version_id, path)
+        if tel is None:
+            return {"source": None}
+        return {"source": tel.source, "summary": tel.summary(), "samples": tel.samples}
+
     @app.post("/api/missions/{mission_id}/recordings/{version_id}/zones")
     def zones_add(version_id: int, body: ZoneBody, m: Mission = Depends(mission), u: User = Depends(user)):
         """A counting line or an area on this camera's picture (every video in the same folder uses it)."""

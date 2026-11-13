@@ -97,6 +97,11 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
     api(`/missions/${missionId}/recordings/${versionId}/calibration`)
       .then((r) => { setCal(r.calibration); setDistances(r.distances_m); }).catch(() => undefined);
   }, [missionId, versionId]);
+  // Where a drone or aircraft camera was (DJI subtitle file or KLV in the video), when the recording carries it.
+  const [tel, setTel] = useState<{ source: string; summary: any; samples: any[] } | null>(null);
+  useEffect(() => {
+    api(`/missions/${missionId}/recordings/${versionId}/telemetry`).then((r) => setTel(r.source ? r : null)).catch(() => setTel(null));
+  }, [missionId, versionId]);
   const loadZones = useCallback(() => api(`/missions/${missionId}/recordings/${versionId}/zones`)
     .then((r) => { setZones(r.zones); setZoneNames({ line: r.line_names, area: r.area_names }); }).catch(() => undefined), [missionId, versionId]);
   useEffect(() => { loadZones(); }, [loadZones]);
@@ -422,6 +427,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               next event not reviewed yet.</div>}
           </div>
           {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
+          {tel && <Aircraft tel={tel} t={now} />}
           {zones.length > 0 && <div className="card grid" style={{ gap: 4 }}>
             <strong className="small">Lines and areas of this camera</strong>
             {zones.map((z) => <div key={z.uid} className="row small" style={{ justifyContent: "space-between" }}>
@@ -468,5 +474,36 @@ function Timeline({ lanes: ls, dur, now, sel, onSeek, onPick }: {
         </rect>)))}
       <line x1={x(now)} x2={x(now)} y1={0} y2={h} stroke="var(--accent, #4aa3ff)" strokeWidth={2} vectorEffect="non-scaling-stroke" />
     </svg>
+  );
+}
+
+/** The aircraft's position, height and heading at the player's time, from its own metadata. */
+function Aircraft({ tel, t }: { tel: { source: string; summary: any; samples: any[] }; t: number }) {
+  const s = tel.samples;
+  let a: any = null;
+  if (s.length && t >= s[0].t - 0.5 && t <= s[s.length - 1].t + 0.5) {
+    let i = 0;
+    while (i + 1 < s.length && s[i + 1].t <= t) i++;
+    const p = s[i], q = s[Math.min(i + 1, s.length - 1)];
+    const w = q.t > p.t ? Math.min(1, Math.max(0, (t - p.t) / (q.t - p.t))) : 0;
+    a = {} as any;
+    for (const k of Object.keys(p)) a[k] = typeof p[k] === "number" && typeof q[k] === "number" && k !== "heading" ? p[k] + w * (q[k] - p[k]) : p[k];
+  }
+  const deg = (v: number, pos: string, neg: string) => `${Math.abs(v).toFixed(5)}°${v >= 0 ? pos : neg}`;
+  const src = tel.source === "klv-0601" ? "KLV (MISB 0601)" : "DJI flight record";
+  return (
+    <div className="card grid" style={{ gap: 4 }}>
+      <strong className="small">Aircraft <span className="muted">· {src}{tel.summary?.platform ? ` · ${tel.summary.platform}` : ""}</span></strong>
+      {a && a.lat != null ? <>
+        <div className="small mono">{deg(a.lat, "N", "S")} {deg(a.lon, "E", "W")}</div>
+        <div className="small">
+          {a.rel_alt != null && <>Height {Math.round(a.rel_alt)} m above take-off · </>}
+          {a.alt != null && <>{Math.round(a.alt)} m above sea · </>}
+          {a.heading != null && <>heading {Math.round(a.heading)}°</>}
+          {a.hfov != null && <> · view {a.hfov.toFixed(1)}° wide</>}
+        </div>
+        {a.center_lat != null && <div className="small muted">Looking at {deg(a.center_lat, "N", "S")} {deg(a.center_lon, "E", "W")}</div>}
+      </> : <div className="small muted">No position at this moment.</div>}
+    </div>
   );
 }

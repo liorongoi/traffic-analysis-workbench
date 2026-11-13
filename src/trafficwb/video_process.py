@@ -130,15 +130,21 @@ def probe_version(con, views, version_id: int) -> dict:
     if row:
         return dict(row)
     v = con.execute("SELECT capture_utc, capture_precision FROM source_version WHERE id=?", (version_id,)).fetchone()
-    p = probe(views._path(version_id))
+    path = views._path(version_id)
+    p = probe(path)
+    from .video_meta import stored
+    tel = stored(con, version_id, path)                 # drone or aircraft metadata, read once
+    start, prec, src = v["capture_utc"], v["capture_precision"] if v["capture_utc"] else None, \
+        "filename" if v["capture_utc"] else "none"
+    if not start and tel is not None and tel.start_utc:
+        start, prec, src = tel.start_utc, "second", "klv"  # the aircraft's own clock
     con.execute(
         "INSERT INTO video_probe(source_version_id,container,codec,width,height,duration_s,nominal_fps,frame_count,"
         "variable_frame_rate,creation_time,start_utc,start_precision,start_source,error,probed_at) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (version_id, p.container, p.codec, p.width, p.height, p.duration_s, p.nominal_fps, p.frame_count,
          None if p.variable_frame_rate is None else int(p.variable_frame_rate), p.creation_time,
-         v["capture_utc"], v["capture_precision"] if v["capture_utc"] else None,
-         "filename" if v["capture_utc"] else "none", p.error, utcnow()))
+         start, prec, src, p.error, utcnow()))
     return dict(con.execute("SELECT * FROM video_probe WHERE source_version_id=?", (version_id,)).fetchone())
 
 
