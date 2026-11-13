@@ -59,6 +59,15 @@ echo "$VER" > "$APP/Contents/Resources/version.txt"
 # Tells this build from an older one of the same version, so opening it sets up again and replaces an older server.
 echo "$VER-$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA:-local}" | cut -c1-48 > "$APP/Contents/Resources/build.txt"
 cp "$ROOT/packaging/mac/launcher.sh" "$APP/Contents/MacOS/LanePulse"
+# The launch screen the app shows in the browser while it sets up and starts, with the app's own fonts (taken from
+# the built web screens, so nothing is downloaded when it shows).
+LAUNCH="$APP/Contents/Resources/launch"
+mkdir -p "$LAUNCH/fonts"
+cp "$ROOT/packaging/mac/launch/index.html" "$LAUNCH/index.html"
+for f in chakra-petch-600 chakra-petch-700 ibm-plex-sans-400 ibm-plex-sans-500 ibm-plex-mono-400 ibm-plex-mono-500; do
+  src="$(ls "$ROOT/src/trafficwb/web/static/assets/${f%-*}-latin-${f##*-}-normal"*.woff2 2>/dev/null | head -1)"
+  [ -z "$src" ] || cp "$src" "$LAUNCH/fonts/$f.woff2"
+done
 chmod +x "$APP/Contents/MacOS/LanePulse"
 cp "$ROOT/packaging/mac/lanepulse.icns" "$APP/Contents/Resources/lanepulse.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
