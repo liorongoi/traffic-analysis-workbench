@@ -87,3 +87,19 @@ def test_worker_refuses_a_checksum_that_is_a_path(tmp_path):
     with pytest.raises(RuntimeError, match="SHA-256"):
         w._pack({"name": "x", "version": "1", "sha256": "../../Library/LaunchAgents"})
     assert not (tmp_path / "Library").exists()
+
+
+def test_lookup_indexes_are_used(tmp_path):
+    """Results and the pipeline look up each image's run item and detections; those must not scan whole tables."""
+    from trafficwb.store import DataRoot, MissionConfig
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir(), out.mkdir()
+    root = DataRoot(tmp_path / "data")
+    m = root.create_mission(MissionConfig(name="m", input_type="images", mode="general_traffic", country="IL",
+                                          iana_zone="Asia/Jerusalem", source_dir=str(src), include_subdirs=True,
+                                          processing="one_time", output_dir=str(out), export_formats=["csv"]), "t")
+    m = root.open_mission(m.id)
+    for q in ("SELECT * FROM run_item WHERE source_version_id=1 ORDER BY id DESC LIMIT 1",
+              "SELECT * FROM detection WHERE run_item_id=1"):
+        plan = " ".join(str(r[3]) for r in m.con.execute("EXPLAIN QUERY PLAN " + q))
+        assert "USING INDEX" in plan or "USING COVERING INDEX" in plan, plan

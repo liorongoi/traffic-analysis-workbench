@@ -3,10 +3,10 @@
 #   packaging/mac/build_app.sh <python-build-standalone .tar.gz> <its download URL> <out folder>
 # Before: the web screens built (scripts/build_ui.py).
 #
-# An online installer: the app is small and, the first time it is opened (and after an update), downloads what it
-# needs into ~/LanePulse/runtime: its own Python, the packages, the models and the training starting weights. Every
-# download is pinned here, at build time, to an exact file and its SHA-256, so the Mac gets exactly what was tested.
-# After that LanePulse runs offline.
+# An offline installer when the models are staged (CI): the app carries its own Python, the packages, the models and
+# the training starting weights, and the first time it is opened (and after an update) it sets them up in
+# ~/LanePulse/runtime without the internet. Built without staged models, the app is small and downloads the same
+# files instead, each pinned here, at build time, to an exact file and its SHA-256.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PYTGZ="$1"; PYURL="$2"; OUT="$3"
@@ -46,6 +46,19 @@ grep -qi "^torch @" "$SETUP/packages.lock" && grep -qi "^onnxruntime @" "$SETUP/
 
 # Python itself: the same python-build-standalone file, by URL and SHA-256.
 printf '%s\n%s\n' "$PYURL" "$(shasum -a 256 "$PYTGZ" | cut -c1-64)" > "$SETUP/python.txt"
+
+# Offline: the app carries every file it would otherwise download (Python, the pinned wheels, the model packs staged
+# by scripts/fetch_models.py and the training starting weights), so setting up needs no internet. Without staged
+# models (a local build), it stays an online installer.
+if [ -d "$ROOT/models" ] && [ -n "$(ls -A "$ROOT/models" 2>/dev/null)" ]; then
+  cp "$PYTGZ" "$SETUP/python.tar.gz"
+  "$WORK/python/bin/python3" -m pip download --quiet --disable-pip-version-check --no-deps --require-hashes \
+    -r "$SETUP/packages.lock" -d "$SETUP/wheels"
+  [ "$(ls "$SETUP/wheels"/*.whl | wc -l)" -eq "$(grep -c ' @ ' "$SETUP/packages.lock")" ] || { echo "not every pinned wheel was downloaded" >&2; exit 1; }
+  cp -R "$ROOT/models" "$SETUP/models"
+  if [ -d "$ROOT/training_weights" ]; then cp -R "$ROOT/training_weights" "$SETUP/training_weights"; fi
+  echo "offline: $(du -sh "$SETUP" | cut -f1) carried in the app ($(ls "$SETUP/models" | tr '\n' ' '))"
+fi
 
 # The model and weight downloader, each file checked against its SHA-256 (fetch_models.py finds the SAM licence
 # text two folders up, as in the source tree).

@@ -43,6 +43,7 @@ export default function App() {
           <JumpBar />
           <Status />
           <Clock />
+          <Version />
         </div>
       </header>
       <main id="main-content">{body}</main>
@@ -77,4 +78,12 @@ function Clock() {
   useEffect(() => { const t = window.setInterval(() => setNow(new Date()), 15000); return () => window.clearInterval(t); }, []);
   const hm = (d: Date, utc: boolean) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false, ...(utc ? { timeZone: "UTC" } : {}) });
   return <span className="clock" aria-label={`Local time ${hm(now, false)}, UTC ${hm(now, true)}`}>{hm(now, false)} <span>local</span> · {hm(now, true)} <span>UTC</span></span>;
+}
+
+/** The build this server runs, so whoever tests can tell which version is on screen. */
+function Version() {
+  const [v, setV] = useState<string | null>(null);
+  useEffect(() => { api("/health").then((h) => setV(h.version)).catch(() => setV(null)); }, []);
+  if (!v) return null;
+  return <span className="build-version" title={`LanePulse version ${v}`}>v{v}</span>;
 }
