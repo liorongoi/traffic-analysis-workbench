@@ -22,10 +22,23 @@ def _probe() -> dict:
         dev = tr.pick_device("auto")
         return {"state": "ready", "device_type": dev.type, "device": tr.describe_device(dev),
                 "coco_weights": tr.find_coco_weights() is not None,
+                **_rfdetr(),
                 # suggested rounds: a GPU does 40 in an hour or two; a CPU needs a night for about 20
                 "suggested_epochs": 40 if dev.type in ("cuda", "mps") else 20}
     except Exception as exc:                       # a broken PyTorch must never break the learning page
         return {"state": "unavailable", "reason": f"PyTorch does not start here: {type(exc).__name__}: {exc}"}
+
+
+def _rfdetr() -> dict:
+    """Can RF-DETR be trained here too (the rfdetr package), and from which released sizes?"""
+    try:
+        from . import rfdetr_train as rt
+        ok = rt.available()
+        return {"rfdetr": ok["ok"], "rfdetr_reason": ok["reason"],
+                "rfdetr_weights": [s for s in rt.SIZES if rt.find_coco_weights(s) is not None] if ok["ok"] else []}
+    except Exception as exc:                       # never break the learning page
+        return {"rfdetr": False, "rfdetr_reason": f"RF-DETR does not start here: {type(exc).__name__}: {exc}",
+                "rfdetr_weights": []}
 
 
 def _run() -> None:

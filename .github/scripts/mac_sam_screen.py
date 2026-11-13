@@ -13,18 +13,19 @@ with sync_playwright() as p:
     b = p.chromium.launch()
     page = b.new_page(viewport={"width": 1280, "height": 1000})
     page.goto(url.rstrip("/") + "/#/new")
-    page.get_by_role("radio", name=re.compile(r"^SAM 3\.1")).wait_for(timeout=30000)
+    quick = page.get_by_role("checkbox", name=re.compile(r"SAM 3\.1"))
+    quick.wait_for(timeout=30000)
     page.wait_for_function("() => !document.body.innerText.includes('Loading')", timeout=30000)
     page.wait_for_timeout(1000)
-    if "Not installed here" in page.inner_text("body"):
+    if "Not installed here" in quick.inner_text():
         sys.exit("The New mission page says SAM 3.1 is not installed.")
     page.goto(url.rstrip("/") + "/#/new/full")
-    # The "Both" option mentions SAM 3.1 too, so match the option whose text starts with it.
+    # Detectors are tick boxes; match the one whose text starts with SAM 3.1.
     choice = page.locator("label.choice", has_text=re.compile(r"^\s*SAM 3\.1"))
     choice.wait_for(timeout=30000)
     page.screenshot(path=shot, full_page=True)
     text = choice.inner_text()
-    radio = choice.locator("input[type=radio]")
+    radio = choice.locator("input[type=checkbox]")
     print(text)
     if radio.is_disabled():
         sys.exit(f"The SAM 3.1 option is greyed out: {text}")
