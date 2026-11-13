@@ -243,9 +243,9 @@ export const DETECTOR_LABEL: Record<string, string> = {
 /** SAM 3.1 runs for these choices (so its interval and words apply). */
 export const usesSam = (d: string) => d === "sam3" || d === "both";
 
-type Grades = {
+export type Grades = {
   measured?: string; machine?: string; note?: string;
-  scenes: { key: string; label: string; set: string }[];
+  scenes: { key: string; label: string; short?: string; set: string }[];
   detectors: Record<string, { model: string; ap50: Record<string, number | null>; seconds: Record<string, number | null>;
     trained?: Record<string, number | null>; trained_note?: string }>;
 };
@@ -267,7 +267,7 @@ const meanSeconds = (d: Record<string, number | null>) => {
 const fmtS = (s: number | null) => (s == null ? "–" : s < 1 ? `${s.toFixed(2)} s` : `${s.toFixed(1)} s`);
 
 /** One line of grades under a detector's name: per kind of scene, then speed. */
-function GradeLine({ g, k }: { g?: Grades; k: string }) {
+export function GradeLine({ g, k }: { g?: Grades; k: string }) {
   const d = g?.detectors?.[k];
   if (!g || !d) return null;
   const s = meanSeconds(d.seconds);
@@ -275,7 +275,7 @@ function GradeLine({ g, k }: { g?: Grades; k: string }) {
     <span className="grades" aria-label="Benchmark grades">
       {g.scenes.map((sc) => (
         <span key={sc.key} className={`grade g-${apGrade(d.ap50[sc.key])}`} title={`${sc.label}: vehicle AP50 ${d.ap50[sc.key] ?? "not measured"} (${sc.set})`}>
-          {sc.label.split(",")[0]} <b>{apGrade(d.ap50[sc.key])}</b>
+          {sc.short ?? sc.label} <b>{apGrade(d.ap50[sc.key])}</b>
         </span>
       ))}
       <span className={`grade g-${speedGrade(s)}`} title={`Seconds per image on ${g.machine ?? "a CPU"}, averaged over the scenes`}>Speed <b>{speedGrade(s)}</b></span>
@@ -317,7 +317,7 @@ export function GradesTable({ g }: { g: Grades }) {
       </>}
       <p className="muted" style={{ fontSize: 12.5 }}>
         Vehicle AP50 in percent: how many of the vehicles each detector finds with a well-placed box, ranked by its confidence
-        (A 80 or more, B 65, C 50, D 30, F below). {g.scenes.map((sc) => `${sc.label}: ${sc.set}.`).join(" ")} Speed on {g.machine ?? "a CPU"}
+        (A 80 or more, B 65, C 50, D 30, F below). {g.scenes.map((sc) => `${sc.label}: ${sc.set}.`).join(" ")} Speed on {g.machine ?? "a CPU"}{" "}
         (A up to 0.15 s per image, B 0.4 s, C 1.5 s, D 5 s, F slower); a graphics card is many times faster. Your own cameras
         can differ: compare detectors on your reviewed images on the learning page.{g.measured ? ` Measured ${g.measured}.` : ""}
       </p>

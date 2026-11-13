@@ -550,10 +550,12 @@ class JobManager:
         job.result["training_run"] = run_id
         try:
             job.control.stage = "loading PyTorch"
-            if p.get("arch") == "rf-detr":         # RF-DETR: its own training loop, the same arguments and pack
-                from .. import rfdetr_train as tr
-            else:
-                from .. import train as tr
+            import importlib
+            from ..train import TRAINERS
+            arch = p.get("arch") or "yolox"
+            if arch not in TRAINERS:
+                raise RuntimeError(f"LanePulse cannot train a model of kind {arch}.")
+            tr = importlib.import_module(TRAINERS[arch], __package__.rpartition(".")[0])
             work = Path(tempfile.mkdtemp(prefix="lanepulse-train-", dir=p.get("work_dir")))
             job.control.stage = "copying the dataset images"
             ds_dir = ls.export_combined(refs, out_dir=work)
@@ -588,7 +590,7 @@ class JobManager:
             workers = min(4, os.cpu_count() or 1) if sys.platform.startswith("linux") and p.get("device") != "cpu" else 0
             z = tr.train(ds_dir, work / "out", init=p.get("init") or "coco", epochs=int(p["epochs"]), device=p.get("device") or "auto",
                          workers=workers, log=log, progress=progress, control=job.control, on_epoch=on_epoch, download=False,
-                         mp_context="spawn", **({"size": p.get("size") or "small"} if p.get("arch") == "rf-detr" else {}))
+                         mp_context="spawn", **({"size": p["size"]} if arch != "yolox" and p.get("size") else {}))
             job.control.stage = "adding the new model"
             r = import_pack(z, p.get("models_root") or models.models_root())
             job.result["model"] = {"name": r["name"], "version": r["version"]}

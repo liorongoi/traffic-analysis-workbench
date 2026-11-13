@@ -3,6 +3,7 @@ import { api, ApiError, post } from "../api";
 import { go } from "../router";
 import FolderPicker from "../components/FolderPicker";
 import { NamePick } from "../components/Pick";
+import { GradeLine, type Grades } from "./Wizard";
 
 // A new mission on one screen. The person chooses the folder; LanePulse reads it and fills in the rest (name, still
 // images or video, the time zone the last mission used, an exports folder beside the source), then Create and start
@@ -56,6 +57,7 @@ export default function QuickStart() {
   const [err, setErr] = useState<string[]>([]);
 
   useEffect(() => { api("/reference").then(setRef).catch(() => setRef(null)); }, []);
+  const grades: Grades | undefined = (ref as any)?.grades?.scenes ? (ref as any).grades : undefined;
   // Read the folder once the path stops changing (the picker reports every key typed in its field).
   useEffect(() => {
     const dir = folder[0]?.trim();
@@ -170,7 +172,7 @@ export default function QuickStart() {
                   ["sam3", "SAM 3.1", samOk ? "Finds things by name" : "Not installed here"],
                   ["both", "Both", samOk ? "Finds the most, slowest" : "Needs SAM 3.1"]] as const).map(([k, l, d]) => (
                   <button key={k} type="button" role="radio" aria-checked={detector === k} className={detector === k ? "on" : ""}
-                    disabled={!g || (k === "rfdetr" ? !rfOk : k !== "standard" && !samOk)} onClick={() => setDetector(k)}><b>{l}</b><small>{d}</small></button>
+                    disabled={!g || (k === "rfdetr" ? !rfOk : k !== "standard" && !samOk)} onClick={() => setDetector(k)}><b>{l}</b><small>{d}</small><GradeLine g={grades} k={k} /></button>
                 ))}
               </div>
             </div>
