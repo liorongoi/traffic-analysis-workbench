@@ -2,6 +2,10 @@
 
     trafficwb-models list
     trafficwb-models import <pack.zip or folder>
+    trafficwb-models wrap <model.onnx> --name dfine-s --version 1 --family detr --class-ids coco91 --license Apache-2.0
+
+"wrap" makes a pack folder from a detector exported to ONNX elsewhere (D-FINE's, RT-DETR's or RF-DETR's own export
+scripts), so it can be imported and compared with the others on the learning page.
 
 The pack is checked (model card, SHA-256 of every file) before it is copied into the models folder,
 and an installed version is never replaced. Importing does not change the model in use: evaluate the
@@ -73,6 +77,31 @@ def import_pack(src: Path | str, root: Path | None = None) -> dict:
     return {**_summary(card), "already": False, "path": str(dest)}
 
 
+def wrap(onnx_path: Path | str, out: Path | str, name: str, version: str, license: str, family: str = "detr",
+         outputs: str = "labels_boxes_scores", class_ids: str = "coco91", input_size: int = 640,
+         source: str | None = None) -> Path:
+    """A vehicle-detection pack folder ``out/<name>/<version>`` holding a copy of ``onnx_path`` and its card."""
+    src = Path(onnx_path)
+    if not src.is_file():
+        raise ModelPackError(f"{src} does not exist.")
+    if family not in ("yolox", "detr"):
+        raise ModelPackError("The family is yolox or detr.")
+    if outputs not in ("labels_boxes_scores", "boxes_logits") or class_ids not in ("coco80", "coco91"):
+        raise ModelPackError("Outputs are labels_boxes_scores or boxes_logits; class ids coco80 or coco91.")
+    dest = Path(out) / name / version
+    if dest.exists():
+        raise ModelPackError(f"{dest} exists already; nothing was replaced.")
+    dest.mkdir(parents=True)
+    shutil.copyfile(src, dest / "model.onnx")
+    card = {"name": name, "version": version, "task": "vehicle_detection", "license": license, "family": family,
+            "input_size": int(input_size), "sha256": sha256_file(dest / "model.onnx"), "source": source or src.name}
+    if family == "detr":
+        card |= {"outputs": outputs, "class_ids": class_ids}
+    (dest / "model.json").write_text(json.dumps(card, indent=2), encoding="utf-8")
+    ModelPack.load(dest)
+    return dest
+
+
 def _summary(card: dict) -> dict:
     t = card.get("training") or {}
     return {"name": card["name"], "version": card["version"], "task": card["task"],
@@ -88,7 +117,26 @@ def main(argv=None) -> int:
     sub.add_parser("list", help="the installed model packs")
     i = sub.add_parser("import", help="check a model pack (.zip or folder) and add it")
     i.add_argument("pack")
+    w = sub.add_parser("wrap", help="make a vehicle-detection pack folder from an exported ONNX detector")
+    w.add_argument("onnx")
+    w.add_argument("--name", required=True)
+    w.add_argument("--version", required=True)
+    w.add_argument("--license", required=True, help="the licence of the code and weights, e.g. Apache-2.0")
+    w.add_argument("--family", default="detr", choices=("detr", "yolox"))
+    w.add_argument("--outputs", default="labels_boxes_scores", choices=("labels_boxes_scores", "boxes_logits"))
+    w.add_argument("--class-ids", default="coco91", choices=("coco91", "coco80"))
+    w.add_argument("--input-size", type=int, default=640)
+    w.add_argument("--out", default="packs", help="folder to write the pack into (default: packs)")
     args = ap.parse_args(argv)
+    if args.cmd == "wrap":
+        try:
+            d = wrap(args.onnx, args.out, args.name, args.version, args.license, args.family, args.outputs,
+                     args.class_ids, args.input_size)
+        except (ModelPackError, OSError) as exc:
+            print(f"Not made: {exc}")
+            return 1
+        print(f"Made {d}. Import it with: trafficwb-models import {d}")
+        return 0
     root = Path(args.models) if args.models else None
     if args.cmd == "list":
         for m in models.installed(root=root):

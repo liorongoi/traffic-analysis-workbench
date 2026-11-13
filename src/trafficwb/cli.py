@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "detect":
         from . import models
-        from .detect import DetectorSettings, YoloxDetector
+        from .detect import DetectorSettings, YoloxDetector, make_detector
         from .process import Processor
         cols, rows = (int(x) for x in a.tiles.lower().split("x"))
         m = root.open_mission(a.mission)
@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             card = det.card()
         else:
             pack = models.find(model, a.model_version)
-            det = YoloxDetector(pack, DetectorSettings(tiles=(cols, rows)))
+            det = make_detector(pack, DetectorSettings(tiles=(cols, rows)))
         if m.input_type == "video":
             from .video_process import VideoProcessor
             proc = VideoProcessor(m, det, pack.card)

@@ -27,6 +27,7 @@ import json
 import os
 import shutil
 import stat
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -701,7 +702,7 @@ class LearningService:
         # nor missed: they are scored as "ignore".
         looks_for = {trainable(c) for c in (getattr(detector, "classes", None) or {}).values()} - {None} \
             or set(VEHICLE_CLASSES)
-        per_image = []
+        per_image, took = [], []
         try:
             for n, it in enumerate(mem, 1):
                 control.checkpoint()
@@ -710,7 +711,10 @@ class LearningService:
                     mrow["view_key"] = f"{ls.m.config().name}: {mrow['view_key']}"
                 vid = mrow["source_version_id"]
                 img = ls.image_of(mrow)
-                dets = [(list(map(float, d.box)), trainable(d.cls) or d.cls, float(d.score)) for d in detector.detect(img)]
+                t0 = time.perf_counter()
+                found = detector.detect(img)
+                took.append(time.perf_counter() - t0)
+                dets = [(list(map(float, d.box)), trainable(d.cls) or d.cls, float(d.score)) for d in found]
                 view = ls.views.current_view(vid)
                 regions = RegionSet.load(ls.con, view) if view is not None and ls.views.regions_applicable(view) else RegionSet([])
                 per_image.append(self._score_image(mrow, dets, regions, iou, looks_for))
@@ -722,7 +726,9 @@ class LearningService:
             self.con.execute("UPDATE evaluation SET state=?, error=?, finished_at=? WHERE id=?",
                              (state, f"{type(exc).__name__}: {exc}"[:1000], utcnow(), eid))
             raise
+        warm = took[1:] or took                  # the first picture also loads the model onto the device
         report = {"iou": iou, "split": split, "images": len(per_image),
+                  "ms_per_image": round(1000 * sum(warm) / len(warm), 1) if warm else None,
                   "overall": _summarise(per_image),
                   "by_condition": {k: _summarise([p for p in per_image if p["condition"] == k])
                                    for k in sorted({p["condition"] for p in per_image})},

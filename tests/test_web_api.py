@@ -298,6 +298,53 @@ def test_learning_dataset_evaluate_promote_rollback(env, monkeypatch):
     assert p["production"]["version"] == "2"
     assert c.get(f"/api/missions/{mid}/learning").json()["production"]["name"] == "det"
     assert c.post("/api/models/rollback", json={}, headers=H1).json()["production"] is None
+def test_compare_detectors(env, monkeypatch):
+    """Phase 1c: every installed vehicle detector on the same images; one that cannot load is left out and named,
+    and a second comparison reuses the results it already has."""
+    import json
+    from trafficwb.models import sha256_file
+    tmp, src, out = env
+    models = tmp / "models"
+    for name, v in (("det", "2"), ("det", "3"), ("broken", "1")):
+        d = models / name / v
+        d.mkdir(parents=True)
+        (d / "model.onnx").write_bytes(f"{name}{v}".encode())
+        (d / "model.json").write_text(json.dumps({"name": name, "version": v, "task": "vehicle_detection",
+                                                  "license": "MIT", "sha256": sha256_file(d / "model.onnx")}))
+    monkeypatch.setenv("TWB_MODELS", str(models))
+
+    def loader(n, v):
+        if n == "broken":
+            raise RuntimeError("cannot load")
+        return Named(n, v)
+    app = create_app(tmp / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
+                     start_monitoring=False, stability_seconds=0, model_loader=loader)
+    c = direct_access(TestClient(app))
+    mid = mission(c, src, out)
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    wait_job(c, mid)
+    for r in c.post(f"/api/missions/{mid}/results", json={}, headers=H1).json()["rows"]:
+        c.post(f"/api/missions/{mid}/items/{r['source_version_id']}/decision/approve", headers=H1)
+    ds = c.post(f"/api/missions/{mid}/learning/datasets", json={"name": "v1", "ratios": [0, 0, 1]}, headers=H1).json()
+    assert c.post(f"/api/missions/{mid}/learning/benchmark", json={}, headers=H1).status_code == 400
+    assert c.post(f"/api/missions/{mid}/learning/benchmark", json={"dataset_id": ds["id"], "models": ["det/9"]},
+                  headers=H1).status_code == 400
+    c.post(f"/api/missions/{mid}/learning/benchmark", json={"dataset_id": ds["id"]}, headers=H1)
+    job = wait_job(c, mid)
+    assert job["kind"] == "benchmark" and job["state"] == "finished", job
+    ids = job["result"]["benchmark"]
+    assert len(ids) == 2 and list(job["result"]["skipped"]) == ["broken 1"]
+    evs = [c.get(f"/api/missions/{mid}/learning/evaluations/{i}").json() for i in ids]
+    assert {e["model"]["model"]["version"] for e in evs} == {"2", "3"}
+    assert all(e["report"]["ms_per_image"] is not None and e["report"]["overall"]["recall"] == 1.0 for e in evs)
+    s = c.get(f"/api/missions/{mid}/learning").json()
+    assert {m["family"] for m in s["models"]} == {"yolox"}
+    c.post(f"/api/missions/{mid}/learning/benchmark", json={"dataset_id": ds["id"], "models": ["det/2", "det/3"]},
+           headers=H1)
+    again = wait_job(c, mid)
+    assert again["result"]["benchmark"] == ids                     # nothing evaluated twice
+
+
 def test_system_backup_and_delete_mission(env):
     tmp, src, out = env
     app = create_app(tmp / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
