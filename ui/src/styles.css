@@ -490,3 +490,7 @@ button.folderpick-add { min-height: 26px; padding: 0 10px; font-size: 12.5px; }
 .counts .count-num { font-size: 28px; font-weight: 650; line-height: 1.15; font-variant-numeric: tabular-nums; color: var(--text); }
 .counts .count-chart svg { display: block; margin: 4px 0 2px; }
 .counts .count-tip { color: var(--text-2); min-height: 1.3em; }
+
+/* Pick-from-list controls (components/Pick.tsx) */
+.namepick, .zonepick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.namepick > input { min-width: 200px; }

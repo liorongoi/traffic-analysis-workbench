@@ -8,6 +8,12 @@ import LearningTab from "./Learning";
 import NightReviewTab from "./NightReview";
 import { CameraChoice, DetectorChoice, ModelChoice, ParallelChoice, SamInterval } from "./Wizard";
 import FolderPicker from "../components/FolderPicker";
+import { Choice, NamePick } from "../components/Pick";
+
+const MIN_VEHICLES = [0, 1, 2, 3, 5, 10, 20, 50];
+/** Names to give a camera view. */
+const VIEW_NAMES = ["North approach", "South approach", "East approach", "West approach", "Junction", "Roundabout", "Main road",
+  "Side road", "Gate", "Entrance", "Exit", "Parking", "Bridge", "Tunnel", "Toll plaza", "Day view", "Night view"];
 
 export type SavedQuery = { filter: Filter; sort: string; desc: boolean };
 export const queryKey = (mid: string) => `twb-query-${mid}`;
@@ -444,7 +450,7 @@ function SamWords({ m, defaults, busy, reload, samOnly, standardOnly, standardKn
       {open && <>
         <div className="samwords-search">
           <AddPick wide groups={searchGroups} have={used} disabled={busy} label="Find words to add"
-            prompt="Search words to add, e.g. trailer, bus, emergency…" maxLength={40}
+            prompt="Choose words to add ▾ (typing narrows the list)" maxLength={40}
             targets={classes.map((c) => [c, classTitle(c)])} onAdd={addFound} />
         </div>
         <table className="samwords-table">
@@ -481,12 +487,12 @@ function SamWords({ m, defaults, busy, reload, samOnly, standardOnly, standardKn
         </table>
         <div className="row samwords-foot">
           <AddPick wide groups={classGroups.map(([g, cs]) => [g, cs.filter((c) => !classes.includes(c))])} have={[]} disabled={busy}
-            label="Add a class" prompt="+ type a class" maxLength={24} onAdd={addClass} />
+            label="Add a class" prompt="+ Choose a class ▾" maxLength={24} onAdd={addClass} />
           <span className="spacer" />
           {!isDefault && <button className="linkish" disabled={busy || saving} onClick={() => save(null, [])}>Reset to defaults</button>}
           {changed && <button className="primary" disabled={busy || saving} onClick={() => save(words, out)}>{saving ? "Saving…" : "Save"}</button>}
         </div>
-        <p className="muted small">SAM 3.1 has no fixed class list: pick a suggested word or type your own. Each word adds about half a second per image. Classes you add are reviewed and exported like the others, and are not used to train the standard detector.</p>
+        <p className="muted small">SAM 3.1 has no fixed class list: choose suggested words from the list (typing only narrows it, or adds a word of your own). Each word adds about half a second per image. Classes you add are reviewed and exported like the others, and are not used to train the standard detector.</p>
       </>}
       {err && <div className="msg err" role="alert">{err}</div>}
     </div>
@@ -540,7 +546,11 @@ function Results({ missionId }: { missionId: string }) {
         </select>
         <label className="row muted">From <input type="date" value={q.filter.local_date_from ?? ""} onChange={(e) => setF("local_date_from", e.target.value)} /></label>
         <label className="row muted">to <input type="date" value={q.filter.local_date_to ?? ""} onChange={(e) => setF("local_date_to", e.target.value)} /></label>
-        <label className="row muted">Vehicles ≥ <input type="number" min={0} style={{ width: 64 }} value={q.filter.min_vehicles ?? ""} onChange={(e) => setF("min_vehicles", e.target.value)} /></label>
+        <select aria-label="Vehicles at least" value={q.filter.min_vehicles ?? ""} onChange={(e) => setF("min_vehicles", e.target.value)}>
+          <option value="">Any number of vehicles</option>
+          {!["", undefined, null, ...MIN_VEHICLES.map(String)].includes(q.filter.min_vehicles as any) && <option value={q.filter.min_vehicles as any}>{q.filter.min_vehicles} or more vehicles</option>}
+          {MIN_VEHICLES.map((n) => <option key={n} value={String(n)}>{n} or more vehicle{n === 1 ? "" : "s"}</option>)}
+        </select>
         <span style={{ flex: 1 }} />
         <button onClick={async () => setBulk(await post(`/missions/${missionId}/approve-all/preview`, q.filter))}>Approve all and export…</button>
         <button onClick={doExport}>Export</button>
@@ -620,7 +630,8 @@ function Views({ missionId }: { missionId: string }) {
         <div key={v.id} className="card">
           <div className="row" style={{ justifyContent: "space-between" }}>
             <div className="row">
-              <input value={names[v.id] ?? v.name} onChange={(e) => setNames({ ...names, [v.id]: e.target.value })} style={{ fontWeight: 600 }} />
+              <NamePick label={`Name of view ${v.id}`} value={names[v.id] ?? v.name} onChange={(n) => setNames({ ...names, [v.id]: n })}
+                suggestions={[v.name, ...VIEW_NAMES, `Camera ${v.id}`]} />
               {names[v.id] && names[v.id] !== v.name && <button onClick={() => act(v.id, "rename", { name: names[v.id] })}>Rename</button>}
               <span className="badge">{v.state.replace("_", " ")}</span>
             </div>
@@ -753,7 +764,7 @@ function ViewMembership({ missionId, view, views, reload }: { missionId: string;
         <button disabled={offset + pageSize >= total} onClick={() => changePage(offset + pageSize)}>Next images</button>
       </div>
       <div className="row" style={{ marginTop: 8 }}>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="New view name (optional)" />
+        <NamePick optional label="New view name" value={name} onChange={setName} suggestions={VIEW_NAMES} />
         <button disabled={!selected.length || busy} onClick={() => act("split")}>Split selected into new view</button>
         <select value={target} onChange={(e) => setTarget(e.target.value)}>
           <option value="">Choose destination…</option>
@@ -789,6 +800,9 @@ function ApplyNightDecisions({ missionId }: { missionId: string }) {
   );
 }
 
+const FAR_PX = [8, 12, 16, 20, 24, 28, 32, 40, 48];
+const CLOSE_PX = [40, 50, 60, 70, 80, 100, 120, 150];
+
 function NightBandsRow({ missionId, view, reload }: { missionId: string; view: any; reload: () => void }) {
   const b = view.night_bands;
   const [far, setFar] = useState<string>(String(b?.far_below ?? 24));
@@ -808,9 +822,9 @@ function NightBandsRow({ missionId, view, reload }: { missionId: string; view: a
     <div style={{ margin: "6px 0" }}>
       <div className="row">
         <span className="muted">Night distance bands: far while a vehicle would be under</span>
-        <input type="number" min={4} value={far} onChange={(e) => setFar(e.target.value)} style={{ width: 64 }} />
+        <Choice label="Far below, pixels wide" value={Number(far)} onChange={(n) => setFar(String(n))} options={FAR_PX} />
         <span className="muted">px wide, close from</span>
-        <input type="number" min={5} value={close} onChange={(e) => setClose(e.target.value)} style={{ width: 64 }} />
+        <Choice label="Close from, pixels wide" value={Number(close)} onChange={(n) => setClose(String(n))} options={CLOSE_PX} />
         <span className="muted">px{b.operator_set ? "" : " (defaults)"}</span>
         {changed && <button onClick={save}>Save and re-analyse</button>}
       </div>
@@ -827,13 +841,13 @@ function NightBandsRow({ missionId, view, reload }: { missionId: string; view: a
 
 function DeleteMission({ m }: { m: any }) {
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
+  const [sure, setSure] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   return (
     <div className="card">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <span className="muted">Deleting a mission removes its database, crops and clips. Source images and exported files stay where they are. Administrators only.</span>
-        <button className="danger" onClick={() => { setOpen(true); setName(""); setErr(null); }}>Delete mission…</button>
+        <button className="danger" onClick={() => { setOpen(true); setSure(false); setErr(null); }}>Delete mission…</button>
       </div>
       {open && (
         <div className="dialog-bg" onClick={() => setOpen(false)}>
@@ -841,12 +855,13 @@ function DeleteMission({ m }: { m: any }) {
             <h2>Delete mission</h2>
             <p>This permanently removes the analysis results, corrections, reviews, datasets and evidence of <b className="bidi">{m.config.name}</b>. It cannot be undone except from a backup. The deletion is recorded in the audit log.</p>
             <p className="muted">Not touched: the source folder <span className="mono bidi">{m.config.source_dir}</span> and exports in <span className="mono bidi">{m.config.output_dir}</span>.</p>
-            <label>Type the mission's name to confirm<input dir="auto" value={name} onChange={(e) => setName(e.target.value)} /></label>
+            <label className="row"><input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} />
+              <span>Yes, permanently delete <b className="bidi">{m.config.name}</b></span></label>
             {err && <div className="msg err">{err}</div>}
             <div className="row" style={{ justifyContent: "flex-end" }}>
               <button onClick={() => setOpen(false)}>Cancel</button>
-              <button className="danger" disabled={name.trim() !== m.config.name} onClick={async () => {
-                try { await post(`/missions/${m.id}/delete`, { confirm_name: name }); go("/"); }
+              <button className="danger" disabled={!sure} onClick={async () => {
+                try { await post(`/missions/${m.id}/delete`, { confirm_name: m.config.name }); go("/"); }
                 catch (e) { setErr((e as ApiError).message); }
               }}>Delete permanently</button>
             </div>

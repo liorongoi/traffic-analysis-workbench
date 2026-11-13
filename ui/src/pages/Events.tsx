@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, post } from "../api";
 import { go } from "../router";
+import { Choice } from "../components/Pick";
 
 // Video events: one row per continuous appearance of a vehicle. Times are seconds from the start of the recording,
 // read from the frames' presentation timestamps. Absolute UTC is shown only when the file name gave the start.
@@ -30,6 +31,15 @@ const STATUS_LABEL: Record<string, string> = {
   pending: "Not reviewed", confirmed: "Confirmed", rejected: "Rejected", duplicate: "Duplicate", merged: "Merged",
 };
 const CLASSES = ["car", "bus", "truck", "motorcycle", "bicycle"];
+
+const CLIP_SECONDS = [0, 1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600];
+/** "2026-10-21T12:00:00Z" ⇄ the "2026-10-21T12:00:00" a date-and-time picker shows (the picker has no zone; it is UTC here). */
+const toPicker = (iso: string) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.valueOf()) ? "" : d.toISOString().slice(0, 19);
+};
+const fromPicker = (v: string) => (v ? `${v.length === 16 ? `${v}:00` : v.slice(0, 19)}Z` : "");
 
 export default function EventsTab({ missionId, eventId }: { missionId: string; eventId: number | null }) {
   return eventId ? <EventDetail missionId={missionId} eventId={eventId} /> : <EventList missionId={missionId} />;
@@ -171,16 +181,16 @@ function EventList({ missionId }: { missionId: string }) {
                 <details style={{ marginTop: 4 }}>
                   <summary>{r.start_source === "manual" ? "Edit UTC start" : "Set UTC start"}</summary>
                   <div className="grid" style={{ gap: 5, marginTop: 5 }}>
-                    <input aria-label={`UTC start for ${r.rel_path}`} value={startTimes[r.id] ?? r.start_utc ?? ""}
-                      onChange={(e) => setStartTimes({ ...startTimes, [r.id]: e.target.value })}
-                      placeholder="2026-10-21T12:00:00Z" />
+                    <input type="datetime-local" step={1} aria-label={`UTC start for ${r.rel_path}`}
+                      value={toPicker(startTimes[r.id] ?? r.start_utc ?? "")}
+                      onChange={(e) => setStartTimes({ ...startTimes, [r.id]: fromPicker(e.target.value) })} />
                     <select aria-label="UTC start precision" value={precisions[r.id] ?? r.start_precision ?? "second"}
                       onChange={(e) => setPrecisions({ ...precisions, [r.id]: e.target.value })}>
                       <option value="minute">Minute</option><option value="second">Second</option>
                     </select>
                     <button disabled={!(startTimes[r.id] ?? r.start_utc)} onClick={() => saveStart(r)}>Save confirmed UTC start</button>
                     {r.start_source === "manual" && <button onClick={() => clearStart(r)}>Clear manual correction</button>}
-                    <span className="muted">Enter an ISO-8601 timestamp with a UTC offset (for example, ending in Z). This changes event UTC metadata, not video frames.</span>
+                    <span className="muted">Pick the date and time in UTC. This changes event UTC metadata, not video frames.</span>
                   </div>
                 </details>
               </td>
@@ -310,7 +320,7 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
   };
   const clip = async () => {
     setMsg(null);
-    if (before === "" || after === "") { setMsg({ kind: "err", text: "Enter the seconds of context before and after the event." }); return; }
+    if (before === "" || after === "") { setMsg({ kind: "err", text: "Choose the seconds of context before and after the event." }); return; }
     setBusy(true);
     try {
       const r = await post(`/missions/${missionId}/events/${eventId}/clip`, { before_s: Number(before), after_s: Number(after), method });
@@ -403,8 +413,8 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
           <div className="card grid" style={{ gap: 8 }}>
             <h2 style={{ margin: 0 }}>Export a clip</h2>
             <div className="row">
-              <label className="row">Seconds before <input type="number" min={0} max={600} step={0.5} style={{ width: 70 }} value={before} onChange={(e) => setBefore(e.target.value)} /></label>
-              <label className="row">after <input type="number" min={0} max={600} step={0.5} style={{ width: 70 }} value={after} onChange={(e) => setAfter(e.target.value)} /></label>
+              <label className="row">Seconds before <Choice label="Seconds before" value={before === "" ? "" : Number(before)} onChange={(n) => setBefore(String(n))} options={CLIP_SECONDS} /></label>
+              <label className="row">after <Choice label="Seconds after" value={after === "" ? "" : Number(after)} onChange={(n) => setAfter(String(n))} options={CLIP_SECONDS} /></label>
             </div>
             <div className="row">
               <select value={method} onChange={(e) => setMethod(e.target.value)} aria-label="Clip method">

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, Box, fmtDuration, Job, post } from "../api";
 import { go } from "../router";
 import { fmtT } from "./Events";
+import { Choice, halfHours } from "../components/Pick";
 
 type Target = { category: string; subtype: string | null; colours: string[]; exclude_colours: string[] };
 type Win = { days: string[]; start: string; end: string };
@@ -207,9 +208,9 @@ export function SpecEditor({ spec, setSpec, vocab, regionNames }: { spec: Spec; 
       {spec.time.windows.map((w, i) => (
         <div key={i} className="row" style={{ marginBottom: 6 }}>
           <Chips all={vocab.weekdays} on={w.days} set={(v) => upd((s) => { s.time.windows[i].days = v.length ? vocab.weekdays.filter((d) => v.includes(d)) : s.time.windows[i].days; })} />
-          <input type="time" value={w.start} onChange={(e) => upd((s) => { s.time.windows[i].start = e.target.value; })} aria-label="start" />
+          <Choice label="start" value={w.start} options={halfHours()} onChange={(v) => upd((s) => { s.time.windows[i].start = v; })} />
           <span>to</span>
-          <input value={w.end} style={{ width: 70 }} onChange={(e) => upd((s) => { s.time.windows[i].end = e.target.value; })} aria-label="end (24:00 is midnight)" />
+          <Choice label="end (24:00 is midnight)" value={w.end} options={halfHours(true)} onChange={(v) => upd((s) => { s.time.windows[i].end = v; })} />
           <button className="danger" onClick={() => upd((s) => { s.time.windows.splice(i, 1); })}>Remove</button>
         </div>
       ))}
@@ -222,7 +223,7 @@ export function SpecEditor({ spec, setSpec, vocab, regionNames }: { spec: Spec; 
       <div style={{ marginTop: 8 }}><span className="muted">Image condition (measured from the image)</span><Chips all={vocab.conditions} on={spec.time.conditions} set={(v) => upd((s) => { s.time.conditions = v; })} /></div>
 
       <h3 style={{ marginTop: 14 }}>Results</h3>
-      <label className="row">Only images with at least <input type="number" min={1} max={500} style={{ width: 70 }} value={spec.min_count} onChange={(e) => upd((s) => { s.min_count = Math.max(1, Math.min(500, Number(e.target.value) || 1)); })} /> matching objects</label>
+      <label className="row">Only images with at least <Choice label="Minimum matching objects" value={spec.min_count} options={[1, 2, 3, 4, 5, 10, 15, 20, 30, 50, 100, 200, 500]} onChange={(n) => upd((s) => { s.min_count = n; })} /> matching objects</label>
       <div className="row" style={{ marginTop: 6 }}>
         <label className="row"><input type="radio" checked={spec.uncertain === "list_separately"} onChange={() => upd((s) => { s.uncertain = "list_separately"; })} /> List uncertain ones separately as possible</label>
         <label className="row"><input type="radio" checked={spec.uncertain === "exclude"} onChange={() => upd((s) => { s.uncertain = "exclude"; })} /> Only certain matches</label>

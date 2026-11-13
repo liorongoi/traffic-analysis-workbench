@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Choice, NamePick, thisMonth, today } from "../components/Pick";
 import { api, ApiError, fmtDuration, post } from "../api";
 import { CompareBars, LossChart } from "../components/Charts";
 
@@ -76,10 +77,15 @@ function DatasetPicker({ s, missionId, value, onChange, split = "train", label =
   );
 }
 
+const RATIOS: [string, string][] = [["70/15/15", "70 / 15 / 15"], ["80/10/10", "80 / 10 / 10"], ["60/20/20", "60 / 20 / 20"],
+  ["70/20/10", "70 / 20 / 10"], ["75/15/10", "75 / 15 / 10"], ["50/25/25", "50 / 25 / 25"]];
+const BLOCK_DAYS: [number, string][] = [[1, "1 day"], [2, "2 days"], [3, "3 days"], [7, "1 week"], [14, "2 weeks"], [30, "30 days"], [90, "90 days"]];
+const EPOCHS = [5, 10, 20, 30, 50, 75, 100, 150, 200, 300];
+
 export default function LearningTab({ missionId, job, reload }: { missionId: string; job: any; reload: () => void }) {
   const [s, setS] = useState<any>(null);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(`Version of ${today()}`);
   const [ratios, setRatios] = useState("70/15/15");
   const [blockDays, setBlockDays] = useState(1);
   const [evalRefs, setEvalRefs] = useState<Ref[] | null>(null);
@@ -142,17 +148,20 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Dataset versions</h2>
         <div className="row">
-          <input placeholder="Version name, e.g. October day" value={name} onChange={(ev) => setName(ev.target.value)} />
-          <label>Train/validation/test %
-            <input style={{ width: 90 }} value={ratios} onChange={(ev) => setRatios(ev.target.value)} />
+          <label>Version name
+            <NamePick label="Version name" value={name} onChange={setName}
+              suggestions={[`Version of ${today()}`, `${thisMonth()}, day`, `${thisMonth()}, night`, `${thisMonth()}, day and night`, `Version ${s.datasets.length + 1}`]} />
           </label>
-          <label>Date block (days)
-            <input type="number" min={1} max={366} style={{ width: 60 }} value={blockDays} onChange={(ev) => setBlockDays(Number(ev.target.value))} />
+          <label>Train/validation/test %
+            <Choice label="Train/validation/test %" value={ratios} onChange={setRatios} options={RATIOS} />
+          </label>
+          <label>Date block
+            <Choice label="Date block (days)" value={blockDays} onChange={setBlockDays} options={BLOCK_DAYS} />
           </label>
           <button className="primary" disabled={!name.trim() || e.eligible === 0} onClick={() => act(() => {
             const r = ratios.split("/").map((x) => Number(x) / 100);
             return post(`/missions/${missionId}/learning/datasets`, { name, ratios: r, block_days: blockDays });
-          }, (r) => { setName(""); return `Dataset version “${r.name}” frozen: ${r.stats.images} images in ${r.stats.groups} groups.`; })}>Freeze a new version</button>
+          }, (r) => { setName(`Version of ${today()}`); return `Dataset version “${r.name}” frozen: ${r.stats.images} images in ${r.stats.groups} groups.`; })}>Freeze a new version</button>
         </div>
         <p className="muted">Images are split by camera view and date block, so frames of one view on one day never sit on both
           sides. Groups that were once in a test set stay in test in every later version.</p>
@@ -309,7 +318,8 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
             </select>
           </label>
           <label>Epochs
-            <input type="number" min={1} max={300} style={{ width: 64 }} value={ep} onChange={(ev) => setEpochs(ev.target.value ? Number(ev.target.value) : "")} />
+            <Choice label="Epochs" value={ep} onChange={setEpochs}
+              options={[...new Set([...EPOCHS, t.suggested_epochs ?? 20])].sort((a, b) => a - b).map((n): [number, string] => [n, n === (t.suggested_epochs ?? 20) ? `${n} (suggested)` : String(n)])} />
           </label>
           <button className="primary" disabled={ds.length === 0 || !startFrom || !!t.busy_mission} onClick={() => act(
             () => post(`/missions/${missionId}/learning/train`, { datasets: ds, epochs: ep, start_from: startFrom }),
@@ -465,14 +475,20 @@ function RoundsCard({ s, missionId, act, modelLabel, dataLabel }: {
   );
 }
 
+const MODEL_USES = ["Daytime images", "Night images", "Day and night images", "Fixed cameras", "Moving cameras",
+  "Highway traffic", "City junctions", "Trucks and buses", "Testing only"];
+
 function SaveForm({ s, missionId, act, model, evaluationId, onDone }: {
   s: any; missionId: string; act: Act; model?: { name: string; version: string } | null; evaluationId?: number | null; onDone?: () => void;
 }) {
   const unsaved = (s.models as any[]).filter((md) => !md.saved_as && !md.evaluation_only);
   const [pick, setPick] = useState(model ? `${model.name}/${model.version}` : (unsaved.length ? `${unsaved[unsaved.length - 1].name}/${unsaved[unsaved.length - 1].version}` : ""));
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
   const [n, v] = pick.split("/");
+  const trainedOn = (s.models as any[]).find((md) => md.name === n && md.version === v)?.trained_on as string | undefined;
+  const nameIdeas = [trainedOn ? `${trainedOn} detector` : "", `Vehicles, ${thisMonth()}`, `Day vehicles, ${thisMonth()}`,
+    `Night vehicles, ${thisMonth()}`, `Day and night, ${thisMonth()}`, n && v ? `${n} ${v}` : ""].filter(Boolean);
+  const [name, setName] = useState(nameIdeas[0]);
+  const [desc, setDesc] = useState("");
   const ev = evaluationId ?? (s.evaluations as any[]).find((x) => x.state === "completed" && x.model?.model?.name === n && x.model?.model?.version === v)?.id;
   return (
     <div className="card" style={{ background: "var(--panel-2)", marginTop: 10 }}>
@@ -482,11 +498,11 @@ function SaveForm({ s, missionId, act, model, evaluationId, onDone }: {
           {unsaved.map((md) => <option key={`${md.name}/${md.version}`} value={`${md.name}/${md.version}`}>{md.name} {md.version}{md.trained_on ? `, trained on “${md.trained_on}”` : ""}</option>)}
         </select>}
         {model && <span className="mono">{model.name} {model.version}</span>}
-        <input placeholder="Name, e.g. Night cars, Route 6" value={name} onChange={(e) => setName(e.target.value)} style={{ minWidth: 220 }} />
-        <input placeholder="What it is for (optional)" value={desc} onChange={(e) => setDesc(e.target.value)} style={{ flex: 1, minWidth: 180 }} />
+        <NamePick label="Name" value={name} onChange={setName} suggestions={nameIdeas} />
+        <NamePick optional label="What it is for" value={desc} onChange={setDesc} suggestions={MODEL_USES} />
         <button className="primary" disabled={!pick || !name.trim()} onClick={() => act(
           () => post("/models/saved", { name, description: desc || null, model_name: n, model_version: v, mission_id: ev ? missionId : null, evaluation_id: ev ?? null }),
-          (r) => { onDone?.(); setName(""); setDesc(""); return `Saved and frozen as “${r.name}”. Any mission can now use it.`; })}>Save and freeze</button>
+          (r) => { onDone?.(); setDesc(""); return `Saved and frozen as “${r.name}”. Any mission can now use it.`; })}>Save and freeze</button>
         {onDone && <button onClick={onDone}>Cancel</button>}
       </div>
       <p className="muted" style={{ margin: "8px 0 0", fontSize: 12.5 }}>Saving freezes the model: its files become read-only and are checked
