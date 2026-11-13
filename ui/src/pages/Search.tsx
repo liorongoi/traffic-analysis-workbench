@@ -47,8 +47,41 @@ export default function SearchTab({ missionId, runId }: { missionId: string; run
   return <Ask missionId={missionId} home={home} reload={load} />;
 }
 
+const WHAT: [string, string][] = [["vehicles", "Any vehicle"], ["cars", "Cars"], ["buses", "Buses"], ["trucks", "Trucks"],
+  ["motorcycles", "Motorcycles"], ["bicycles", "Bicycles"], ["pickups", "Pickups"], ["vans", "Vans"], ["SUVs", "SUVs"],
+  ["taxis", "Taxis"], ["minibuses", "Minibuses"], ["semi-trailers", "Semi-trailers"]];
+const COLOUR = ["red", "orange", "yellow", "green", "blue", "white", "grey", "black", "brown"];
+const WHEN: [string, string][] = [["", "Any time of day"], ["between 07:00 and 09:00", "Morning rush, 07:00–09:00"],
+  ["between 09:00 and 16:00", "Daytime, 09:00–16:00"], ["between 16:00 and 19:00", "Evening rush, 16:00–19:00"],
+  ["between 19:00 and 23:00", "Evening, 19:00–23:00"], ["between 20:00 and 05:00", "Overnight, 20:00–05:00"]];
+const DAYS: [string, string][] = [["", "Every day"], ...["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+  .map((d): [string, string] => [`on ${d}`, `${d}s`]), ["on Friday and Saturday", "Fridays and Saturdays"]];
+const LIGHT: [string, string][] = [["", "Day or night"], ["by day", "By day"], ["at dusk", "At dusk"], ["at night", "At night"]];
+
+/** The request built from menus: each pick rewrites the request text, which the interpreter then reads as usual. */
+function RequestMenus({ onText }: { onText: (t: string) => void }) {
+  const [p, setP] = useState({ what: "vehicles", colour: "", when: "", days: "", light: "" });
+  const set = (k: keyof typeof p, v: string) => {
+    const n = { ...p, [k]: v };
+    setP(n);
+    onText([n.colour, n.what, n.when, n.days, n.light].filter(Boolean).join(" "));
+  };
+  const menu = (k: keyof typeof p, label: string, opts: [string, string][]) => (
+    <select aria-label={label} value={p[k]} onChange={(e) => set(k, e.target.value)}>
+      {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+    </select>);
+  return (
+    <div className="row" style={{ flexWrap: "wrap", marginBottom: 8 }}>
+      {menu("colour", "Colour", [["", "Any colour"], ...COLOUR.map((c): [string, string] => [c, c[0].toUpperCase() + c.slice(1)])])}
+      {menu("what", "What", WHAT)}
+      {menu("when", "Time of day", WHEN)}
+      {menu("days", "Days", DAYS)}
+      {menu("light", "Light", LIGHT)}
+    </div>);
+}
+
 function Ask({ missionId, home, reload }: { missionId: string; home: Home; reload: () => void }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState("vehicles");
   const [req, setReq] = useState<Request | null>(null);
   const [spec, setSpec] = useState<Spec | null>(null);
   const [ignore, setIgnore] = useState(false);
@@ -97,7 +130,8 @@ function Ask({ missionId, home, reload }: { missionId: string; home: Home; reloa
       <div className="grid">
         <div className="card">
           <h2>What are you looking for?</h2>
-          <p className="muted">Type in English. Nothing runs until you have checked how the request was understood.</p>
+          <p className="muted">Pick from the menus (or type in English). Nothing runs until you have checked how the request was understood.</p>
+          <RequestMenus onText={setText} />
           <textarea rows={3} style={{ width: "100%" }} value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. red pickup trucks between 17:00 and 05:00"
             onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && text.trim()) ask(); }} />
           <div className="row" style={{ marginTop: 8, justifyContent: "space-between" }}>

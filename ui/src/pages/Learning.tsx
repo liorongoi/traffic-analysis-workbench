@@ -226,9 +226,8 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
                     {o && <button onClick={() => setCmp({ cur: ev.id, prev: null })} title="Compare with the previous evaluation on the same images">Compare</button>}
                     {ev.state === "completed" && md.name && (s.in_use?.name !== md.name || s.in_use?.version !== md.version) &&
                       <button onClick={() => {
-                        const note = window.prompt(`Promote ${md.name} ${md.version} to production use? It will process every new image. Optional note:`, "");
-                        if (note === null) return;
-                        act(() => post("/models/promote", { name: md.name, version: md.version, mission_id: missionId, evaluation_id: ev.id, note }),
+                        if (!window.confirm(`Promote ${md.name} ${md.version} to production use? It will process every new image.`)) return;
+                        act(() => post("/models/promote", { name: md.name, version: md.version, mission_id: missionId, evaluation_id: ev.id, note: `After evaluation #${ev.id}` }),
                           () => `${md.name} ${md.version} is now the vehicle detector in production use.`);
                       }}>Promote…</button>}
                   </td>
