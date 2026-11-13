@@ -101,7 +101,11 @@ class GeoMap:
                 raise ValueError("The GeoTIFF has no pixel scale or tie point.")
             sx, sy = scale.value[:2]
             i, j, _, lon, lat, _ = tie.value[:6]
-            img = p.asarray()
+            img = cv2.imread(str(path), cv2.IMREAD_COLOR)            # OpenCV reads every usual TIFF compression
+            if img is None:
+                img = p.asarray()
+            else:
+                img = img[:, :, ::-1]                                  # back to RGB, as tifffile gives
         h, w = img.shape[:2]
         lon0, lat0 = lon - i * sx, lat + j * sy
         if img.ndim == 3 and img.shape[2] >= 3:

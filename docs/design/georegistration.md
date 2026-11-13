@@ -83,3 +83,12 @@ thermal video, and the operator's own drone clips.
 - The learned matcher ships as a third-party ONNX export (see `docs/decisions/georeg-matcher.md`); it is not in the
   installer's model packs yet.
 - A GPU path for the matcher, and heights (a terrain model) for hilly ground.
+
+## Fixed camera in the app
+
+The player has an "On the map" button. Its page (`#/m/<mission>/map/<video>`) asks for a map file on this computer
+(a GeoTIFF in latitude and longitude, or a JPEG/PNG with its corners), then for four or more spots clicked on the
+frame and on the map. Each spot shows its error and its error when left out, and a spot the others disagree with is
+marked "probably a wrong click" before anything is saved. The fit is kept by the camera's folder, like its lines and
+its measure, so every video from that camera uses it. Each counted target is then drawn on the map where its box
+touched the road (`video_geo.py`, table `camera_geo`, endpoints `/api/map-*` and `.../recordings/<id>/geo`).

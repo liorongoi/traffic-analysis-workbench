@@ -379,6 +379,8 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               {distances.map((d) => <option key={d} value={d}>{d} m apart</option>)}
             </select>}
             {measuring && cal && <button onClick={clearMeasure}>Remove the measure</button>}
+            <button onClick={() => { pause(); location.hash = `#/m/${missionId}/map/${versionId}`; }}
+              title="Put this camera on a map, and see each counted target's path on it">🗺 On the map</button>
             <select aria-label="Lines and areas" value={zoning} onChange={(e) => startZone(e.target.value as "" | "line" | "area")}>
               <option value="">Lines and areas…</option>
               <option value="line">Draw a counting line (L)</option>
