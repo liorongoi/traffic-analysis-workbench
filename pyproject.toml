@@ -43,6 +43,7 @@ trafficwb-admin = "trafficwb.admin:main"
 trafficwb-speedcheck = "trafficwb.speedcheck:main"
 trafficwb-models = "trafficwb.model_import:main"
 trafficwb-train = "trafficwb.train:main"
+trafficwb-worker = "trafficwb.workers:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

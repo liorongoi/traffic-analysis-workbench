@@ -87,6 +87,21 @@ CREATE TABLE IF NOT EXISTS saved_model (
   author TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+-- Workers on other computers (phase 5): pairing codes (only their hash is kept) and the operator's on/off switch.
+CREATE TABLE IF NOT EXISTS worker_code (
+  id INTEGER PRIMARY KEY,
+  label TEXT NOT NULL,
+  code_hash TEXT NOT NULL UNIQUE,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS app_setting (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,              -- JSON
+  author TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 MISSION_SCHEMA = """

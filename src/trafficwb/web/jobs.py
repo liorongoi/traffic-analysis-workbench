@@ -159,6 +159,12 @@ class JobManager:
         self.monitors: dict[str, Monitor] = {}
         self.monitor_interval = monitor_interval
         self.stability = stability_seconds
+        # Video segments waiting to be analysed, shared with workers on other computers when the operator allows it.
+        from ..segment_hub import SegmentHub
+        from ..workers import Pairing
+        self.hub = SegmentHub()
+        self.hub.enabled = Pairing(self.data_root).enabled()
+        self.hub_packs: dict[str, Path] = {}     # model packs other computers may fetch (those of open jobs)
 
     def detector(self):
         with self._lock:
@@ -350,8 +356,13 @@ class JobManager:
 
             if m.input_type == "video":
                 from ..video_process import VideoProcessor
+                from ..workers import remote_spec
+                try:
+                    spec = remote_spec(self, m)
+                except Exception:  # noqa: BLE001 (other computers then cannot help with this one)
+                    spec = None
                 proc = VideoProcessor(m, det, card, control=job.control, plate_models=self.plate_models,
-                                      only=job.params.get("only"))
+                                      only=job.params.get("only"), hub=self.hub, remote_spec=spec)
             else:
                 proc = Processor(m, det, card, control=job.control, plate_models=self.plate_models,
                                  sam_engine=self._sam_if_available)

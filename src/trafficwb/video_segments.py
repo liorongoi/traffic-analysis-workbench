@@ -123,6 +123,25 @@ def analyse(seg: Segment, path, width: int, height: int, detect: Callable, grid_
     return SegmentResult(seg.idx, list(pieces.values()), cuts, n_own, round(time.monotonic() - t0, 3))
 
 
+def make_detect(kind: str, detector) -> Callable:
+    """``detect(img, sam)`` for ``analyse``: with both detectors, frames between SAM 3.1 frames use the standard one
+    alone; every box says which detector found it. The same on this computer and on another one."""
+    from dataclasses import replace
+
+    def found(d, who):
+        try:
+            return replace(d, found_by=who)
+        except TypeError:
+            return d
+
+    def detect(img, sam: bool):
+        if kind == "both" and not sam:
+            return [found(d, "standard") for d in detector.standard.detect(img)]
+        return [d if getattr(d, "found_by", None) else found(d, "sam3" if kind == "sam3" else "standard")
+                for d in detector.detect(img)]
+    return detect
+
+
 # ---------- joining ----------
 
 @dataclass

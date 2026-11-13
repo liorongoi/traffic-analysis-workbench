@@ -145,8 +145,10 @@ def probe_version(con, views, version_id: int) -> dict:
 class VideoProcessor:
     def __init__(self, mission: Mission, detector, card: dict | None = None, settings: VideoSettings | None = None,
                  control: RunControl | None = None, plate_models: Callable[[], tuple] | None = None,
-                 only: set[int] | None = None):
+                 only: set[int] | None = None, hub=None, remote_spec: dict | None = None):
         self.m = mission
+        self.hub = hub                     # segments shared with other computers (segment_hub); None: this one only
+        self.remote_spec = remote_spec     # what another computer needs to run this mission's detector
         self.only = set(only) if only else None    # analyse only these recordings (the catalog's ticked ones)
         self.plate_models = plate_models   # loaded only when a plate recognition mission needs it
         self.con = mission.con
@@ -305,7 +307,8 @@ class VideoProcessor:
             return False
         path = self.views._path(vid)
         cp = self.con.execute("SELECT * FROM video_checkpoint WHERE run_item_id=?", (it["id"],)).fetchone()
-        if not cp and self.workers > 1 and (pr["duration_s"] or 0) > self.s.segment_s * 1.25:
+        helpers = self.hub is not None and self.remote_spec is not None and self.hub.helpers_ready()
+        if not cp and (self.workers > 1 or helpers) and (pr["duration_s"] or 0) > self.s.segment_s * 1.25:
             return self._process_segmented(it, pr, rep, path)
         if cp:
             tracker = Tracker.from_state(json.loads(cp["tracker_state"]))
@@ -377,13 +380,21 @@ class VideoProcessor:
             raise
         return True
 
+    def _seg_checkpoint(self, stop):
+        def check():
+            if stop.is_set():
+                raise RunCancelled()
+            self.control.checkpoint()
+        return check
+
     # ---------- several segments side by side ----------
     def _process_segmented(self, it, pr: dict, rep: "VideoReport", path) -> bool:
         """Cut the recording into segments, analyse them in a pool of workers sharing the detector, join the
         tracks at the cuts and record them as one run would. Finished segments are kept, so a cancelled run
         resumes with the segments still to do."""
         import time as _time
-        from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+        import threading
+        from dataclasses import asdict
         from . import video_segments as vs
         t0 = _time.monotonic()
         # The overlap on each side holds at least one SAM 3.1 frame, so a target only SAM 3.1 finds is seen by both
@@ -396,37 +407,59 @@ class VideoProcessor:
         moving = self.camera == "moving"
         sam_every = self.sam_every if self.kind == "both" else 1
 
-        def detect(img, sam: bool):
-            if self.kind == "both" and not sam:
-                from dataclasses import replace
-                return [replace(d, found_by="standard") for d in self.detector.standard.detect(img)]
-            return [d if getattr(d, "found_by", None) else _with_found(d, "sam3" if self.kind == "sam3" else "standard")
-                    for d in self.detector.detect(img)]
+        detect = vs.make_detect(self.kind, self.detector)
+        args = dict(width=pr["width"], height=pr["height"], grid_s=self.grid_s, moving=moving, sam_every=sam_every)
+        from .segment_hub import SegmentHub
+        hub = self.hub if self.hub is not None and self.remote_spec is not None else SegmentHub()
+        spec = dict(self.remote_spec or {}, **args, tracker=asdict(self.s.tracker), low_score=self.s.low_score,
+                    algo=self.s.tracker.algo, needs=["sam3"] if self.kind == "sam3" else
+                    ["standard", "sam3"] if self.kind == "both" else ["standard"])
+        job = hub.publish(self.m.id, it["id"], it["source_version_id"], todo, spec)
+        stop = threading.Event()
 
-        self.control.stage = f"analysing video in {len(segs)} segments, {min(self.workers, len(segs))} at a time"
-        with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="segment") as pool:
-            running = {pool.submit(vs.analyse, s, path, pr["width"], pr["height"], detect, self.grid_s,
-                                   self.s.tracker, moving, sam_every, self.control.checkpoint): s for s in todo}
-            try:
-                while running:
-                    fin, _ = wait(running, return_when=FIRST_COMPLETED)
-                    for f in fin:
-                        s = running.pop(f)
-                        res = f.result()                       # a cancel raised inside a worker comes out here
-                        done[s.idx] = res
-                        self.con.execute(
-                            "INSERT INTO video_segment(run_item_id,idx,own_start,own_end,state,result,frames,seconds,"
-                            "updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(run_item_id,idx) DO UPDATE SET "
-                            "state=excluded.state, result=excluded.result, frames=excluded.frames, "
-                            "seconds=excluded.seconds, updated_at=excluded.updated_at",
-                            (it["id"], s.idx, s.own_a, None if s.own_b == float("inf") else s.own_b, "done",
-                             json.dumps(_plain(res)), res.frames, res.seconds, utcnow()))
-                        self.control.checkpoint()      # pause or cancel between segments too
-            except BaseException:
-                self.control.cancel() if not self.control.cancelled else None
-                for f in running:
-                    f.cancel()
-                raise
+        def local_worker(n: int):
+            # This computer's threads take segments of this recording only; other computers may take some too.
+            while not stop.is_set() and not hub.finished(job):
+                ls = hub.take(f"this computer #{n}", job=job)
+                if ls is None:
+                    with hub.cond:
+                        hub.cond.wait(0.5)
+                    continue
+                try:
+                    res = vs.analyse(ls.seg, path, pr["width"], pr["height"], detect, self.grid_s, self.s.tracker,
+                                     moving, sam_every, self._seg_checkpoint(stop))
+                except BaseException as exc:          # noqa: BLE001 (a cancel comes out as an error here)
+                    hub.give_back(ls.id, f"{type(exc).__name__}: {exc}")
+                    return
+                hub.complete(ls.id, res)
+
+        self.control.stage = (f"analysing video in {len(segs)} segments, {min(self.workers, len(segs))} at a time on "
+                              "this computer" + (", with other computers helping" if job.remote else ""))
+        threads = [threading.Thread(target=local_worker, args=(n + 1,), name=f"segment-{n + 1}", daemon=True)
+                   for n in range(min(self.workers, max(1, len(todo))))]
+        for t in threads:
+            t.start()
+        try:
+            while not hub.finished(job) or job.fresh:
+                for s, res, who in hub.collect(job, 1.0):
+                    done[s.idx] = res
+                    self.con.execute(
+                        "INSERT INTO video_segment(run_item_id,idx,own_start,own_end,state,result,frames,seconds,"
+                        "updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(run_item_id,idx) DO UPDATE SET "
+                        "state=excluded.state, result=excluded.result, frames=excluded.frames, "
+                        "seconds=excluded.seconds, updated_at=excluded.updated_at",
+                        (it["id"], s.idx, s.own_a, None if s.own_b == float("inf") else s.own_b, "done",
+                         json.dumps(_plain(res) | {"worker": who}), res.frames, res.seconds, utcnow()))
+                self.control.checkpoint()          # pause or cancel between segments too
+                if job.error:
+                    if self.control.cancelled:
+                        raise RunCancelled()
+                    raise RuntimeError(job.error)
+        finally:
+            stop.set()
+            hub.withdraw(job)
+            for t in threads:
+                t.join(timeout=30)
         # All segments are done: join them and write tracks, observations and events in one transaction.
         joined = sorted(vs.join(segs, done), key=lambda j: (j.obs[0][0], j.obs[0][1]))
         keys: dict[tuple, str] = {}
