@@ -8,6 +8,7 @@ record that is stored with the run (HW-06).
 """
 from __future__ import annotations
 
+import copy
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
@@ -19,6 +20,39 @@ from .models import ModelPack
 # COCO ids kept for traffic analysis and their names in this application.
 COCO_VEHICLES = {1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 VEHICLE_CLASSES = tuple(COCO_VEHICLES.values())
+
+# Other COCO classes the standard detector can also look for, when a mission adds a class of its own by one of
+# these names (or an alias below). Classes not listed here are found by SAM 3.1 only.
+COCO_OTHER = {0: "person", 6: "train", 8: "boat", 9: "traffic light", 10: "fire hydrant", 11: "stop sign",
+              12: "parking meter", 13: "bench", 14: "bird", 15: "cat", 16: "dog", 17: "horse", 18: "sheep",
+              19: "cow", 24: "backpack", 25: "umbrella", 26: "handbag", 28: "suitcase"}
+COCO_ALIASES = {"pedestrian": "person", "people": "person", "human": "person", "man": "person", "woman": "person"}
+
+
+def coco_id(cls: str) -> int | None:
+    """The COCO class id the standard detector knows a mission class by, or None (SAM 3.1 only)."""
+    name = COCO_ALIASES.get(cls, cls)
+    for i, n in {**COCO_VEHICLES, **COCO_OTHER}.items():
+        if n == name:
+            return i
+    return None
+
+
+def standard_classes(own: list[str] | tuple[str, ...] | None) -> dict[int, str]:
+    """COCO id to class name for the standard detector: the five vehicle classes plus a mission's own classes that
+    COCO knows (a "pedestrian" class is found as COCO "person")."""
+    out = dict(COCO_VEHICLES)
+    for cls in own or ():
+        i = coco_id(cls)
+        if i is not None and i not in out:
+            out[i] = cls
+    return out
+
+
+def family(cls: str) -> str:
+    """Classes that may be one object: the vehicle classes (the detector may call one vehicle a car, then a truck).
+    Every other class is a family of its own, so a person is never merged or tracked with the bicycle they ride."""
+    return "vehicle" if cls in VEHICLE_CLASSES else cls
 
 
 @dataclass(frozen=True)
@@ -80,10 +114,10 @@ def _iou(a, b) -> float:
 
 
 def _merge_across_classes(dets: list[Detection], iou: float) -> list[Detection]:
-    """Keep the higher-scoring box when two boxes of different classes cover the same vehicle."""
+    """Keep the higher-scoring box when two boxes of different classes of one family cover the same object."""
     kept: list[Detection] = []
     for d in sorted(dets, key=lambda d: -d.score):
-        if all(_iou(d.box, k.box) < iou for k in kept):
+        if all(family(d.cls) != family(k.cls) or _iou(d.box, k.box) < iou for k in kept):
             kept.append(d)
     return sorted(kept, key=lambda d: (-d.score, d.box))
 
@@ -103,6 +137,7 @@ class YoloxDetector:
         from .runtime import make_session  # imports onnxruntime here so the rest of the app starts without it
 
         self.pack = pack
+        self.classes = dict(COCO_VEHICLES)     # COCO id -> class name looked for
         self.settings = settings or DetectorSettings()
         self.session, self.runtime = make_session(pack.weights, accelerator)
         self.input_name = self.session.get_inputs()[0].name
@@ -116,21 +151,43 @@ class YoloxDetector:
         self._grids = np.concatenate(grids).astype(np.float32)
         self._strides = np.concatenate(strides).astype(np.float32)
 
+    def with_classes(self, classes: dict[int, str]) -> "YoloxDetector":
+        """The same loaded model looking for other COCO classes (it shares the session; nothing is loaded again)."""
+        if classes == self.classes:
+            return self
+        other = copy.copy(self)
+        other.classes = dict(classes)
+        return other
+
+    def with_threshold(self, score: float) -> "YoloxDetector":
+        """The same loaded model reporting boxes down to ``score`` (video's tracker uses the weak ones)."""
+        if score == self.settings.score_threshold:
+            return self
+        from dataclasses import replace
+        other = copy.copy(self)
+        other.settings = replace(self.settings, score_threshold=score)
+        return other
+
     def describe(self) -> dict:
+        pre = {"letterbox": self.size, "pad": 114, "colour": "BGR", "tiles": self.settings.record()}
+        if self.classes != COCO_VEHICLES:
+            pre["classes"] = {str(k): v for k, v in sorted(self.classes.items())}
         return {
             "model": {"name": self.pack.name, "version": self.pack.version, "sha256": self.pack.sha256},
             "providers": self.session.get_providers(),
             "runtime": self.runtime.record(),
-            "preprocessing": {"letterbox": self.size, "pad": 114, "colour": "BGR", "tiles": self.settings.record()},
+            "preprocessing": pre,
         }
 
     def _run(self, img: np.ndarray, ox: int, oy: int) -> list[Detection]:
+        if not self.classes:
+            return []
         x, r = _letterbox(img, self.size)
         out = self.session.run(None, {self.input_name: x.transpose(2, 0, 1)[None].astype(np.float32)})[0][0]
         xy = (out[:, :2] + self._grids) * self._strides
         wh = np.exp(np.clip(out[:, 2:4], -10, 10)) * self._strides
         scores = out[:, 4:5] * out[:, 5:]
-        ids = list(COCO_VEHICLES)
+        ids = sorted(self.classes)
         veh = scores[:, ids]
         best = veh.argmax(1)
         conf = veh.max(1)
@@ -144,10 +201,13 @@ class YoloxDetector:
             x2, y2 = min(float(w), cx + bw / 2), min(float(h), cy + bh / 2)
             if x2 - x1 < 2 or y2 - y1 < 2:
                 continue
-            cs = {COCO_VEHICLES[i]: round(float(veh[k, j]), 4) for j, i in enumerate(ids)}
+            # Class scores within the detection's own family: a person's box says nothing about vehicle classes.
+            fam = family(self.classes[ids[best[k]]])
+            cs = {self.classes[i]: round(float(veh[k, j]), 4) for j, i in enumerate(ids)
+                  if family(self.classes[i]) == fam}
             box = tuple(round(float(v), 1) for v in (x1 + ox, y1 + oy, x2 + ox, y2 + oy))
             dets.append(Detection(box,
-                                  COCO_VEHICLES[ids[best[k]]], round(float(conf[k]), 4), cs))
+                                  self.classes[ids[best[k]]], round(float(conf[k]), 4), cs))
         return dets
 
     def detect(self, img_bgr: np.ndarray, area=None) -> list[Detection]:

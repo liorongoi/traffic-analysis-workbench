@@ -31,9 +31,11 @@ MODES = {
     "video": {"object_search", "plate_recognition"},
 }
 EXPORT_FORMATS = {"xlsx", "csv"}
-# Vehicle detector of a still-image mission: YOLOX-s (or the model promoted on the learning page), or SAM 3.1,
-# which finds vehicles by name: slower, and stronger on unusual views; or both, merged. Video always uses the standard detector.
+# Detector of a mission (still images and video alike): YOLOX-s (or the model promoted on the learning page), or
+# SAM 3.1, which finds objects by name: slower, and stronger on unusual views; or both, merged. In video SAM 3.1 runs
+# every sam3_interval_s seconds of the recording and the tracker carries what it found between those frames.
 DETECTORS = {"standard", "sam3", "both"}
+CAMERAS = {"fixed", "moving"}
 
 CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -880,6 +882,26 @@ CREATE TABLE training_run (
   finished_at TEXT
 );
 """,
+    17: """
+-- Which detector found each tracked box in video (standard | sam3 | both); NULL for older rows (standard).
+ALTER TABLE track_observation ADD COLUMN found_by TEXT;
+-- Moving cameras: the small grey frame camera motion was last measured on, so a resumed run measures the same.
+ALTER TABLE video_checkpoint ADD COLUMN prev_motion BLOB;
+-- Several workers: each finished segment of a recording, with its tracks before they are joined at the cuts.
+CREATE TABLE video_segment (
+  id INTEGER PRIMARY KEY,
+  run_item_id INTEGER NOT NULL REFERENCES run_item(id),
+  idx INTEGER NOT NULL,
+  own_start REAL NOT NULL,
+  own_end REAL,                     -- NULL: to the end of the recording
+  state TEXT NOT NULL,              -- done
+  result TEXT NOT NULL,             -- JSON: pieces of tracks, scene cuts, frames analysed
+  frames INTEGER NOT NULL,
+  seconds REAL NOT NULL,            -- wall time
+  updated_at TEXT NOT NULL,
+  UNIQUE (run_item_id, idx)
+);
+""",
 }
 
 
@@ -962,6 +984,9 @@ class MissionConfig:
     sam3_uncounted: list | None = None   # the mission's own classes listed and exported but not counted as vehicles
     source_dirs: list | None = None   # several source folders; source_dir is the first of them
     vehicle_model: str | None = None  # a saved model (by its name) instead of the one in production use
+    sam3_interval_s: float | None = None  # video: seconds of recording between SAM 3.1 frames (None: 1 s)
+    camera: str = "fixed"            # video: fixed | moving (PTZ, vehicle, drone, body-worn): camera motion is removed
+    video_workers: int | None = None  # video: segments analysed side by side on this computer (None: 1)
 
     def sources(self) -> list[str]:
         """Every source folder of the mission, the first being source_dir."""
@@ -1019,8 +1044,12 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         v.errors.append("Export formats must be xlsx, csv, or both.")
     if cfg.detector not in DETECTORS:
         v.errors.append(f"Detector must be one of {sorted(DETECTORS)}.")
-    elif cfg.detector in ("sam3", "both") and cfg.input_type == "video":
-        v.errors.append("SAM 3.1 detection is for still images; video missions use the standard detector.")
+    if cfg.video_workers is not None and not (1 <= cfg.video_workers <= 32):
+        v.errors.append("Workers must be 1 to 32.")
+    if cfg.camera not in CAMERAS:
+        v.errors.append(f"Camera must be one of {sorted(CAMERAS)}.")
+    if cfg.sam3_interval_s is not None and not (0.2 <= cfg.sam3_interval_s <= 10):
+        v.errors.append("SAM 3.1 in video runs every 0.2 to 10 seconds of the recording.")
     if cfg.sam3_words is not None:
         from .sam3 import vehicle_prompts
         try:

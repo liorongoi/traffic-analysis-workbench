@@ -236,7 +236,7 @@ def test_mission_with_sam3_detector(api):
     assert any("Detector" in e for e in bad["errors"])
     vid = c.post("/api/missions/validate", json={**body, "input_type": "video", "mode": "object_search",
                                                  "detector": "sam3"}, headers=H1).json()
-    assert any("still images" in e for e in vid["errors"])
+    assert not any("SAM" in e for e in vid["errors"])          # video missions may use SAM 3.1 too
     mid = c.post("/api/missions", json={**body, "detector": "sam3"}, headers=H1).json()["id"]
     m = c.get(f"/api/missions/{mid}").json()
     assert m["config"]["detector"] == "sam3"

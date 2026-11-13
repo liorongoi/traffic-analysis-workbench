@@ -57,7 +57,7 @@ def test_mission_with_both_detectors(api):
     c, body, state = api
     vid = c.post("/api/missions/validate", json={**body, "input_type": "video", "mode": "object_search",
                                                  "detector": "both"}, headers=H1).json()
-    assert any("still images" in e for e in vid["errors"])
+    assert not any("detector" in e.lower() or "sam" in e.lower() for e in vid["errors"])   # video may use both too
     mid = c.post("/api/missions", json={**body, "detector": "both"}, headers=H1).json()["id"]
     assert c.get(f"/api/missions/{mid}").json()["config"]["detector"] == "both"
     c.post(f"/api/missions/{mid}/job", headers=H1)

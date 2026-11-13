@@ -6,7 +6,7 @@ import EventsTab from "./Events";
 import PlatesTab from "./Plates";
 import LearningTab from "./Learning";
 import NightReviewTab from "./NightReview";
-import { DetectorChoice, ModelChoice } from "./Wizard";
+import { CameraChoice, DetectorChoice, ModelChoice, ParallelChoice, SamInterval } from "./Wizard";
 import FolderPicker from "../components/FolderPicker";
 
 export type SavedQuery = { filter: Filter; sort: string; desc: boolean };
@@ -47,7 +47,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
             <span>{cap(m.config.mode.replace(/_/g, " "))}</span>
             <span>{m.config.iana_zone}</span>
             <span>{m.config.processing === "continuous" ? `Continuous, monitoring ${m.config.monitoring_enabled ? "on" : "off"}` : "One-time"}</span>
-            {!isVideo && <span>{m.config.detector === "sam3" ? "SAM 3.1 detector" : m.config.detector === "both" ? "Standard + SAM 3.1 detectors" : "Standard detector"}{m.config.detector !== "sam3" && m.config.vehicle_model ? ` · ${m.config.vehicle_model}` : ""}</span>}
+            {<span>{m.config.detector === "sam3" ? "SAM 3.1 detector" : m.config.detector === "both" ? "Standard + SAM 3.1 detectors" : "Standard detector"}{m.config.detector !== "sam3" && m.config.vehicle_model ? ` · ${m.config.vehicle_model}` : ""}</span>}
           </div>
         </div>
       </div>
@@ -145,7 +145,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
             </>
           ) : <p className="muted">One-time mission: it processes the files present at its first scan.</p>}
         </div>
-        {m.config.input_type === "images" && <DetectorCard m={m} reload={reload} />}
+        <DetectorCard m={m} reload={reload} />
         <SourcesCard m={m} reload={reload} />
       </div>
       <div className="grid cols-2">
@@ -212,26 +212,36 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
   };
   useEffect(() => { setValue(m.config.detector ?? "standard"); }, [m.config.detector]);
   const busy = m.job && ["running", "paused"].includes(m.job.state);
-  const changed = value !== (m.config.detector ?? "standard");
+  const video = m.config.input_type === "video";
+  const [every, setEvery] = useState<number>(m.config.sam3_interval_s ?? 1);
+  useEffect(() => { setEvery(m.config.sam3_interval_s ?? 1); }, [m.config.sam3_interval_s]);
+  const [camera, setCamera] = useState<string>(m.config.camera ?? "fixed");
+  useEffect(() => { setCamera(m.config.camera ?? "fixed"); }, [m.config.camera]);
+  const [workers, setWorkers] = useState<number>(m.config.video_workers ?? 1);
+  useEffect(() => { setWorkers(m.config.video_workers ?? 1); }, [m.config.video_workers]);
+  const changed = value !== (m.config.detector ?? "standard") || (video && (every !== (m.config.sam3_interval_s ?? 1) || camera !== (m.config.camera ?? "fixed") || workers !== (m.config.video_workers ?? 1)));
   const saveIt = async () => {
     setErr(null);
     setSaving(true);
-    try { await api(`/missions/${m.id}/detector`, { method: "PUT", body: { detector: value } }); reload(); }
+    try { await api(`/missions/${m.id}/detector`, { method: "PUT", body: { detector: value, ...(video ? { sam3_interval_s: every, camera, video_workers: workers } : {}) } }); reload(); }
     catch (e) { setErr((e as ApiError).message); }
     finally { setSaving(false); }
   };
   return (
     <div className="card">
-      <h2>Vehicle detector</h2>
-      <DetectorChoice value={value} onChange={setValue} sam={sam ?? undefined} disabled={busy} legend={false} />
+      <h2>Detector</h2>
+      <DetectorChoice value={value} onChange={setValue} sam={sam ?? undefined} disabled={busy} legend={false} video={video} />
+      {video && value !== "standard" && <SamInterval value={every} onChange={setEvery} both={value === "both"} disabled={busy} />}
+      {video && <CameraChoice value={camera} onChange={setCamera} disabled={busy} />}
+      {video && <ParallelChoice value={workers} onChange={setWorkers} disabled={busy} />}
       {value !== "sam3" && <ModelChoice saved={saved} value={m.config.vehicle_model ?? null} onChange={setModel} disabled={busy} />}
-      {changed && <p className="muted">Images already processed keep their detections; the change applies to the next run. Each detection records the model that made it.</p>}
+      {changed && <p className="muted">{video ? "Recordings" : "Images"} already processed keep their detections; the change applies to the next run. Each detection records the model that made it.</p>}
       {busy && <p className="muted">The detector can be changed when processing has finished.</p>}
       {changed && <div className="row"><button className="primary" disabled={busy || saving} onClick={saveIt}>{saving ? "Saving…" : "Use this detector"}</button>
-        <button onClick={() => setValue(m.config.detector ?? "standard")}>Cancel</button></div>}
+        <button onClick={() => { setValue(m.config.detector ?? "standard"); setEvery(m.config.sam3_interval_s ?? 1); setCamera(m.config.camera ?? "fixed"); setWorkers(m.config.video_workers ?? 1); }}>Cancel</button></div>}
       {err && <div className="msg err" role="alert">{err}</div>}
-      {!changed && ["sam3", "both"].includes(m.config.detector) && sam?.vehicle_prompts && (
-        <SamWords m={m} defaults={sam.vehicle_prompts} busy={busy} reload={reload} />
+      {!changed && sam?.vehicle_prompts && (
+        <SamWords m={m} defaults={sam.vehicle_prompts} busy={busy} reload={reload} samOnly={m.config.detector === "sam3"} standardOnly={(m.config.detector ?? "standard") === "standard"} standardKnows={sam.standard_knows ?? []} />
       )}
     </div>
   );
@@ -352,15 +362,25 @@ function AddPick({ groups, have, onAdd, disabled, label, prompt, maxLength, wide
 
 /** The words SAM 3.1 is asked for, per class: each word found counts as that class. Classes of the mission's own
  *  (e.g. pedestrian, tractor) can be added, and left out of the vehicle count. Folded to one summary line until opened. */
-function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<string, string[]>; busy: boolean; reload: () => void }) {
-  const saved: Record<string, string[]> = m.config.sam3_words ?? defaults;
+/** Which detector of the mission finds a class: the standard one knows the vehicle classes and some others (a
+ *  person); anything else only SAM 3.1 can find. */
+function foundByText(c: string, mine: boolean, knows: string[], samOnly?: boolean, standardOnly?: boolean): string {
+  const std = !mine || knows.includes(c);
+  if (samOnly) return "SAM 3.1";
+  if (standardOnly) return std ? "standard" : "needs SAM 3.1 or Both";
+  return std ? "standard + SAM 3.1" : "SAM 3.1 only";
+}
+
+function SamWords({ m, defaults, busy, reload, samOnly, standardOnly, standardKnows = [] }: { m: any; defaults: Record<string, string[]>; busy: boolean; reload: () => void; samOnly?: boolean; standardOnly?: boolean; standardKnows?: string[] }) {
+  // A vehicle class missing from the saved words keeps its default words, as on the server.
+  const saved: Record<string, string[]> = m.config.sam3_words ? { ...defaults, ...m.config.sam3_words } : defaults;
   const savedOut: string[] = m.config.sam3_uncounted ?? [];
   const [open, setOpen] = useState(false);
   const [words, setWords] = useState<Record<string, string[]>>(saved);
   const [out, setOut] = useState<string[]>(savedOut);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  useEffect(() => { setWords(m.config.sam3_words ?? defaults); setOut(m.config.sam3_uncounted ?? []); }, [m.config.sam3_words, m.config.sam3_uncounted]);
+  useEffect(() => { setWords(m.config.sam3_words ? { ...defaults, ...m.config.sam3_words } : defaults); setOut(m.config.sam3_uncounted ?? []); }, [m.config.sam3_words, m.config.sam3_uncounted]);
   const builtIn = Object.keys(defaults);
   const own = Object.keys(words).filter((c) => !builtIn.includes(c));
   const classes = [...builtIn, ...own];
@@ -410,7 +430,7 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
   return (
     <div className="samwords">
       <div className="row samwords-head">
-        <h3>Words SAM 3.1 looks for</h3>
+        <h3>{standardOnly ? "What this mission looks for" : "What this mission looks for, and the words SAM 3.1 uses"}</h3>
         <button className="linkish" onClick={() => { if (open && changed) { setWords(saved); setOut(savedOut); } setOpen(!open); }}>
           {open ? (changed ? "Cancel" : "Close") : "Edit"}</button>
       </div>
@@ -428,7 +448,7 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
             targets={classes.map((c) => [c, classTitle(c)])} onAdd={addFound} />
         </div>
         <table className="samwords-table">
-          <thead><tr><th>Class</th><th>Search words</th><th title="Counted as a vehicle">Counted</th><th /></tr></thead>
+          <thead><tr><th>Class</th><th>Search words</th><th>Found by</th><th title="Counted as a vehicle">Counted</th><th /></tr></thead>
           <tbody>
             {classes.map((c) => {
               const mine = own.includes(c);
@@ -445,6 +465,7 @@ function SamWords({ m, defaults, busy, reload }: { m: any; defaults: Record<stri
                       {(words[c] ?? []).length === 0 && <span className="muted">not looked for</span>}
                     </div>
                   </td>
+                  <td className="small">{foundByText(c, mine, standardKnows, samOnly, standardOnly)}</td>
                   <td className="ctr">
                     <input type="checkbox" aria-label={`Count ${c} as a vehicle`} checked={!out.includes(c)} disabled={busy || !mine}
                       title={mine ? "Count what this class finds as vehicles" : "Vehicle classes are always counted"}

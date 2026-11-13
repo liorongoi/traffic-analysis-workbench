@@ -12,7 +12,7 @@ export type VEvent = {
   merged_into: number | null; absorbed: string[]; split_at: number[]; parts: [number, number][];
   first_utc: string | null; last_utc: string | null; revisions: number;
 };
-type Obs = { t: number; x1: number; y1: number; x2: number; y2: number; cls: string; score: number };
+type Obs = { t: number; x1: number; y1: number; x2: number; y2: number; cls: string; score: number; found_by?: string };
 
 export const fmtT = (t: number | null | undefined) => {
   if (t == null) return "";
@@ -33,6 +33,79 @@ const CLASSES = ["car", "bus", "truck", "motorcycle", "bicycle"];
 
 export default function EventsTab({ missionId, eventId }: { missionId: string; eventId: number | null }) {
   return eventId ? <EventDetail missionId={missionId} eventId={eventId} /> : <EventList missionId={missionId} />;
+}
+
+type Counts = {
+  classes: string[]; uncounted: string[]; bucket_s: number;
+  total: { machine: Record<string, number>; counted: Record<string, number>; maybe_same: Record<string, number>; unreviewed: number; vehicles_counted: number };
+  recordings: { source_version_id: number; file: string; duration_s: number | null; machine: Record<string, number>; counted: Record<string, number>;
+    maybe_same: Record<string, number>; unreviewed: number; per_bucket: { start_s: number; counts: Record<string, number> }[] }[];
+};
+
+/** Unique targets per class: each tracked target once, however many frames it was seen in. The big number follows
+ *  review (rejects, duplicates and merges left out); the machine count and unreviewed possible duplicates are beside it. */
+function CountsCard({ missionId, versionId, refresh }: { missionId: string; versionId: string; refresh: number }) {
+  const [c, setC] = useState<Counts | null>(null);
+  const [hover, setHover] = useState<number | null>(null);
+  useEffect(() => {
+    api(`/missions/${missionId}/counts${versionId ? `?version_id=${versionId}` : ""}`).then(setC).catch(() => setC(null));
+  }, [missionId, versionId, refresh]);
+  if (!c || !c.classes.length) return null;
+  const sum = (d: Record<string, number>) => Object.values(d).reduce((a, b) => a + b, 0);
+  // Targets first seen in each minute, all recordings in view added up by minute from their start.
+  const buckets = new Map<number, Record<string, number>>();
+  for (const r of c.recordings) for (const b of r.per_bucket) {
+    const cur = buckets.get(b.start_s) ?? {};
+    for (const [k, v] of Object.entries(b.counts)) cur[k] = (cur[k] ?? 0) + v;
+    buckets.set(b.start_s, cur);
+  }
+  const last = Math.max(0, ...[...buckets.keys()], ...c.recordings.map((r) => Math.floor((r.duration_s ?? 0) / c.bucket_s) * c.bucket_s));
+  const bars = Array.from({ length: Math.floor(last / c.bucket_s) + 1 }, (_, i) => ({ s: i * c.bucket_s, counts: buckets.get(i * c.bucket_s) ?? {} }));
+  const peak = Math.max(1, ...bars.map((b) => sum(b.counts)));
+  const t = c.total;
+  return (
+    <div className="card counts viz">
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+        <h2>Unique targets{versionId ? " in this recording" : ""}</h2>
+        <span className="muted small">{t.unreviewed ? `${t.unreviewed} event(s) not reviewed yet` : "all events reviewed"}</span>
+      </div>
+      <div className="count-tiles">
+        {c.classes.map((k) => (
+          <div key={k} className="count-tile">
+            <div className="count-cls">{k}{c.uncounted.includes(k) ? <span className="muted"> · not a vehicle</span> : ""}</div>
+            <div className="count-num">{t.counted[k] ?? 0}</div>
+            <div className="muted small">machine {t.machine[k] ?? 0}{t.maybe_same[k] ? ` · ${t.maybe_same[k]} maybe the same` : ""}</div>
+          </div>
+        ))}
+      </div>
+      {bars.length >= 3 && <div className="count-chart" aria-label="New targets per minute" onMouseLeave={() => setHover(null)}>
+        <div className="muted small">New targets per {c.bucket_s === 60 ? "minute" : `${c.bucket_s} s`} (peak {peak})</div>
+        <div style={{ overflowX: "auto" }}><svg width={bars.length * 10} height="64" viewBox={`0 0 ${bars.length * 10} 64`} role="img">
+          {bars.map((b, i) => {
+            const h = (sum(b.counts) / peak) * 60;
+            return (
+              <g key={b.s} onMouseEnter={() => setHover(i)}>
+                <rect x={i * 10} y={0} width={10} height={64} fill="transparent" />
+                <rect x={i * 10 + 1} y={64 - Math.max(h, sum(b.counts) ? 2 : 0)} width={8} height={Math.max(h, sum(b.counts) ? 2 : 0)} rx={2}
+                  fill={hover === i ? "var(--accent-hover)" : "var(--series-1)"} />
+              </g>
+            );
+          })}
+        </svg></div>
+        <div className="count-tip small" aria-live="polite">
+          {hover != null ? `${fmtT(bars[hover].s).slice(0, 8)} to ${fmtT(bars[hover].s + c.bucket_s).slice(0, 8)}: `
+            + (sum(bars[hover].counts) ? Object.entries(bars[hover].counts).map(([k, v]) => `${v} ${k}`).join(", ") : "none") : "\u00a0"}
+        </div>
+      </div>}
+      {!versionId && c.recordings.length > 1 && (
+        <table className="t"><thead><tr><th>Recording</th>{c.classes.map((k) => <th key={k} className="num">{k}</th>)}</tr></thead>
+          <tbody>{c.recordings.map((r) => (
+            <tr key={r.source_version_id}><td className="mono bidi">{r.file}</td>
+              {c.classes.map((k) => <td key={k} className="num">{r.counted[k] ?? 0}</td>)}</tr>
+          ))}</tbody></table>
+      )}
+    </div>
+  );
 }
 
 function EventList({ missionId }: { missionId: string }) {
@@ -85,6 +158,7 @@ function EventList({ missionId }: { missionId: string }) {
   };
   return (
     <div className="grid" style={{ gap: 10 }}>
+      <CountsCard missionId={missionId} versionId={rec} refresh={timeRevision} />
       <div className="card">
         <h2>Recordings</h2>
         <table className="t"><thead><tr><th>File</th><th>Start (UTC)</th><th className="num">Length</th><th>Frame rate</th><th>Processing</th><th className="num">Events</th></tr></thead>
@@ -155,6 +229,15 @@ function EventList({ missionId }: { missionId: string }) {
   );
 }
 
+const FOUND_LABEL: Record<string, string> = { standard: "standard detector", sam3: "SAM 3.1", both: "both" };
+
+/** Which detector found the tracked boxes of an event, e.g. "standard detector 41 · both 7 · SAM 3.1 2 frames". */
+function foundBy(obs: Obs[]): string {
+  const n: Record<string, number> = {};
+  for (const o of obs) n[o.found_by ?? "standard"] = (n[o.found_by ?? "standard"] ?? 0) + 1;
+  return Object.entries(n).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${FOUND_LABEL[k] ?? k} ${v}`).join(" · ") + " frames";
+}
+
 function EventDetail({ missionId, eventId }: { missionId: string; eventId: number }) {
   const [ev, setEv] = useState<(VEvent & { observations: Obs[]; clips: any[] }) | null>(null);
   const [others, setOthers] = useState<VEvent[]>([]);
@@ -166,6 +249,7 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
   const [method, setMethod] = useState("copy");
   const [busy, setBusy] = useState(false);
   const [fallback, setFallback] = useState(false);   // the browser cannot play this codec: show decoded frames
+  const [classes, setClasses] = useState<string[]>(CLASSES);   // the vehicle classes and the mission's own
   const video = useRef<HTMLVideoElement>(null);
   const still = useRef<HTMLImageElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -176,6 +260,7 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
       setEv(e);
       const r = await api(`/missions/${missionId}/events?version_id=${e.source_version_id}`);
       setOthers(r.events.filter((o: VEvent) => o.id !== eventId));
+      if (r.classes) setClasses(r.classes);
     } catch (e) { setErr((e as ApiError).message); }
   }, [missionId, eventId]);
   useEffect(() => { load(); }, [load]);
@@ -282,6 +367,7 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
               <tr><td>End</td><td className="mono">{fmtT(ev.last_t)}{ev.last_t !== ev.machine_last_t && <span className="muted"> (machine {fmtT(ev.machine_last_t)})</span>}</td></tr>
               <tr><td>Start (UTC)</td><td className="mono">{ev.first_utc ?? "unknown: the file name has no start time"}</td></tr>
               <tr><td>Class</td><td>{ev.cls} <span className="muted">({Math.round(ev.cls_share * 100)}% of detections{ev.cls !== ev.machine_cls ? `, machine said ${ev.machine_cls}` : ""})</span></td></tr>
+              <tr><td>Found by</td><td>{foundBy(ev.observations)}</td></tr>
               <tr><td>Ended because</td><td>{ev.end_reason.replace(/_/g, " ")}</td></tr>
               <tr><td>Flags</td><td>{ev.flags.length ? ev.flags.map((f) => FLAG_LABEL[f] ?? f).join(", ") : "none"}{ev.related.length > 0 && ` (${ev.related.join(", ")})`}</td></tr>
               {ev.parts.length > 1 && <tr><td>Parts</td><td className="mono">{ev.parts.map(([a, b]) => `${fmtT(a)}–${fmtT(b)}`).join(", ")}</td></tr>}
@@ -303,7 +389,7 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
             </div>
             <div className="row">
               <select aria-label="Set class" value="" onChange={(e) => e.target.value && revise("set_class", { cls: e.target.value })}>
-                <option value="">Set class…</option>{CLASSES.map((c) => <option key={c}>{c}</option>)}
+                <option value="">Set class…</option>{classes.map((c) => <option key={c}>{c}</option>)}
               </select>
               <select aria-label="Duplicate of" value="" onChange={(e) => e.target.value && revise("duplicate", { of: e.target.value })}>
                 <option value="">Duplicate of…</option>{others.map((o) => <option key={o.id} value={o.key}>{o.key} ({fmtT(o.first_t)})</option>)}

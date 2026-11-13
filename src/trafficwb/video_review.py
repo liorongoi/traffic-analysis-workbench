@@ -75,6 +75,12 @@ class Event:
     thumb_t: float = 0.0
     thumb_box: list[float] = field(default_factory=list)
     revisions: int = 0
+    run_item_id: int | None = None
+
+    @property
+    def counted(self) -> bool:
+        """Still a target of its own after review: not rejected, not a duplicate, not merged into another."""
+        return self.status in ("pending", "confirmed")
 
     @property
     def parts(self) -> list[tuple[float, float]]:
@@ -112,6 +118,7 @@ class VideoService:
                              json.loads(r["exit"]), utc_precision=r["effective_start_precision"], thumb_t=r["thumb_t"],
                              thumb_box=json.loads(r["thumb_box"])))
             out[-1]._start = start_utc(r["effective_start_utc"])  # type: ignore[attr-defined]
+            out[-1].run_item_id = r["run_item_id"]
         return out
 
     def _apply(self, events: list[Event]) -> list[Event]:
@@ -163,6 +170,59 @@ class VideoService:
             evs = [e for e in evs if flag in e.flags]
         return evs
 
+    # ---------- unique counts ----------
+    def counts(self, version_id: int | None = None, bucket_s: int = 60) -> dict:
+        """Unique targets per class, per recording and for the mission: one per track, not per frame.
+
+        - machine: what the tracker found (one per confirmed track), by the machine class.
+        - counted: after review: rejected, duplicate and merged events are left out, a split event counts once per
+          part, and a re-classed event counts in its new class.
+        - maybe_same: of those counted, events flagged as a possible duplicate (re-entry within seconds near where
+          another left) that nobody has reviewed yet. The true count lies between counted - maybe_same and counted.
+        Only the newest analysis of each recording counts. ``per_bucket`` counts targets by the bucket (seconds from
+        the recording start) in which each one first appeared.
+        """
+        latest = {r[0]: r[1] for r in self.con.execute(
+            "SELECT source_version_id, MAX(id) FROM run_item GROUP BY source_version_id")}
+        evs = [e for e in self.events(version_id) if latest.get(e.source_version_id) == e.run_item_id]
+        own = self.classes()
+        uncounted = sorted(set(getattr(self.m.config(), "sam3_uncounted", None) or []) & set(own))
+        dur = {r[0]: r[1] for r in self.con.execute("SELECT source_version_id, duration_s FROM video_probe")}
+        recs: dict[int, dict] = {}
+
+        def rec(e):
+            return recs.setdefault(e.source_version_id, {
+                "source_version_id": e.source_version_id, "file": e.file, "duration_s": dur.get(e.source_version_id),
+                "machine": {}, "counted": {}, "maybe_same": {}, "unreviewed": 0, "per_bucket": {}})
+
+        for e in evs:
+            r = rec(e)
+            r["machine"][e.machine_cls] = r["machine"].get(e.machine_cls, 0) + 1
+            if e.status == "pending":
+                r["unreviewed"] += 1
+            if not e.counted:
+                continue
+            for a, _ in e.parts:
+                r["counted"][e.cls] = r["counted"].get(e.cls, 0) + 1
+                b = r["per_bucket"].setdefault(int(a // bucket_s), {})
+                b[e.cls] = b.get(e.cls, 0) + 1
+            if e.status == "pending" and "possible_duplicate" in e.flags:
+                r["maybe_same"][e.cls] = r["maybe_same"].get(e.cls, 0) + 1
+        out = []
+        tot = {"machine": {}, "counted": {}, "maybe_same": {}, "unreviewed": 0}
+        for r in sorted(recs.values(), key=lambda r: r["file"]):
+            for k in ("machine", "counted", "maybe_same"):
+                for c, n in r[k].items():
+                    tot[k][c] = tot[k].get(c, 0) + n
+            tot["unreviewed"] += r["unreviewed"]
+            r["per_bucket"] = [{"start_s": k * bucket_s, "counts": v} for k, v in sorted(r["per_bucket"].items())]
+            out.append(r)
+        present = {c for r in out for k in ("machine", "counted") for c in r[k]}
+        classes = [c for c in own if c in present] + sorted(present - set(own))
+        vehicles = lambda d: sum(n for c, n in d.items() if c not in uncounted)   # noqa: E731
+        tot["vehicles_counted"] = vehicles(tot["counted"])
+        return {"classes": classes, "uncounted": uncounted, "bucket_s": bucket_s, "recordings": out, "total": tot}
+
     def event(self, event_id: int) -> Event:
         r = self.con.execute("SELECT source_version_id FROM video_event WHERE id=?", (event_id,)).fetchone()
         if r is None:
@@ -171,7 +231,8 @@ class VideoService:
 
     def observations(self, event_id: int) -> list[dict]:
         return [dict(r) for r in self.con.execute(
-            "SELECT o.t, o.x1, o.y1, o.x2, o.y2, o.cls, o.score, o.appearance FROM track_observation o "
+            "SELECT o.t, o.x1, o.y1, o.x2, o.y2, o.cls, o.score, o.appearance, COALESCE(o.found_by, 'standard') AS found_by "
+            "FROM track_observation o "
             "JOIN video_event e ON e.track_id=o.track_id WHERE e.id=? ORDER BY o.t", (event_id,))]
 
     def recordings(self) -> list[dict]:
@@ -251,8 +312,9 @@ class VideoService:
                 raise VideoError("The end must be after the start.")
             payload = {"first_t": a, "last_t": b}
         elif action == "set_class":
-            if payload.get("cls") not in CLASSES:
-                raise VideoError(f"Class must be one of {', '.join(CLASSES)}.")
+            allowed = self.classes()
+            if payload.get("cls") not in allowed:
+                raise VideoError(f"Class must be one of {', '.join(allowed)}.")
             payload = {"cls": payload["cls"]}
         elif action == "merge_into":
             tgt = int(payload["target"])
@@ -272,6 +334,11 @@ class VideoService:
         self.con.execute("INSERT INTO event_revision(event_id,action,payload,author,note,created_at) VALUES (?,?,?,?,?,?)",
                          (event_id, action, json.dumps(payload), author, note, utcnow()))
         return self.event(event_id)
+
+    def classes(self) -> list[str]:
+        """The vehicle classes, then the mission's own (people, or anything named by words), as for still images."""
+        own = [k for k in (getattr(self.m.config(), "sam3_words", None) or {}) if k not in CLASSES]
+        return [*CLASSES, *own]
 
     def snap(self, version_id: int, t: float) -> float:
         """The presentation time of the first frame at or after t (or the last frame)."""
@@ -373,9 +440,27 @@ class VideoService:
                 "model", "plate_text", "plate_readability", "plate_review"]
         stem = "".join(c if c.isalnum() or c in "-_." else "_"
                        for c in f"{cfg.name}_events_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
+        cn = self.counts()
+        ccols = ["file", "source_version_id", "class", "counted_as_vehicle", "unique_machine", "unique_after_review",
+                 "maybe_same_target", "unreviewed_events_in_recording"]
+        crows = []
+        for r in cn["recordings"]:
+            for c in cn["classes"]:
+                if c in r["machine"] or c in r["counted"]:
+                    crows.append([r["file"], r["source_version_id"], c, "no" if c in cn["uncounted"] else "yes",
+                                  r["machine"].get(c, 0), r["counted"].get(c, 0), r["maybe_same"].get(c, 0),
+                                  r["unreviewed"]])
+        for c in cn["classes"]:
+            t = cn["total"]
+            crows.append(["(all recordings)", "", c, "no" if c in cn["uncounted"] else "yes", t["machine"].get(c, 0),
+                          t["counted"].get(c, 0), t["maybe_same"].get(c, 0), t["unreviewed"]])
+        mcols = ["file", "source_version_id", "from", "to", *cn["classes"]]
+        mrows = [[r["file"], r["source_version_id"], fmt_t(b["start_s"]), fmt_t(b["start_s"] + cn["bucket_s"]),
+                  *[b["counts"].get(c, 0) for c in cn["classes"]]] for r in cn["recordings"] for b in r["per_bucket"]]
         paths = []
         for fmt in formats:
-            new = (write_sheets_csv if fmt == "csv" else write_sheets_xlsx)(out, stem, [("events", cols, rows)])
+            new = (write_sheets_csv if fmt == "csv" else write_sheets_xlsx)(
+                out, stem, [("events", cols, rows), ("counts", ccols, crows), ("counts_per_minute", mcols, mrows)])
             paths += new
             self.con.execute("INSERT INTO export(format,path,scope,rows,status,author,created_at) VALUES (?,?,?,?,?,?,?)",
                              (fmt, ";".join(str(p) for p in new), json.dumps({"video_events": True}), len(rows),
