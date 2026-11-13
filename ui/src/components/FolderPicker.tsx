@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api";
 
-// Choose folders on the computer LanePulse runs on: type a path, or open the dropdown and walk the folders. With
+// Choose folders on the computer LanePulse runs on: click the field (or Browse) and walk the folders; typing a path is
+// only a shortcut. With
 // `multiple`, every folder chosen is added to a list, so a mission can read several folders.
 
 type Listing = { path: string | null; parent: string | null; folders: { name: string; path: string }[]; more?: boolean;
@@ -67,7 +68,8 @@ export default function FolderPicker({ value, onChange, multiple = false, placeh
         </ul>
       )}
       <div className="folderpick-field">
-        <input className="mono" value={text} placeholder={placeholder} aria-label={label}
+        <input className="mono" value={text} placeholder={placeholder ?? "Click to choose a folder"} aria-label={label}
+          onClick={() => { if (!open) toggle(); }}
           onChange={(e) => { setText(e.target.value); if (!multiple) onChange(e.target.value.trim() ? [e.target.value] : []); }}
           onKeyDown={(e) => {
             if (e.key === "Enter") { e.preventDefault(); if (multiple) choose(text.trim()); else { setOpen(true); browse(text.trim()); } }

@@ -520,3 +520,7 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
 .workers code.cmd { display: block; flex: 1; padding: 8px 10px; border-radius: 6px; background: rgba(127, 127, 127, 0.12); overflow-x: auto; white-space: nowrap; }
 .workers .join-how { flex-wrap: wrap; gap: 6px; }
 .workers .asking { border-left: 3px solid var(--accent, #3b82f6); }
+
+/* Pick-from-list controls (components/Pick.tsx) */
+.namepick, .zonepick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.namepick > input { min-width: 200px; }

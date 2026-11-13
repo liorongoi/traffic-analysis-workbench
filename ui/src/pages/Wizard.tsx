@@ -3,6 +3,7 @@ import { api, ApiError, post } from "../api";
 import { go } from "../router";
 import TimezoneMap from "../components/TimezoneMap";
 import FolderPicker from "../components/FolderPicker";
+import { NamePick, ZonePick, thisMonth } from "../components/Pick";
 
 type Ref = { countries: Record<string, string>; country_zones: Record<string, string>; modes: Record<string, string[]>; zones: string[];
   sam3?: { installed: boolean; reason: string | null; memory_note?: string | null } };
@@ -20,14 +21,13 @@ export default function Wizard() {
   const [refError, setRefError] = useState("");
   const [step, setStep] = useState(0);
   const [cfg, setCfg] = useState({
-    name: "", input_type: "images", mode: "general_traffic", country: "IL", iana_zone: "Asia/Jerusalem",
+    name: `Traffic, ${thisMonth()}`, input_type: "images", mode: "general_traffic", country: "IL", iana_zone: "Asia/Jerusalem",
     latitude: null as number | null, longitude: null as number | null,
     source_dir: "", source_dirs: [] as string[], include_subdirs: true, processing: "one_time", output_dir: "", export_formats: ["xlsx", "csv"],
     detector: "standard", vehicle_model: null as string | null, sam3_interval_s: null as number | null, camera: "fixed", video_workers: null as number | null,
   });
   const [saved, setSaved] = useState<any[]>([]);
   useEffect(() => { api("/models/saved").then((r) => setSaved(r.saved ?? [])).catch(() => setSaved([])); }, []);
-  const [zoneFilter, setZoneFilter] = useState("");
   const [utcPreview, setUtcPreview] = useState(() => new Date().toISOString().slice(0, 16));
   const [timePreview, setTimePreview] = useState<{ local: string; offset: string; is_dst: boolean; abbreviation: string } | null>(null);
   const [preview, setPreview] = useState<Preview[] | null>(null);
@@ -43,7 +43,16 @@ export default function Wizard() {
     return () => { live = false; };
   }, []);
   const set = (k: string, v: unknown) => setCfg((c) => ({ ...c, [k]: v }));
-  const zones = useMemo(() => (ref?.zones ?? []).filter((z) => z.toLowerCase().includes(zoneFilter.toLowerCase())).slice(0, 200), [ref, zoneFilter]);
+  // Names to choose from: what the mission looks at, where and when. The first is used unless another is chosen.
+  const nameIdeas = useMemo(() => {
+    const what = { general_traffic: "Traffic", object_search: "Vehicle search", plate_recognition: "Plates" }[cfg.mode] ?? "Mission";
+    const place = ref?.countries[cfg.country] ?? "";
+    const city = cfg.iana_zone.split("/").pop()?.replace(/_/g, " ") ?? "";
+    const folders = cfg.source_dirs.map((d) => d.split(/[\\/]/).filter(Boolean).pop() ?? "");
+    const kind = cfg.input_type === "video" ? "video" : "";
+    return [`${what}, ${thisMonth()}`, ...folders.map((f) => `${f}, ${thisMonth()}`), `${what}, ${city}`, place && `${what}, ${place}`,
+      kind && `${what} ${kind}, ${thisMonth()}`, `${city} ${what.toLowerCase()}, ${thisMonth()}`].filter(Boolean) as string[];
+  }, [ref, cfg.mode, cfg.country, cfg.iana_zone, cfg.source_dirs, cfg.input_type]);
 
   useEffect(() => {
     if (step === 4) {
@@ -110,7 +119,7 @@ export default function Wizard() {
       <div className="card">
         {step === 0 && (
           <>
-            <label className="field"><span>Mission name</span><input autoFocus value={cfg.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Route 6 north, October" /></label>
+            <label className="field"><span>Mission name</span><NamePick label="Mission name" value={cfg.name} onChange={(v) => set("name", v)} suggestions={nameIdeas} /></label>
             <label className="field"><span>Input type (cannot change later)</span>
               <select value={cfg.input_type} onChange={(e) => { set("input_type", e.target.value); set("mode", ref.modes[e.target.value][0]); }}>
                 <option value="images">Still images</option><option value="video">Video recordings</option>
@@ -140,14 +149,8 @@ export default function Wizard() {
                 <option value="FI">Finland (sample data; no plate reading)</option>
               </select>
             </label>
-            <label className="field"><span>Search by city or IANA time-zone name</span>
-              <input placeholder="e.g. Tehran, Beirut, Europe/Riga" value={zoneFilter} onChange={(e) => setZoneFilter(e.target.value)} />
-              <select size={5} value={cfg.iana_zone} onChange={(e) => setCfg((c) => ({
-                ...c, iana_zone: e.target.value, latitude: null, longitude: null,
-              }))}>
-                {!zones.includes(cfg.iana_zone) && <option value={cfg.iana_zone}>{cfg.iana_zone}</option>}
-                {zones.map((z) => <option key={z} value={z}>{z} · {z.split("/").pop()?.replace(/_/g, " ")}</option>)}
-              </select>
+            <label className="field"><span>Time zone: area, then city (or click the map)</span>
+              <ZonePick zones={ref.zones} value={cfg.iana_zone} onChange={(z) => setCfg((c) => ({ ...c, iana_zone: z, latitude: null, longitude: null }))} />
             </label>
             <TimezoneMap selected={cfg.iana_zone} onPick={(zone, latitude, longitude) => {
               setCfg((c) => ({ ...c, iana_zone: zone, latitude, longitude }));
@@ -164,7 +167,7 @@ export default function Wizard() {
         {step === 2 && (
           <>
             <FolderPicker multiple label="Source folders on this workstation (read only; files are never changed). Add one or several."
-              value={cfg.source_dirs} placeholder="D:\Feeds\Route6, or press Browse"
+              value={cfg.source_dirs} placeholder="Click to choose a folder"
               onChange={(v) => { setCfg((c) => ({ ...c, source_dirs: v, source_dir: v[0] ?? "" })); setPreview(null); }} />
             <label className="row"><input type="checkbox" checked={cfg.include_subdirs} onChange={(e) => set("include_subdirs", e.target.checked)} /> Include subfolders</label>
             <label className="field" style={{ marginTop: 10 }}><span>Processing</span>
@@ -194,7 +197,7 @@ export default function Wizard() {
         )}
         {step === 3 && (
           <>
-            <FolderPicker label="Output folder for exports" value={cfg.output_dir ? [cfg.output_dir] : []} placeholder="E:\Exports\Route6"
+            <FolderPicker label="Output folder for exports" value={cfg.output_dir ? [cfg.output_dir] : []} placeholder="Click to choose a folder"
               onChange={(v) => set("output_dir", v[0] ?? "")} />
             <div className="row">
               {["xlsx", "csv"].map((f) => (
