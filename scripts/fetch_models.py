@@ -7,7 +7,8 @@ offline workstation. The application itself never downloads anything.
 
 It also fetches SAM 3.1 (sam3.1-w8a16, about 880 MB; --no-sam3 skips it), RF-DETR Small (exported to ONNX here; needs
 PyTorch and the rfdetr package; --no-rfdetr skips it, --rfdetr-sizes picks others) and the YOLOX-s and RF-DETR training
-starting weights (yolox_s.pth, rf-detr-small-coco.pth) into training_weights/; the installers put
+starting weights (yolox_s.pth, rf-detr-small-coco.pth, d-fine-small-coco.pth, rt-detr-r18-coco.pth; D-FINE and
+RT-DETRv2 need PyTorch and transformers, --no-detr skips them) into training_weights/; the installers put
 them next to their own Python (share/lanepulse), so training on the learning page never goes online.
 """
 from __future__ import annotations
@@ -231,6 +232,37 @@ def fetch_rfdetr(dest: Path, weights_dir: Path, sizes: list[str]) -> int:
     return 0
 
 
+# D-FINE and RT-DETRv2 (Apache-2.0): the released COCO weights at a fixed commit, checked by SHA-256 (detr_train.ARCHS),
+# kept as training starting weights (training_weights/<arch>-<size>-coco.pth) and exported to ONNX as packs the app
+# runs (models/<arch>-<size>/coco). Needs PyTorch and transformers on this staging machine.
+DETR_SIZES_DEFAULT = "d-fine:small,rt-detr:r18"
+
+
+def fetch_detr(dest: Path, weights_dir: Path, wanted: list[str]) -> int:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    try:
+        from trafficwb import detr_train as dt
+        if not dt.available()["ok"]:
+            raise ImportError(dt.available()["reason"])
+    except ImportError as exc:
+        print(f"warning: D-FINE and RT-DETRv2 skipped: they need PyTorch and transformers here ({exc}); "
+              "pip install torch transformers onnx", file=sys.stderr)
+        return 2
+    for item in wanted:
+        arch, _, size = item.partition(":")
+        if arch not in dt.ARCHS or size not in dt.ARCHS[arch]["sizes"]:
+            print(f"error: unknown D-FINE / RT-DETRv2 size {item}", file=sys.stderr)
+            return 1
+        try:
+            w = dt.fetch_weights(arch, size, weights_dir)
+        except dt.TrainError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"ok {w}")
+        print(f"ok {dt.released_pack(arch, size, w, dest)}")
+    return 0
+
+
 def sha256_file(p: Path) -> str:
     h = hashlib.sha256()
     with open(p, "rb") as f:
@@ -248,6 +280,10 @@ def main(argv=None) -> int:
     ap.add_argument("--require-rfdetr", action="store_true", help="fail when RF-DETR cannot be exported here")
     ap.add_argument("--rfdetr-sizes", default=RFDETR_SIZES_DEFAULT,
                     help="comma-separated RF-DETR sizes to fetch: nano, small, medium (default small)")
+    ap.add_argument("--no-detr", action="store_true", help="skip D-FINE and RT-DETRv2 (need PyTorch and transformers)")
+    ap.add_argument("--require-detr", action="store_true", help="fail when D-FINE and RT-DETRv2 cannot be fetched here")
+    ap.add_argument("--detr-sizes", default=DETR_SIZES_DEFAULT,
+                    help="comma-separated arch:size to fetch, e.g. d-fine:small,rt-detr:r18 (the default)")
     a = ap.parse_args(argv)
     for p in PACKS:
         d = Path(a.dest) / p["name"] / p["version"]
@@ -282,6 +318,10 @@ def main(argv=None) -> int:
     if not a.no_rfdetr:
         r = fetch_rfdetr(Path(a.dest), t, [x.strip() for x in a.rfdetr_sizes.split(",") if x.strip()])
         if r == 1 or (r == 2 and a.require_rfdetr):
+            return 1
+    if not a.no_detr:
+        r = fetch_detr(Path(a.dest), t, [x.strip() for x in a.detr_sizes.split(",") if x.strip()])
+        if r == 1 or (r == 2 and a.require_detr):
             return 1
     return 0
 

@@ -16,6 +16,9 @@ partial review, excluded regions, unsure SAM boxes and other ignore boxes) must 
 transformer's set loss cannot leave them out, so they are painted plain grey in the training copy of the picture
 (every labelled box stays visible).
 
+Starting weights: --init coco (the released weights of the chosen size, shipped next to the installation's Python
+as <arch>-<size>-coco.pth, e.g. d-fine-small-coco.pth) or an earlier D-FINE / RT-DETRv2 pack (folder or .zip).
+
 The pack: model.onnx (what the app runs: boxes as centre and size in 0..1 and one logit per class, "boxes_logits"),
 config.json and model.safetensors (to train further; the pack folder loads with ``from_pretrained``), model.json,
 LICENSE; and a .zip of the folder.
@@ -48,20 +51,36 @@ from .train import TrainCancelled, TrainError, _open_pack, _sha256, background_m
     shipped_weights_dirs
 
 GREY = 114
-# Released COCO weights on the Hugging Face hub, by architecture and size.
+# Released COCO weights (Apache-2.0), as published by the authors' Hugging Face organisations: repository, commit and
+# SHA-256 of model.safetensors, so a fetch is always the same file. Fetched only when installers are built (or with
+# scripts/fetch_models.py); training itself never goes online.
 ARCHS = {
     "d-fine": {"title": "D-FINE", "default": "small", "sizes": {
-        "nano": "ustc-community/dfine-nano-coco", "small": "ustc-community/dfine-small-coco",
-        "medium": "ustc-community/dfine-medium-coco", "large": "ustc-community/dfine-large-coco",
-        "xlarge": "ustc-community/dfine-xlarge-coco"},
+        "nano": ("ustc-community/dfine-nano-coco", "066438d3d8f0da137a37b38fdf3368fd4afceced",
+                 "19e06bdc873da819920a8d373b879721a5b9759d822f8213220bb09abbdab58b"),
+        "small": ("ustc-community/dfine-small-coco", "f79e65b5fbb33ceb9d3ebba042955d7410c608f8",
+                  "a144baff3a27bfd538fe37b11fa8d4fca5744b8c054b5301e7c699a1379cd18f"),
+        "medium": ("ustc-community/dfine-medium-coco", "4ab9f5e466432f4fcf9a9a023da6aa5ecc9c9829",
+                   "5a53154fb87af91ad1ca3081599f21423a5681c46b613e15f2ff556837b02634"),
+        "large": ("ustc-community/dfine-large-coco", "aa8f8211545e4cff5adf52ea512f9ac74a9824ec",
+                  "4e9d77ba937ab6eb8537b183c1c05372262daaa552e7682d721417042e24a8dc"),
+        "xlarge": ("ustc-community/dfine-xlarge-coco", "ea4f6be7350bbe3c199ec6febc74168346cb5a68",
+                   "3ac6ea37c6c995ed65a10beeda703249e97aac1bb40bda18cfaa1c2f6cdca4c5")},
         "license": "D-FINE (USTC, https://github.com/Peterande/D-FINE): code and released weights under the "
                    "Apache License 2.0."},
     "rt-detr": {"title": "RT-DETRv2", "default": "r18", "sizes": {
-        "r18": "PekingU/rtdetr_v2_r18vd", "r34": "PekingU/rtdetr_v2_r34vd", "r50": "PekingU/rtdetr_v2_r50vd",
-        "r101": "PekingU/rtdetr_v2_r101vd"},
+        "r18": ("PekingU/rtdetr_v2_r18vd", "5650961749fa93567c0d46fc7f43ea4f9e914107",
+                "d18309d0d7ea57048138885c4c6ecfcb1e24506fc6153b94ad484f8ab62c7115"),
+        "r34": ("PekingU/rtdetr_v2_r34vd", "5d60d8fb5eb2a3ee5575bf200ecbce4e2cfa420c",
+                "d67528a6c4bbaece03d65feefbba94052894aa6520aa1f65c083cd0f7b92d612"),
+        "r50": ("PekingU/rtdetr_v2_r50vd", "282494075698cab9faa1096ae26856890030c817",
+                "3331d977dbc0c7a6cdae9ec0b0b6ad156eb6720d65b7cf0fa710dcc541d88d71"),
+        "r101": ("PekingU/rtdetr_v2_r101vd", "2c5dbbd2d4d8c8814827a3b42737ba1afce3cf2a",
+                 "fa2d79aa50064eb2d41abdc1acaa5ca20fc9d95347851c93ab6aad30a8974ee0")},
         "license": "RT-DETRv2 (Baidu, https://github.com/lyuwenyu/RT-DETR): code and released weights under the "
                    "Apache License 2.0."},
 }
+DEFAULT_SHIPPED = {"d-fine": ["small"], "rt-detr": ["r18"]}   # what the installers carry unless told otherwise
 INPUT = 640
 
 
@@ -88,28 +107,39 @@ def _check_arch(arch: str, size: str | None) -> str:
     return size
 
 
-def weights_folder(arch: str, size: str) -> str:
-    return ARCHS[arch]["sizes"][size].replace("/", "__")
+def weights_name(arch: str, size: str) -> str:
+    """The starting weights as one file, shipped next to the installation's Python like yolox_s.pth."""
+    return f"{arch}-{size}-coco.pth"
 
 
 def find_coco_weights(arch: str, size: str | None = None) -> Path | None:
-    """The released weights shipped with the installation (<prefix>/share/lanepulse/<owner>__<model>/)."""
+    """The released weights shipped with the installation (<prefix>/share/lanepulse/<arch>-<size>-coco.pth)."""
     size = size or ARCHS[arch]["default"]
     for d in shipped_weights_dirs():
-        p = d / weights_folder(arch, size)
-        if (p / "config.json").is_file() and (p / "model.safetensors").is_file():
+        p = d / weights_name(arch, size)
+        if p.is_file():
             return p
     return None
+
+
+def save_start(model, path: Path) -> Path:
+    """One file holding the model's settings and weights: {"arch", "config", "model"}."""
+    import torch
+    path = Path(path)
+    tmp = path.with_name(path.name + ".partial")
+    torch.save({"arch": "d-fine" if model.config.model_type == "d_fine" else "rt-detr",
+                "config": model.config.to_dict(), "model": model.state_dict()}, tmp)
+    os.replace(tmp, path)
+    return path
 
 
 def coco_weights(arch: str, size: str, log=print, download: bool = True) -> Path:
     found = find_coco_weights(arch, size)
     if found:
         return found
-    repo = ARCHS[arch]["sizes"][size]
     if not download:
         raise TrainError(f"The {ARCHS[arch]['title']} {size} starting weights are not installed here "
-                         f"({weights_folder(arch, size)} in {shipped_weights_dirs()[-1]}). Reinstall LanePulse, or "
+                         f"({weights_name(arch, size)} in {shipped_weights_dirs()[-1]}). Reinstall LanePulse, or "
                          "continue from a trained model of the same kind.")
     cache = Path(os.environ.get("LANEPULSE_CACHE", Path.home() / ".cache" / "lanepulse"))
     log(f"Fetching the {ARCHS[arch]['title']} {size} starting weights (public files, no account) ...")
@@ -117,33 +147,39 @@ def coco_weights(arch: str, size: str, log=print, download: bool = True) -> Path
 
 
 def fetch_weights(arch: str, size: str, dest_dir: Path) -> Path:
-    """Download the released weights as plain public files (no account, token or hub library) into
-    ``dest_dir/<owner>__<model>/``. Installers do this once when they are built and ship the folder."""
+    """Download the released weights as plain public files at a fixed commit (no account, token or hub library),
+    check their SHA-256 and keep them as ``dest_dir/<arch>-<size>-coco.pth``. Installers do this when they are built."""
+    import hashlib
     import urllib.request
-    repo = ARCHS[arch]["sizes"][size]
-    dest = Path(dest_dir) / weights_folder(arch, size)
-    if (dest / "config.json").is_file() and (dest / "model.safetensors").is_file():
+    repo, commit, sha = ARCHS[arch]["sizes"][size]
+    dest = Path(dest_dir) / weights_name(arch, size)
+    if dest.is_file():
         return dest
-    part = dest.with_name(dest.name + ".partial")
-    shutil.rmtree(part, ignore_errors=True)
-    part.mkdir(parents=True)
-    for f in ("config.json", "model.safetensors"):
-        with urllib.request.urlopen(f"https://huggingface.co/{repo}/resolve/main/{f}", timeout=60) as r, \
-                open(part / f, "wb") as out:
-            shutil.copyfileobj(r, out, 1 << 20)
-    json.loads((part / "config.json").read_text(encoding="utf-8"))          # a whole file, not an error page
-    shutil.rmtree(dest, ignore_errors=True)
-    part.rename(dest)
+    Path(dest_dir).mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="lanepulse-fetch-") as t:
+        for f in ("config.json", "model.safetensors"):
+            with urllib.request.urlopen(f"https://huggingface.co/{repo}/resolve/{commit}/{f}", timeout=60) as r, \
+                    open(Path(t) / f, "wb") as out:
+                shutil.copyfileobj(r, out, 1 << 20)
+        h = hashlib.sha256()
+        with open(Path(t) / "model.safetensors", "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        if h.hexdigest() != sha:
+            raise TrainError(f"The downloaded {ARCHS[arch]['title']} {size} weights do not match their published "
+                             "checksum; nothing was kept.")
+        save_start(_model(arch, Path(t), {}), dest)
     return dest
 
 
 def _init_weights(arch: str, init: str, size: str, work: Path, log, download: bool) -> tuple[Path, dict, str, dict]:
-    """(folder to load from, what it was, size, its own classes)."""
+    """(file or folder to load from, what it was, size, its own classes)."""
     if init == "coco":
         p = coco_weights(arch, size, log, download)
-        return p, {"name": ARCHS[arch]["sizes"][size], "version": "coco", "sha256": _sha256(p / "model.safetensors")}, \
-            size, {}
+        return p, {"name": ARCHS[arch]["sizes"][size][0], "version": "coco", "sha256": _sha256(p)}, size, {}
     p = Path(init)
+    if p.suffix == ".pth" and p.is_file():
+        return p, {"file": p.name, "sha256": _sha256(p)}, size, {}
     if p.is_dir() and not (p / "model.json").is_file() and (p / "config.json").is_file():
         return p, {"file": str(p), "sha256": _sha256(p / "model.safetensors")}, size, {}
     pack = _open_pack(p, work)
@@ -219,9 +255,22 @@ def picture(item: dict, augment: bool, rng: random.Random):
 
 # ------------------------------------------------------------------ training
 
-def _model(arch: str, folder: Path, own: dict):
-    from transformers import AutoModelForObjectDetection
-    model = AutoModelForObjectDetection.from_pretrained(str(folder), local_files_only=True)
+def _model(arch: str, src: Path, own: dict):
+    """The model from a weights file (save_start) or a folder (config.json and model.safetensors)."""
+    from transformers import (AutoModelForObjectDetection, DFineConfig, DFineForObjectDetection, RTDetrV2Config,
+                              RTDetrV2ForObjectDetection)
+    src = Path(src)
+    if src.is_file():
+        import torch
+        ck = torch.load(src, map_location="cpu", weights_only=True)
+        if ck.get("arch") != arch:
+            raise TrainError(f"{src.name} holds {ck.get('arch')} weights, not {ARCHS[arch]['title']}.")
+        cfg_cls, model_cls = (DFineConfig, DFineForObjectDetection) if arch == "d-fine" else \
+            (RTDetrV2Config, RTDetrV2ForObjectDetection)
+        model = model_cls(cfg_cls.from_dict(ck["config"]))
+        model.load_state_dict(ck["model"])
+    else:
+        model = AutoModelForObjectDetection.from_pretrained(str(src), local_files_only=True)
     if own:                                         # the names a marked target's class shows under
         model.config.id2label = {**model.config.id2label, **{int(k): v for k, v in own.items()}}
         model.config.label2id = {v: k for k, v in model.config.id2label.items()}
@@ -407,3 +456,34 @@ def write_pack(model, weights: Path, out: Path, arch: str, name: str, version: s
             z.write(f, f"{name}/{version}/{f.name}")
     log(f"Model pack: {pack}")
     return zpath
+
+
+def released_pack(arch: str, size: str, weights: Path, models_dir: Path, source_version: str = "coco") -> Path:
+    """The released model as a pack the app runs (models/<arch>-<size>/coco): for the detector comparison, and as the
+    model a trained one is compared with afterwards. No training weights inside; the training starting point is the
+    shipped <arch>-<size>-coco.pth."""
+    name = f"{arch}-{size}"
+    pack = Path(models_dir) / name / source_version
+    if (pack / "model.json").is_file():
+        return pack
+    tmp = pack.with_name(source_version + ".partial")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    export_onnx(_model(arch, weights, {}), tmp / "model.onnx")
+    a = ARCHS[arch]
+    repo, commit, sha = a["sizes"][size]
+    (tmp / "LICENSE").write_text(f"{a['title']}\n{a['license']}\nhttps://www.apache.org/licenses/LICENSE-2.0\n",
+                                 encoding="utf-8")
+    card = {"name": name, "version": source_version, "task": "vehicle_detection", "sha256": _sha256(tmp / "model.onnx"),
+            "license": f"Apache-2.0 ({a['title']} code and released weights)",
+            "data_note": "Weights trained on COCO 2017. COCO annotations are CC BY 4.0; the underlying Flickr images "
+                         "carry their own terms.",
+            "source": f"https://huggingface.co/{repo} (commit {commit}, model.safetensors SHA-256 {sha}), exported to "
+                      "ONNX by LanePulse",
+            "family": "detr", "architecture": arch, "size": size, "outputs": "boxes_logits", "class_ids": "coco80",
+            "input_size": INPUT, "input": {"colour": "RGB", "mean": [0, 0, 0], "std": [1, 1, 1]},
+            "input_format": f"RGB in 0..1, stretched to {INPUT}x{INPUT}", "weights": "model.onnx",
+            "files": {"LICENSE": _sha256(tmp / "LICENSE")}}
+    (tmp / "model.json").write_text(json.dumps(card, indent=2), encoding="utf-8")
+    tmp.rename(pack)
+    return pack

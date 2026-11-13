@@ -23,6 +23,7 @@ def _probe() -> dict:
         return {"state": "ready", "device_type": dev.type, "device": tr.describe_device(dev),
                 "coco_weights": tr.find_coco_weights() is not None,
                 **_rfdetr(),
+                "detr": _detr(),
                 # suggested rounds: a GPU does 40 in an hour or two; a CPU needs a night for about 20
                 "suggested_epochs": 40 if dev.type in ("cuda", "mps") else 20}
     except Exception as exc:                       # a broken PyTorch must never break the learning page
@@ -39,6 +40,22 @@ def _rfdetr() -> dict:
     except Exception as exc:                       # never break the learning page
         return {"rfdetr": False, "rfdetr_reason": f"RF-DETR does not start here: {type(exc).__name__}: {exc}",
                 "rfdetr_weights": []}
+
+
+def _detr() -> dict:
+    """D-FINE and RT-DETRv2 (detr_train.py): can they be trained here, and from which shipped released sizes?
+    {arch: {"title", "ok", "reason", "sizes" (all), "weights" (shipped here), "default"}}."""
+    try:
+        from . import detr_train as dt
+        ok = dt.available()
+        return {a: {"title": v["title"], "ok": ok["ok"], "reason": ok["reason"], "sizes": list(v["sizes"]),
+                    "default": v["default"],
+                    "weights": [s for s in v["sizes"] if dt.find_coco_weights(a, s) is not None] if ok["ok"] else []}
+                for a, v in dt.ARCHS.items()}
+    except Exception as exc:                       # never break the learning page
+        return {a: {"title": t, "ok": False, "reason": f"{t} does not start here: {type(exc).__name__}: {exc}",
+                    "sizes": [], "default": None, "weights": []}
+                for a, t in (("d-fine", "D-FINE"), ("rt-detr", "RT-DETRv2"))}
 
 
 def _run() -> None:

@@ -420,7 +420,7 @@ class TrainBody(BaseModel):
     datasets: list[DatasetRef] | None = None   # several dataset versions, from this mission or others
     epochs: int = Field(20, ge=1, le=300)
     start_from: str | None = None     # "coco" (the released weights) or "<name>/<version>" of a trained model
-    arch: str = "yolox"               # what to train from the released weights: "yolox" (YOLOX-s) or "rf-detr"
+    arch: str = "yolox"               # what to train from the released weights: yolox, rf-detr, d-fine or rt-detr
     size: str | None = None           # RF-DETR only: nano, small or medium (default small)
 
 
@@ -1737,12 +1737,16 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         if env["state"] != "ready":
             raise ApiError(400, "no_training", env.get("reason") or "Training is not available here.")
         start = body.start_from or "coco"
-        arch = "rf-detr" if body.arch in ("rf-detr", "rfdetr") else "yolox"
-        if body.arch not in ("yolox", "rf-detr", "rfdetr"):
-            raise ApiError(400, "invalid", "The model to train is YOLOX-s (yolox) or RF-DETR (rf-detr).")
-        size = body.size or "small"
+        detr = env.get("detr") or {}
+        arch = "rf-detr" if body.arch in ("rf-detr", "rfdetr") else body.arch
+        if arch not in ("yolox", "rf-detr", *detr):
+            raise ApiError(400, "invalid", "The model to train is YOLOX-s (yolox), RF-DETR (rf-detr), D-FINE (d-fine) or "
+                           "RT-DETRv2 (rt-detr).")
+        size = body.size or ((detr[arch]["default"] if arch in detr else None) or "small")
         if arch == "rf-detr" and not env.get("rfdetr"):
             raise ApiError(400, "no_training", env.get("rfdetr_reason") or "RF-DETR cannot be trained here.")
+        if arch in detr and not detr[arch]["ok"]:
+            raise ApiError(400, "no_training", detr[arch]["reason"] or f"{detr[arch]['title']} cannot be trained here.")
         if start == "coco":
             if arch == "yolox" and not env.get("coco_weights"):
                 raise ApiError(400, "no_weights", "The YOLOX-s starting weights are not installed here. Install the current "
@@ -1750,6 +1754,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             if arch == "rf-detr" and size not in (env.get("rfdetr_weights") or []):
                 raise ApiError(400, "no_weights", f"The RF-DETR {size} starting weights are not installed here. Install the "
                                "current LanePulse version, or start from an RF-DETR model trained earlier.")
+            if arch in detr and size not in detr[arch]["weights"]:
+                raise ApiError(400, "no_weights", f"The {detr[arch]['title']} {size} starting weights are not installed "
+                               f"here. Install the current LanePulse version, or start from a {detr[arch]['title']} "
+                               "model trained earlier.")
             init = "coco"
         else:
             name, _, version = start.partition("/")
@@ -1761,10 +1769,14 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                 raise ApiError(400, "model", f"{name} {pack.version} cannot be trained further (no PyTorch weights). "
                                "Start from the released weights instead.")
             init = str(pack.path)
-            arch = "rf-detr" if is_rfdetr(pack.card) else "yolox"   # training continues the model's own kind
+            # training continues the model's own kind
+            arch = "rf-detr" if is_rfdetr(pack.card) else (pack.card.get("architecture")
+                                                           if pack.card.get("architecture") in detr else "yolox")
             size = pack.card.get("size") or size
             if arch == "rf-detr" and not env.get("rfdetr"):
                 raise ApiError(400, "no_training", env.get("rfdetr_reason") or "RF-DETR cannot be trained here.")
+            if arch in detr and not detr[arch]["ok"]:
+                raise ApiError(400, "no_training", detr[arch]["reason"] or f"{detr[arch]['title']} cannot be trained here.")
         other = jobs.training_busy()
         if other:
             raise ApiError(409, "training_busy", "A model is already training on this computer"
@@ -1774,10 +1786,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             work.mkdir(parents=True, exist_ok=True)
         except OSError:
             work = None
-        if arch == "rf-detr" and start == "coco":
-            # The released RF-DETR of that size, when installed, is what the new model is compared with afterwards.
+        if arch != "yolox" and start == "coco":
+            # The released model of that kind and size, when installed, is what the new model is compared with afterwards.
             try:
-                rel = models.find(f"rf-detr-{size}")
+                rel = models.find(f"{arch}-{size}")
                 start = f"{rel.name}/{rel.version}"
             except models.ModelPackError:
                 pass

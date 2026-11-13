@@ -62,7 +62,7 @@ Fine-tuning used the mission's own reviewed images, exported from LanePulse.
 
 
 # Which module trains each kind of model; every one has the same train(dataset, out, ...) and returns a pack .zip.
-TRAINERS = {"yolox": ".train", "rf-detr": ".rfdetr_train"}
+TRAINERS = {"yolox": ".train", "rf-detr": ".rfdetr_train", "d-fine": ".detr_train", "rt-detr": ".detr_train"}
 
 
 class TrainError(RuntimeError):
@@ -547,8 +547,10 @@ def main(argv=None) -> int:
     r.add_argument("--dataset", required=True, help="folder exported from the learning page")
     r.add_argument("--out", required=True, help="where to write the model pack and its .zip")
     r.add_argument("--arch", default="yolox", choices=sorted(TRAINERS),
-                   help="yolox (YOLOX-s, default) or rf-detr (RF-DETR, see rfdetr_train.py)")
-    r.add_argument("--size", default="small", choices=["nano", "small", "medium"], help="RF-DETR only: model size")
+                   help="yolox (YOLOX-s, default), rf-detr (RF-DETR, rfdetr_train.py), d-fine or rt-detr (D-FINE or "
+                        "RT-DETRv2, detr_train.py)")
+    r.add_argument("--size", help="model size: RF-DETR nano, small (default), medium; D-FINE nano, small (default), "
+                                  "medium, large, xlarge; RT-DETRv2 r18 (default), r34, r50, r101")
     r.add_argument("--init", default="coco", help="coco (released weights), a .pth file, or an earlier trained pack")
     r.add_argument("--epochs", type=int, default=40)
     r.add_argument("--batch", type=int, help="images per step (default 16 on NVIDIA, 8 otherwise)")
@@ -566,7 +568,8 @@ def main(argv=None) -> int:
             mod = importlib.import_module(TRAINERS[args.arch], __package__)
             mod.train(Path(args.dataset), Path(args.out), init=args.init, epochs=args.epochs, batch=args.batch,
                       lr=args.lr, device=args.device, workers=args.workers, name=args.name,
-                      version=args.version, seed=args.seed, size=args.size)
+                      version=args.version, seed=args.seed, arch=args.arch,
+                      **({"size": args.size} if args.size else {}))
         elif args.cmd == "run":
             train(Path(args.dataset), Path(args.out), init=args.init, epochs=args.epochs, batch=args.batch, lr=args.lr,
                   device=args.device, workers=args.workers, name=args.name or "yolox-s-tuned", version=args.version,

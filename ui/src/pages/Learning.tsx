@@ -354,6 +354,8 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
             <select value={startFrom} onChange={(ev) => setStart(ev.target.value)}>
               {t.coco_weights && <option value="coco">the original detector (YOLOX-s)</option>}
               {t.rfdetr && (t.rfdetr_weights ?? []).map((sz: string) => <option key={sz} value={`rf-detr:${sz}`}>the released RF-DETR {sz} (more accurate, slower to train)</option>)}
+              {Object.entries(t.detr ?? {}).filter(([, d]: [string, any]) => d.ok).flatMap(([a, d]: [string, any]) => (d.weights ?? []).map((sz: string) =>
+                <option key={`${a}:${sz}`} value={`${a}:${sz}`}>the released {d.title} {sz} (transformer, slower to train)</option>))}
               {trainable.map((md: any) => <option key={`${md.name}/${md.version}`} value={`${md.name}/${md.version}`}>{md.saved_as ? `${md.saved_as} (${md.name} ${md.version})` : `${md.name} ${md.version}`}{md.trained_on ? `, trained on “${md.trained_on}”` : ""}{`${md.name}/${md.version}` === prodKey ? " (in use)" : ""}</option>)}
             </select>
           </label>
@@ -362,8 +364,8 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
               options={[...new Set([...EPOCHS, t.suggested_epochs ?? 20])].sort((a, b) => a - b).map((n): [number, string] => [n, n === (t.suggested_epochs ?? 20) ? `${n} (suggested)` : String(n)])} />
           </label>
           <button className="primary" disabled={ds.length === 0 || !startFrom || !!t.busy_mission} onClick={() => act(
-            () => post(`/missions/${missionId}/learning/train`, startFrom.startsWith("rf-detr:")
-              ? { datasets: ds, epochs: ep, start_from: "coco", arch: "rf-detr", size: startFrom.slice(8) }
+            () => post(`/missions/${missionId}/learning/train`, /^(rf-detr|d-fine|rt-detr):/.test(startFrom)
+              ? { datasets: ds, epochs: ep, start_from: "coco", arch: startFrom.split(":")[0], size: startFrom.split(":")[1] }
               : { datasets: ds, epochs: ep, start_from: startFrom }),
             () => "Training started. You can close the browser; it continues on this computer.")}>Train</button>
         </div>}

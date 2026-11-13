@@ -210,3 +210,90 @@ def test_rfdetr_together_with_sam(tmp_path, monkeypatch):
     det, card = jobs.detector_for(m)
     assert isinstance(det, CombinedDetector) and isinstance(det.standard, DetrDetector)
     assert "sam" in card["license"].lower()
+
+
+def test_train_dfine_and_rtdetr_on_the_learning_page(tmp_path, monkeypatch):
+    """Train with arch d-fine (or rt-detr): detr_train runs (stand-in here) with that arch and size, and a trained one
+    continues as its own kind."""
+    pytest.importorskip("torch")
+    import os
+    from datetime import datetime, timedelta, timezone
+
+    from fastapi.testclient import TestClient
+
+    from test_web_api import H1, Fake, direct_access, mission, scene, wait_job
+    from trafficwb import detr_train, training_env
+    from trafficwb.web.app import create_app
+
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    old = datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp()
+    for k in range(6):
+        t = (datetime(2026, 10, 10, 9, tzinfo=timezone.utc) + timedelta(days=k)).strftime("%Y%m%dT%H%M%SZ")
+        p = src / f"CAM7_{t}.jpg"
+        cv2.imwrite(str(p), scene(k), [cv2.IMWRITE_JPEG_QUALITY, 97])
+        os.utime(p, (old, old))
+    root = tmp_path / "models"
+    root.mkdir()
+    monkeypatch.setenv("TWB_MODELS", str(root))
+    detr = {a: {"title": t, "ok": True, "reason": None, "sizes": s, "default": s[0], "weights": [s[0]]}
+            for a, t, s in (("d-fine", "D-FINE", ["small", "medium"]), ("rt-detr", "RT-DETRv2", ["r18", "r50"]))}
+    monkeypatch.setattr(training_env, "_state", {"state": "ready", "device_type": "cpu", "device": "CPU",
+                                                 "coco_weights": False, "rfdetr": False, "rfdetr_weights": [],
+                                                 "detr": detr, "suggested_epochs": 20})
+    seen = []
+
+    def fake_train(dataset, out_dir, *, init, epochs, arch, size=None, on_epoch=None, **kw):
+        seen.append({"init": init, "arch": arch, "size": size})
+        on_epoch(1, epochs, {"epoch": 1, "train_loss": 1.0, "val_loss": 0.5})
+        name = f"{arch}-tuned"
+        pack = _pack(tmp_path / f"built{len(seen)}", name,
+                     {"family": "detr", "outputs": "boxes_logits", "class_ids": "coco80", "architecture": arch,
+                      "size": size, "torch_weights": "model.safetensors"},
+                     [("input", TensorProto.FLOAT, [1, 3, S, S])],
+                     {"dets": np.array([[[0.5, 0.5, 0.2, 0.2]]], np.float32),
+                      "labels": np.full((1, 1, 80), -9.0, np.float32)})
+        (pack.path / "model.safetensors").write_bytes(b"weights")
+        z = out_dir / "p.zip"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(z, "w") as zf:
+            for f in pack.path.iterdir():
+                zf.write(f, f"{name}/{len(seen)}/{f.name}")
+        return z
+
+    monkeypatch.setattr(detr_train, "train", fake_train)
+    app = create_app(tmp_path / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
+                     start_monitoring=False, stability_seconds=0)
+    c = direct_access(TestClient(app))
+    mid = mission(c, src, out)
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    wait_job(c, mid)
+    for r in c.post(f"/api/missions/{mid}/results", json={}, headers=H1).json()["rows"]:
+        c.post(f"/api/missions/{mid}/items/{r['source_version_id']}/decision/approve", headers=H1)
+    ds = c.post(f"/api/missions/{mid}/learning/datasets", json={"name": "v1", "ratios": [0.5, 0.17, 0.33]},
+                headers=H1).json()
+
+    def run(body):
+        j = c.post(f"/api/missions/{mid}/learning/train", json={"dataset_id": ds["id"], "epochs": 2} | body,
+                   headers=H1)
+        assert j.status_code == 200, j.text
+        t0 = time.time()
+        while time.time() - t0 < 60:
+            job = c.get(f"/api/missions/{mid}/learning").json()["training"]["job"]
+            if job["state"] not in ("running", "paused"):
+                return job
+            time.sleep(0.2)
+
+    no = c.post(f"/api/missions/{mid}/learning/train", json={"dataset_id": ds["id"], "start_from": "coco",
+                                                               "arch": "rt-detr", "size": "r50"}, headers=H1)
+    assert no.status_code == 400 and no.json()["error"] == "no_weights"          # only r18 is shipped here
+    bad = c.post(f"/api/missions/{mid}/learning/train", json={"dataset_id": ds["id"], "arch": "yolo-x9"}, headers=H1)
+    assert bad.status_code == 400
+    job = run({"start_from": "coco", "arch": "d-fine"})
+    assert job["state"] == "finished", job
+    assert seen[-1] == {"init": "coco", "arch": "d-fine", "size": "small"}
+    m = job["result"]["model"]
+    job = run({"start_from": f"{m['name']}/{m['version']}"})                    # continues as D-FINE, same size
+    assert job["state"] == "finished", job
+    assert seen[-1]["arch"] == "d-fine" and seen[-1]["size"] == "small" and seen[-1]["init"].endswith(m["version"])

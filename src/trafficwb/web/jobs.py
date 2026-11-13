@@ -654,7 +654,7 @@ class JobManager:
             workers = min(4, os.cpu_count() or 1) if sys.platform.startswith("linux") and p.get("device") != "cpu" else 0
             z = tr.train(ds_dir, work / "out", init=p.get("init") or "coco", epochs=int(p["epochs"]), device=p.get("device") or "auto",
                          workers=workers, log=log, progress=progress, control=job.control, on_epoch=on_epoch, download=False,
-                         mp_context="spawn", **({"size": p["size"]} if arch != "yolox" and p.get("size") else {}))
+                         mp_context="spawn", **({"arch": arch} if arch != "yolox" else {}), **({"size": p["size"]} if arch != "yolox" and p.get("size") else {}))
             job.control.stage = "adding the new model"
             r = import_pack(z, p.get("models_root") or models.models_root())
             job.result["model"] = {"name": r["name"], "version": r["version"]}

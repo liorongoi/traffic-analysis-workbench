@@ -130,7 +130,17 @@ def test_sizes_and_offline_weights(tmp_path, monkeypatch):
     assert dt.find_coco_weights("rt-detr", "r18") is None
     with pytest.raises(TrainError, match="not installed here"):
         dt.coco_weights("rt-detr", "r18", download=False)
-    tiny_weights("rt-detr", tmp_path / dt.weights_folder("rt-detr", "r18"))
-    assert dt.find_coco_weights("rt-detr", "r18") == tmp_path / "PekingU__rtdetr_v2_r18vd"
+    from transformers import AutoModelForObjectDetection
+    folder = tiny_weights("rt-detr", tmp_path / "tiny")
+    dt.save_start(AutoModelForObjectDetection.from_pretrained(str(folder)), tmp_path / "rt-detr-r18-coco.pth")
+    assert dt.find_coco_weights("rt-detr", "r18") == tmp_path / "rt-detr-r18-coco.pth"
+    assert dt._model("rt-detr", tmp_path / "rt-detr-r18-coco.pth", {}).config.num_queries == 20
+    with pytest.raises(TrainError, match="not D-FINE"):
+        dt._model("d-fine", tmp_path / "rt-detr-r18-coco.pth", {})
+    # Released weights shipped as one file start a training run with init "coco".
+    z = dt.train(dataset(tmp_path / "ds"), tmp_path / "out", arch="rt-detr", size="r18", epochs=1, batch=2,
+                 device="cpu", download=False, log=lambda *a: None)
+    assert json.loads(zipfile.ZipFile(z).read(next(n for n in zipfile.ZipFile(z).namelist()
+                                                   if n.endswith("model.json"))))["training"]["init"]["version"] == "coco"
     import os
     assert os.environ["HF_HUB_OFFLINE"] == "1"                          # never contacts a model hub when training
