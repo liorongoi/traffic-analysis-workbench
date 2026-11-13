@@ -199,12 +199,12 @@ class JobManager:
             card = getattr(getattr(det, "pack", None), "card", None) or {
                 "name": d["model_name"], "version": d["model_version"], "task": d["task"]}
         else:
-            from ..detect import YoloxDetector
+            from ..detect import make_detector
             try:
                 pack = lib.pack(name)
             except LearningError as exc:
                 raise RuntimeError(str(exc)) from None
-            det, card = YoloxDetector(pack), pack.card
+            det, card = make_detector(pack), pack.card
         with self._lock:
             self._saved[key] = (det, card)
         return det, card
@@ -288,8 +288,8 @@ class JobManager:
         if self.model_loader:
             return self.model_loader(name, version)
         from .. import models
-        from ..detect import YoloxDetector
-        return YoloxDetector(models.find(name, version))
+        from ..detect import make_detector
+        return make_detector(models.find(name, version))
 
     def plate_models(self):
         with self._lock:
@@ -326,6 +326,9 @@ class JobManager:
                 return
             if job.kind == "evaluate":
                 self._evaluate(job, m)
+                return
+            if job.kind == "benchmark":
+                self._benchmark(job, m)
                 return
             if job.kind == "train":
                 self._train(job, m)
@@ -451,6 +454,50 @@ class JobManager:
             if not isinstance(exc, RunCancelled):
                 raise
             job.state = "cancelled"
+
+    def _benchmark(self, job: Job, m) -> None:
+        """Every candidate detector on the same images, one after another (phase 1c). A model already evaluated on
+        exactly these images (with its speed) is not run again. One that cannot be loaded is skipped and named."""
+        from ..learning import LearningService
+        from ..process import RunCancelled
+        p = job.params
+        ls = LearningService(m)
+        sources = [{"mission_id": r["mission_id"], "dataset_id": r["dataset_id"]} for r in p["datasets"]]
+        job.result = {"benchmark": [], "skipped": {}}
+        cands = p["candidates"]
+        for k, (name, version) in enumerate(cands, 1):
+            job.control.checkpoint()
+            label = f"{name} {version}"
+            old = ls.find_evaluation(name, version, sources, p.get("split", "test"), p.get("iou", 0.5))
+            if old and (old["report"] or {}).get("ms_per_image") is not None:
+                job.result["benchmark"].append(old["id"])
+                continue
+            job.control.stage = f"loading {label} ({k} of {len(cands)})"
+            try:
+                det = self.load_model(name, version)
+            except Exception as exc:  # noqa: BLE001 - one model that cannot load does not stop the others
+                job.result["skipped"][label] = f"{type(exc).__name__}: {exc}"[:300]
+                continue
+            job.control.stage = f"evaluating {label} ({k} of {len(cands)})"
+            job.done, job.rate_start, job.rate_done = 0, None, 0
+
+            def progress(n, total):
+                job.total = total
+                job.done = n
+                job.rate_done += 1
+                if job.rate_start is None:
+                    job.rate_start = time.time()
+                    job.rate_done = 0
+            try:
+                ev = ls.evaluate(None, det, p["author"], split=p.get("split", "test"), iou=p.get("iou", 0.5),
+                                 control=job.control, progress=progress, datasets=p["datasets"])
+                job.result["benchmark"].append(ev["id"])
+            except RunCancelled:
+                job.state = "cancelled"
+                return
+            except Exception as exc:  # noqa: BLE001
+                job.result["skipped"][label] = f"{type(exc).__name__}: {exc}"[:300]
+        job.state = "finished"
 
     def training_job(self, mission_id: str) -> Job | None:
         return self.training.get(mission_id)

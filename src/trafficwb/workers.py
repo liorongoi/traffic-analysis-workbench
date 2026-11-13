@@ -238,7 +238,7 @@ class Worker:
         return pack
 
     def _build(self, spec: dict):
-        from .detect import YoloxDetector
+        from .detect import make_detector
         from .video_process import _low_threshold
         from .web.jobs import JobManager
         std = None
@@ -246,7 +246,7 @@ class Worker:
             if not spec.get("standard"):
                 raise RuntimeError("The server did not say which model to use.")
             pack = self._pack(spec["standard"])
-            std = JobManager._with_classes((YoloxDetector(pack), pack.card), spec.get("words"))
+            std = JobManager._with_classes((make_detector(pack), pack.card), spec.get("words"))
         det = std[0] if std else None
         if spec["detector"] in ("sam3", "both"):
             from .sam3 import Sam3Detector, engine, vehicle_prompts

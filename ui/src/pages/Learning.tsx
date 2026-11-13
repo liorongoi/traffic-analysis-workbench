@@ -256,6 +256,8 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
           <EvalCompare evals={s.evaluations} cmp={cmp} setCmp={setCmp} modelLabel={modelLabel} dataLabel={dataLabel} />}
       </div>
 
+      <BenchmarkCard s={s} missionId={missionId} act={act} job={job} load={load} modelLabel={modelLabel} />
+
       <RoundsCard s={s} missionId={missionId} act={act} modelLabel={modelLabel} dataLabel={(r: Ref[]) => r.map((x) => dsLabel(s, missionId, x)).join(" + ")} />
 
       <SavedModelsCard s={s} missionId={missionId} act={act} />
@@ -382,6 +384,80 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
 }
 
 /** One evaluation beside another, as bars: overall measures, and F1 by light condition. */
+/** Phase 1c: every installed vehicle detector on the same images, side by side, so the standard one can be picked
+ * from the numbers. */
+function BenchmarkCard({ s, missionId, act, job, load, modelLabel }: {
+  s: any; missionId: string; act: (fn: () => Promise<any>, ok?: (r: any) => string) => void; job: any; load: () => Promise<void>;
+  modelLabel: (md: any) => string;
+}) {
+  const [refs, setRefs] = useState<Ref[] | null>(null);
+  const [split, setSplit] = useState("test");
+  const value = refs ?? defaultRefs(s, missionId);
+  const running = job?.kind === "benchmark" && ["running", "paused"].includes(job.state);
+  useEffect(() => { if (job?.kind === "benchmark" && !running) load().catch(() => undefined); }, [job?.state, job?.kind, running, load]);
+  const same = (ev: any) => ev.state === "completed" && ev.split === split && (ev.report?.iou ?? 0.5) === 0.5
+    && ev.sources.length === value.length
+    && value.every((r) => ev.sources.some((x: Ref) => x.mission_id === r.mission_id && x.dataset_id === r.dataset_id));
+  const byModel = new Map<string, any>();
+  for (const ev of s.evaluations as any[]) {                     // newest first: keep each model's newest result
+    const md = ev.model?.model ?? {};
+    const k = `${md.name}/${md.version}`;
+    if (same(ev) && !byModel.has(k)) byModel.set(k, ev);
+  }
+  const rows = [...byModel.values()].sort((a, b) => (b.report.overall?.f1 ?? -1) - (a.report.overall?.f1 ?? -1));
+  const card = (md: any) => (s.models as any[]).find((x) => x.name === md.name && x.version === md.version);
+  const best = (f: (o: any) => number | null | undefined, low = false) => {
+    const v = rows.map((r) => f(r.report.overall ?? {})).filter((x): x is number => x != null);
+    return v.length ? (low ? Math.min(...v) : Math.max(...v)) : null;
+  };
+  const top = { f1: best((o) => o.f1), recall: best((o) => o.recall), precision: best((o) => o.precision), ap50: best((o) => o.ap50),
+    count: best((o) => (o.count_mae == null ? null : Math.abs(o.count_mae)), true), ms: (() => { const v = rows.map((r) => r.report.ms_per_image).filter((x) => x != null); return v.length ? Math.min(...v) : null; })() };
+  const mark = (v: number | null | undefined, b: number | null) => (v != null && b != null && v === b ? { fontWeight: 600 } : undefined);
+  const skipped = job?.kind === "benchmark" ? Object.entries(job.result?.skipped ?? {}) : [];
+  return (
+    <div className="card">
+      <h2 style={{ marginTop: 0 }}>Compare detectors</h2>
+      <p className="muted" style={{ marginTop: 0 }}>Every vehicle detector installed here ({s.models.length}) on the same reviewed images: how many
+        vehicles each finds and misses, and how long it takes per image on this computer. The best of each column is in bold.</p>
+      <div className="row">
+        <DatasetPicker s={s} missionId={missionId} value={value} onChange={setRefs} split={split} />
+        <select value={split} onChange={(ev) => setSplit(ev.target.value)} aria-label="Benchmark split">
+          <option value="test">test</option><option value="val">validation</option>
+        </select>
+        <button className="primary" disabled={value.length === 0 || running || s.models.length === 0}
+          onClick={() => act(() => post(`/missions/${missionId}/learning/benchmark`, { datasets: value, split }), () => "Comparing the detectors…")}>
+          Compare every detector</button>
+        {running && <span className="muted">{job.stage}: {job.done} of {job.total || "?"} images…</span>}
+      </div>
+      {skipped.length > 0 && <div className="msg err" style={{ marginTop: 8 }}>Left out: {skipped.map(([k, v]) => `${k} (${v})`).join("; ")}</div>}
+      {rows.length > 0 ? (
+        <table className="t" style={{ marginTop: 8 }}>
+          <thead><tr><th>Detector</th><th>Family</th><th>Licence</th><th>Precision</th><th>Recall</th><th>F1</th><th>AP50</th><th>Count error</th><th>Time per image</th><th></th></tr></thead>
+          <tbody>{rows.map((ev) => {
+            const md = ev.model.model; const o = ev.report.overall ?? {}; const c = card(md);
+            const inUse = s.in_use?.name === md.name && s.in_use?.version === md.version;
+            return (<tr key={ev.id}>
+              <td className="bidi">{modelLabel(md)}</td>
+              <td>{(c?.family ?? md.family ?? "yolox").toUpperCase()}</td><td>{c?.license ?? "–"}</td>
+              <td style={mark(o.precision, top.precision)}>{pct(o.precision)}</td>
+              <td style={mark(o.recall, top.recall)}>{pct(o.recall)}</td>
+              <td style={mark(o.f1, top.f1)}>{pct(o.f1)}</td>
+              <td style={mark(o.ap50, top.ap50)}>{pct(o.ap50)}</td>
+              <td style={mark(o.count_mae == null ? null : Math.abs(o.count_mae), top.count)}>{num(o.count_mae)}</td>
+              <td style={mark(ev.report.ms_per_image, top.ms)}>{ev.report.ms_per_image == null ? "–" : `${Math.round(ev.report.ms_per_image)} ms`}</td>
+              <td>{inUse ? <span className="badge">Standard now</span> :
+                <button onClick={() => {
+                  if (!window.confirm(`Make ${md.name} ${md.version} the standard vehicle detector? It will process every new image and video.`)) return;
+                  act(() => post("/models/promote", { name: md.name, version: md.version, mission_id: missionId, evaluation_id: ev.id, note: `Chosen from the detector comparison (evaluation #${ev.id})` }),
+                    () => `${md.name} ${md.version} is now the standard vehicle detector.`);
+                }}>Make standard…</button>}</td>
+            </tr>);
+          })}</tbody>
+        </table>) : <p className="muted">No detector has been compared on these images yet.</p>}
+    </div>
+  );
+}
+
 function EvalCompare({ evals, cmp, setCmp, modelLabel, dataLabel }: {
   evals: any[]; cmp: { cur: number | null; prev: number | null }; setCmp: (c: { cur: number | null; prev: number | null }) => void;
   modelLabel: (md: any) => string; dataLabel: (ev: any) => string;

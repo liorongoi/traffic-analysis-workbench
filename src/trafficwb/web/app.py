@@ -384,6 +384,14 @@ class EvaluateBody(BaseModel):
     iou: float = Field(0.5, ge=0.1, le=0.95)
 
 
+class BenchmarkBody(BaseModel):
+    dataset_id: int | None = None
+    datasets: list[DatasetRef] | None = None
+    split: str = "test"
+    iou: float = Field(0.5, ge=0.1, le=0.95)
+    models: list[str] | None = None   # "<name>/<version>"; empty means every installed vehicle detector
+
+
 class TrainBody(BaseModel):
     dataset_id: int | None = None
     datasets: list[DatasetRef] | None = None   # several dataset versions, from this mission or others
@@ -528,7 +536,7 @@ def list_folders(path: str | None, limit: int = 500) -> dict:
 def default_detector_factory(data_root: Path | str | None = None):
     """The vehicle detector in production use: the last promoted pack, else the built-in default."""
     from .. import models
-    from ..detect import YoloxDetector
+    from ..detect import make_detector
     pack = None
     if data_root is not None:
         from ..learning import ModelRegistry
@@ -536,7 +544,7 @@ def default_detector_factory(data_root: Path | str | None = None):
         if prod:
             pack = models.find(prod["name"], prod["version"])
     pack = pack or models.find("yolox-s")
-    return YoloxDetector(pack), pack.card
+    return make_detector(pack), pack.card
 
 
 def create_app(data_root: Path | str, detector_factory: Callable | None = None,
@@ -1634,6 +1642,31 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "model", "Give both the model name and version, or neither for the model in use.")
         return jobs.start(m.id, kind="evaluate", dataset_id=body.dataset_id, datasets=refs, split=body.split,
                           name=body.name, version=body.version, iou=body.iou, author=u.username).snapshot()
+
+    @app.post("/api/missions/{mission_id}/learning/benchmark")
+    def benchmark_start(body: BenchmarkBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Compare detectors (phase 1c): every installed vehicle detector, or the chosen ones, on the same images."""
+        from .. import models
+        ls = _learn(m)
+        refs = _refs_of(m, body.dataset_id, body.datasets)
+        if not refs:
+            raise ApiError(400, "learning", "Choose the dataset version to compare the detectors on.")
+        if not _learn_call(lambda: ls.combine(refs, body.split)[0]):
+            raise ApiError(400, "learning", f"The {body.split} split of the chosen dataset versions is empty.")
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "Another job is running for this mission. Wait for it or cancel it first.")
+        have = [(x["name"], x["version"]) for x in models.installed("vehicle_detection")]
+        if body.models:
+            want = [tuple(x.split("/", 1)) for x in body.models if "/" in x]
+            missing = [f"{a} {b}" for a, b in want if (a, b) not in have]
+            if missing:
+                raise ApiError(400, "model", "Not installed here: " + ", ".join(missing) + ".")
+        else:
+            want = have
+        if len(want) < 1:
+            raise ApiError(400, "model", "No vehicle detector is installed here.")
+        return jobs.start(m.id, kind="benchmark", datasets=refs, split=body.split, iou=body.iou,
+                          candidates=[list(x) for x in want], author=u.username).snapshot()
 
     @app.post("/api/missions/{mission_id}/learning/train")
     def train_start(body: TrainBody, m: Mission = Depends(mission), u: User = Depends(user)):

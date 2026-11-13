@@ -52,6 +52,17 @@ Unresolved night candidates in a fully reviewed image become "ignore" areas: a d
 - Precision, AP and count error use fully reviewed images only. Partial reviews add recall for their corrected objects.
 - AP cannot see boxes below the detector's own score threshold.
 - A failed or cancelled evaluation keeps its error.
+- Each evaluation also records the detector's mean time per image on this computer (the first image, which loads the model, is left out).
+
+## Comparing detectors
+
+- "Compare detectors" on the learning page runs every installed vehicle detector, one after another, on the same images (a dataset version's test or validation split) as one background job. A detector already evaluated on exactly those images, with its time, is not run again; one that cannot be loaded is left out and named.
+- The table shows, per detector: its family and licence, precision, recall, F1, AP at IoU 0.5, count error and time per image, best first by F1, with the best of each column in bold. "Make standard…" promotes it (an administrator only, as below).
+- Detector families (`detect.make_detector`, by the model card's `family`):
+  - `yolox` (the default): YOLOX exports, letterboxed, BGR.
+  - `detr`: transformer detectors exported to ONNX (D-FINE, RT-DETR, RT-DETRv2, RF-DETR). The card says the output layout (`outputs`: `labels_boxes_scores`, as D-FINE and RT-DETR export with `orig_target_sizes`, or `boxes_logits`, as RF-DETR exports), how classes are numbered (`class_ids`: `coco80` or `coco91`) and the input normalisation (`input`: colour, mean, std). The picture is stretched to the input size.
+- Every family runs through the same tiling, class choice, score threshold and merging, so the results are comparable and any of them can be the standard detector of images and video.
+- A pack is installed as any model pack (`trafficwb-models import`; `trafficwb-models wrap` makes a pack from an ONNX file exported by the model's own export script). Training (learning rounds) stays YOLOX-only: a DETR-family standard detector is used and compared, not fine-tuned here.
 
 ## Several dataset versions together
 

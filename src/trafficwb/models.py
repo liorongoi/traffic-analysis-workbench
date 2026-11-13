@@ -118,7 +118,7 @@ def installed(task: str | None = None, root: Path | None = None) -> list[dict]:
         if task and card.get("task") != task:
             continue
         out.append({"name": card.get("name"), "version": card.get("version"), "task": card.get("task"),
-                    "license": card.get("license"), "evaluation_only": bool(card.get("evaluation_only")),
+                    "license": card.get("license"), "family": card.get("family", "yolox"), "evaluation_only": bool(card.get("evaluation_only")),
                     "sha256": card.get("sha256"),
                     # packs written by trafficwb-train carry their PyTorch weights, so training can continue from them
                     "trainable": bool(card.get("torch_weights")) and (card_path.parent / card["torch_weights"]).is_file(),
