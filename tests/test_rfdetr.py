@@ -51,6 +51,7 @@ def test_grades_cover_every_choice():
 
 
 def test_prepare_greys_unreviewed_areas_and_keeps_coco_ids(tmp_path):
+    pytest.importorskip("torch")                                # training needs PyTorch (the "training" CI job)
     from trafficwb import rfdetr_train as rt
     ds = tmp_path / "ds"
     (ds / "images").mkdir(parents=True)
@@ -108,6 +109,7 @@ def test_mission_chooses_rfdetr(tmp_path, monkeypatch):
 
 def test_train_rfdetr_on_the_learning_page(tmp_path, monkeypatch):
     """Train with arch rf-detr: RF-DETR's training runs (stand-in here), the pack is added and evaluated."""
+    pytest.importorskip("torch")
     import os
     from datetime import datetime, timedelta, timezone
 
