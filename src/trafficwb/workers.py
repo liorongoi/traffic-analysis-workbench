@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import secrets
 import socket
 import tarfile
@@ -221,6 +222,9 @@ class Worker:
         for card in models.installed("vehicle_detection"):
             if card.get("sha256") == want["sha256"]:
                 return models.find(card["name"], card["version"])
+        if not re.fullmatch(r"[0-9a-f]{64}", str(want.get("sha256", ""))):
+            # The checksum names a folder here: anything else could point outside the cache.
+            raise RuntimeError("The server sent a model checksum that is not a SHA-256.")
         local = self.cache / "models" / want["sha256"]
         if not (local / "model.json").is_file():
             self.log(f"fetching model {want['name']} {want['version']} from the server (once)")

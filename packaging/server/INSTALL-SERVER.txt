@@ -20,8 +20,10 @@ Install or update
   the port in firewalld (ufw on Ubuntu). The NVIDIA driver steps for Red Hat are in the PDF guide, section 18.
 
 Open it from other computers:  http://<server address>:8765
-  There is no password. Anyone who can reach the port can see and change every mission, so keep the server on a
-  trusted network and turn the firewall on: sudo lanepulse firewall
+  The browser asks once for the access key, which the installer prints at the end. Show it again with
+  sudo lanepulse key; make a new one (every browser must enter it again) with sudo lanepulse key --new.
+  Open it by the server's IP address, or by its own name; to use another DNS name, add it to
+  TWB_ALLOWED_HOSTS="name1,name2" in /etc/lanepulse/lanepulse.conf. Keep the firewall on: sudo lanepulse firewall
 
 Training:   on a mission's Learning tab, "Train a new vehicle detector here". It runs on the GPU; PyTorch is
             included, so nothing needs setting up or downloading.
