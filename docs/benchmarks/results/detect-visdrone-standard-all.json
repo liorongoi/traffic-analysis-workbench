@@ -1,0 +1,119 @@
+{
+ "kind": "detect",
+ "suite": "visdrone",
+ "detector": "standard",
+ "images": 548,
+ "image_ids": "all",
+ "seed": 0,
+ "model": {
+  "name": "yolox-s",
+  "version": "0.1.1rc0",
+  "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063"
+ },
+ "preprocessing": {
+  "letterbox": 640,
+  "pad": 114,
+  "colour": "BGR",
+  "tiles": {
+   "score_threshold": 0.3,
+   "nms_iou": 0.45,
+   "cross_class_iou": 0.5,
+   "tiles": [
+    3,
+    2
+   ],
+   "tile_overlap": 0.2,
+   "min_tile_side": 360
+  },
+  "classes": {
+   "0": "person",
+   "1": "bicycle",
+   "2": "car",
+   "3": "motorcycle",
+   "5": "bus",
+   "7": "truck"
+  }
+ },
+ "seconds_per_image": 0.395,
+ "wall_s": 219.1,
+ "machine": {
+  "os": "Linux-6.18.44-fc-v445-x86_64-with-glibc2.39",
+  "python": "3.13.18",
+  "cpus": 4
+ },
+ "classes": {
+  "AP": 0.1487,
+  "AP50": 0.2391,
+  "AP75": 0.1541,
+  "AP_small": 0.0784,
+  "AP_medium": 0.2275,
+  "AP_large": 0.5245,
+  "AR": 0.1985,
+  "max_dets": 500,
+  "per_class": {
+   "person": {
+    "AP": 0.15987301170254672,
+    "AP50": 0.32951026908712655,
+    "gt": 13969
+   },
+   "bicycle": {
+    "AP": 0.02726129076682019,
+    "AP50": 0.053067486903622126,
+    "gt": 1287
+   },
+   "car": {
+    "AP": 0.38916994948998535,
+    "AP50": 0.578909501575957,
+    "gt": 16039
+   },
+   "motorcycle": {
+    "AP": 0.04771699355006684,
+    "AP50": 0.1129025946422141,
+    "gt": 4886
+   },
+   "bus": {
+    "AP": 0.18508050960585193,
+    "AP50": 0.23936140768333536,
+    "gt": 251
+   },
+   "truck": {
+    "AP": 0.08333915439767432,
+    "AP50": 0.12106617862982717,
+    "gt": 750
+   }
+  }
+ },
+ "vehicle_any": {
+  "AP": 0.3071,
+  "AP50": 0.4718,
+  "AP75": 0.3334,
+  "AP_small": 0.1552,
+  "AP_medium": 0.4778,
+  "AP_large": 0.7037,
+  "AR": 0.3443,
+  "max_dets": 500
+ },
+ "operating_point": {
+  "vehicle_any": {
+   "score_min": 0.3,
+   "iou": 0.5,
+   "gt": 23213,
+   "tp": 11486,
+   "fp": 2419,
+   "precision": 0.826,
+   "recall": 0.4948,
+   "f1": 0.6189
+  },
+  "person": {
+   "score_min": 0.3,
+   "iou": 0.5,
+   "gt": 13969,
+   "tp": 4943,
+   "fp": 1316,
+   "precision": 0.7897,
+   "recall": 0.3539,
+   "f1": 0.4887
+  }
+ },
+ "standard_pack": "yolox-s"
+}

@@ -1,0 +1,229 @@
+{
+ "kind": "track",
+ "suite": "mot17",
+ "detector": "sam3",
+ "rate": "app",
+ "grid_s": 1.0,
+ "sequences": [
+  "MOT17-02",
+  "MOT17-04",
+  "MOT17-05",
+  "MOT17-09",
+  "MOT17-10",
+  "MOT17-11",
+  "MOT17-13"
+ ],
+ "metrics": {
+  "combined": {
+   "HOTA": 0.3812686769432758,
+   "DetA": 0.32124283529773884,
+   "AssA": 0.4660541589485505,
+   "MOTA": 0.14759036144578314,
+   "IDF1": 0.393125,
+   "IDSW": 144,
+   "MT": 43,
+   "ML": 185,
+   "FP": 385,
+   "FN": 1169,
+   "Frag": 65
+  },
+  "per_sequence": {
+   "MOT17-02": {
+    "HOTA": 0.2421313428778438,
+    "DetA": 0.3462723001432235,
+    "AssA": 0.17893048008949464,
+    "MOTA": 0.07761194029850746,
+    "IDF1": 0.27486437613019893,
+    "IDSW": 76,
+    "MT": 7,
+    "ML": 15,
+    "FP": 58,
+    "FN": 175,
+    "Frag": 26
+   },
+   "MOT17-04": {
+    "HOTA": 0.5175212187245595,
+    "DetA": 0.46791253857458687,
+    "AssA": 0.593242031525262,
+    "MOTA": 0.2529976019184652,
+    "IDF1": 0.5646341463414634,
+    "IDSW": 25,
+    "MT": 22,
+    "ML": 17,
+    "FP": 285,
+    "FN": 313,
+    "Frag": 29
+   },
+   "MOT17-05": {
+    "HOTA": 0.18940729200688927,
+    "DetA": 0.12400701032175254,
+    "AssA": 0.30735028488792776,
+    "MOTA": 0.09583333333333334,
+    "IDF1": 0.1824561403508772,
+    "IDSW": 8,
+    "MT": 4,
+    "ML": 51,
+    "FP": 7,
+    "FN": 202,
+    "Frag": 1
+   },
+   "MOT17-09": {
+    "HOTA": 0.3057413727347537,
+    "DetA": 0.4736535877989672,
+    "AssA": 0.20079057529137745,
+    "MOTA": 0.06060606060606061,
+    "IDF1": 0.32673267326732675,
+    "IDSW": 35,
+    "MT": 9,
+    "ML": 1,
+    "FP": 31,
+    "FN": 27,
+    "Frag": 8
+   },
+   "MOT17-10": {
+    "HOTA": 0.20732366821552148,
+    "DetA": 0.12402310197016927,
+    "AssA": 0.34919059044014694,
+    "MOTA": 0.13725490196078433,
+    "IDF1": 0.25833333333333336,
+    "IDSW": 0,
+    "MT": 1,
+    "ML": 24,
+    "FP": 4,
+    "FN": 172,
+    "Frag": 1
+   },
+   "MOT17-11": {
+    "HOTA": 0.0,
+    "DetA": 0.0,
+    "AssA": 0.0,
+    "MOTA": 0.0,
+    "IDF1": 0.0,
+    "IDSW": 0,
+    "MT": 0,
+    "ML": 36,
+    "FP": 0,
+    "FN": 149,
+    "Frag": 0
+   },
+   "MOT17-13": {
+    "HOTA": 0.0,
+    "DetA": 0.0,
+    "AssA": 0.0,
+    "MOTA": 0.0,
+    "IDF1": 0.0,
+    "IDSW": 0,
+    "MT": 0,
+    "ML": 41,
+    "FP": 0,
+    "FN": 131,
+    "Frag": 0
+   }
+  }
+ },
+ "counts": {
+  "MOT17-02": {
+   "gt_people": 49,
+   "gt_boxes": 335,
+   "counted": 42,
+   "flagged_possible_duplicate": 2,
+   "frames_analysed": 10,
+   "frames_in_subset": 299,
+   "moving_camera": false
+  },
+  "MOT17-04": {
+   "gt_people": 69,
+   "gt_boxes": 834,
+   "counted": 80,
+   "flagged_possible_duplicate": 2,
+   "frames_analysed": 18,
+   "frames_in_subset": 524,
+   "moving_camera": false
+  },
+  "MOT17-05": {
+   "gt_people": 65,
+   "gt_boxes": 240,
+   "counted": 15,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 30,
+   "frames_in_subset": 418,
+   "moving_camera": true
+  },
+  "MOT17-09": {
+   "gt_people": 21,
+   "gt_boxes": 99,
+   "counted": 19,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 9,
+   "frames_in_subset": 262,
+   "moving_camera": false
+  },
+  "MOT17-10": {
+   "gt_people": 36,
+   "gt_boxes": 204,
+   "counted": 14,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 11,
+   "frames_in_subset": 326,
+   "moving_camera": true
+  },
+  "MOT17-11": {
+   "gt_people": 36,
+   "gt_boxes": 149,
+   "counted": 0,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 15,
+   "frames_in_subset": 449,
+   "moving_camera": true
+  },
+  "MOT17-13": {
+   "gt_people": 41,
+   "gt_boxes": 131,
+   "counted": 0,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 15,
+   "frames_in_subset": 374,
+   "moving_camera": true
+  }
+ },
+ "count_total": {
+  "gt_people": 317,
+  "counted": 170,
+  "ratio": 0.536
+ },
+ "tracker": {
+  "iou_min": 0.25,
+  "min_hits": 3,
+  "gap_s": 1.5,
+  "reentry_s": 3.0,
+  "reentry_dist": 2.0,
+  "edge_px": 4.0,
+  "velocity_smoothing": 0.5,
+  "jump_per_s": 3.0,
+  "algo": "byte",
+  "high_score": 0.3,
+  "low_iou_min": 0.5,
+  "frame_s": 0.2,
+  "first_jump": 1.0
+ },
+ "model": {
+  "name": "sam3.1-w8a16",
+  "version": "ov-9e742f7",
+  "sha256": "415f47ec986f350c6fc35cc61d2eb1e45f695a71190ff95c00fb391c9de64d78"
+ },
+ "seconds_per_frame": {
+  "MOT17-02": 10.789,
+  "MOT17-04": 10.198,
+  "MOT17-05": 10.413,
+  "MOT17-09": 10.442,
+  "MOT17-10": 11.003,
+  "MOT17-11": 11.093,
+  "MOT17-13": 9.681
+ },
+ "machine": {
+  "os": "Linux-6.18.44-fc-v445-x86_64-with-glibc2.39",
+  "python": "3.13.18",
+  "cpus": 4
+ },
+ "standard_pack": "yolox-s"
+}

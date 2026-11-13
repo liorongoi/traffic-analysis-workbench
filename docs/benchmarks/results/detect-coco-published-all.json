@@ -1,0 +1,202 @@
+{
+ "kind": "detect",
+ "suite": "coco",
+ "detector": "published",
+ "images": 5000,
+ "image_ids": "all",
+ "seed": 0,
+ "model": {
+  "name": "yolox-s",
+  "version": "0.1.1rc0",
+  "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063"
+ },
+ "preprocessing": {
+  "letterbox": 640,
+  "pad": 114,
+  "colour": "BGR",
+  "tiles": {
+   "score_threshold": 0.001,
+   "nms_iou": 0.65,
+   "cross_class_iou": 1.01,
+   "tiles": [
+    1,
+    1
+   ],
+   "tile_overlap": 0.2,
+   "min_tile_side": 360
+  },
+  "classes": {
+   "0": "person",
+   "1": "bicycle",
+   "2": "car",
+   "3": "motorcycle",
+   "4": "airplane",
+   "5": "bus",
+   "6": "train",
+   "7": "truck",
+   "8": "boat",
+   "9": "traffic light",
+   "10": "fire hydrant",
+   "11": "stop sign",
+   "12": "parking meter",
+   "13": "bench",
+   "14": "bird",
+   "15": "cat",
+   "16": "dog",
+   "17": "horse",
+   "18": "sheep",
+   "19": "cow",
+   "20": "elephant",
+   "21": "bear",
+   "22": "zebra",
+   "23": "giraffe",
+   "24": "backpack",
+   "25": "umbrella",
+   "26": "handbag",
+   "27": "tie",
+   "28": "suitcase",
+   "29": "frisbee",
+   "30": "skis",
+   "31": "snowboard",
+   "32": "sports ball",
+   "33": "kite",
+   "34": "baseball bat",
+   "35": "baseball glove",
+   "36": "skateboard",
+   "37": "surfboard",
+   "38": "tennis racket",
+   "39": "bottle",
+   "40": "wine glass",
+   "41": "cup",
+   "42": "fork",
+   "43": "knife",
+   "44": "spoon",
+   "45": "bowl",
+   "46": "banana",
+   "47": "apple",
+   "48": "sandwich",
+   "49": "orange",
+   "50": "broccoli",
+   "51": "carrot",
+   "52": "hot dog",
+   "53": "pizza",
+   "54": "donut",
+   "55": "cake",
+   "56": "chair",
+   "57": "couch",
+   "58": "potted plant",
+   "59": "bed",
+   "60": "dining table",
+   "61": "toilet",
+   "62": "tv",
+   "63": "laptop",
+   "64": "mouse",
+   "65": "remote",
+   "66": "keyboard",
+   "67": "cell phone",
+   "68": "microwave",
+   "69": "oven",
+   "70": "toaster",
+   "71": "sink",
+   "72": "refrigerator",
+   "73": "book",
+   "74": "clock",
+   "75": "vase",
+   "76": "scissors",
+   "77": "teddy bear",
+   "78": "hair drier",
+   "79": "toothbrush"
+  }
+ },
+ "seconds_per_image": 0.093,
+ "wall_s": 482.3,
+ "machine": {
+  "os": "Linux-6.18.44-fc-v445-x86_64-with-glibc2.39",
+  "python": "3.13.18",
+  "cpus": 4
+ },
+ "all80": {
+  "AP": 0.4054,
+  "AP50": 0.5927,
+  "AP75": 0.4385,
+  "AP_small": 0.2322,
+  "AP_medium": 0.4489,
+  "AP_large": 0.5426,
+  "AR": 0.5752,
+  "max_dets": 100
+ },
+ "classes": {
+  "AP": 0.4489,
+  "AP50": 0.6796,
+  "AP75": 0.4757,
+  "AP_small": 0.2185,
+  "AP_medium": 0.472,
+  "AP_large": 0.6769,
+  "AR": 0.5936,
+  "max_dets": 100,
+  "per_class": {
+   "person": {
+    "AP": 0.541957678269565,
+    "AP50": 0.8101914628258949,
+    "gt": 10777
+   },
+   "bicycle": {
+    "AP": 0.317194346995713,
+    "AP50": 0.5546399553244574,
+    "gt": 314
+   },
+   "car": {
+    "AP": 0.4068647839167756,
+    "AP50": 0.6472570583259378,
+    "gt": 1918
+   },
+   "motorcycle": {
+    "AP": 0.4342985666855425,
+    "AP50": 0.7244082609687574,
+    "gt": 367
+   },
+   "bus": {
+    "AP": 0.6413155827093159,
+    "AP50": 0.8038613375605165,
+    "gt": 283
+   },
+   "truck": {
+    "AP": 0.351637031293992,
+    "AP50": 0.5374620869131619,
+    "gt": 414
+   }
+  }
+ },
+ "vehicle_any": {
+  "AP": 0.4448,
+  "AP50": 0.6917,
+  "AP75": 0.472,
+  "AP_small": 0.2733,
+  "AP_medium": 0.5321,
+  "AP_large": 0.7042,
+  "AR": 0.5892,
+  "max_dets": 100
+ },
+ "operating_point": {
+  "vehicle_any": {
+   "score_min": 0.3,
+   "iou": 0.5,
+   "gt": 3296,
+   "tp": 2094,
+   "fp": 836,
+   "precision": 0.7147,
+   "recall": 0.6353,
+   "f1": 0.6727
+  },
+  "person": {
+   "score_min": 0.3,
+   "iou": 0.5,
+   "gt": 10777,
+   "tp": 7941,
+   "fp": 1516,
+   "precision": 0.8397,
+   "recall": 0.7368,
+   "f1": 0.7849
+  }
+ }
+}
