@@ -549,7 +549,7 @@ CREATE TABLE video_probe (
   creation_time TEXT,               -- container tag, informative only
   start_utc TEXT,                   -- absolute start, from the confirmed source below; NULL when unknown
   start_precision TEXT,
-  start_source TEXT,                -- filename | klv (the aircraft's clock) | none
+  start_source TEXT,                -- filename | none
   error TEXT,
   probed_at TEXT NOT NULL
 );
@@ -1019,7 +1019,7 @@ CREATE TABLE video_zone (                  -- counting lines and areas drawn on 
 );
 """,
     22: """
-CREATE TABLE video_telemetry (             -- where an airborne camera was and looked (video_meta), read once
+CREATE TABLE video_telemetry (             -- where an airborne camera was and looked (video_meta), read when asked
   source_version_id INTEGER PRIMARY KEY REFERENCES source_version(id),
   source TEXT,                             -- dji-srt | klv-0601; NULL: the recording has none
   summary TEXT,                            -- JSON (video_meta.Telemetry.summary)

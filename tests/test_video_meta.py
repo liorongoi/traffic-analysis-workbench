@@ -154,7 +154,8 @@ def test_a_mission_reads_and_keeps_a_recordings_metadata(tmp_path):
     (src / "DRONE_20240501T143000Z.SRT").write_text(DJI_NEW)
     run(m)
     vid = m.con.execute("SELECT id FROM source_version").fetchone()[0]
-    tel = stored(m.con, vid)                                    # read during the analysis, kept since
+    assert stored(m.con, vid) is None                           # the analysis never reads it: only when asked
+    tel = stored(m.con, vid, VideoService(m).path(vid))
     assert tel is not None and tel.source == "dji-srt" and len(tel.samples) == 2
     (src / "DRONE_20240501T143000Z.SRT").unlink()
     assert stored(m.con, vid).samples[1]["rel_alt"] == 130.0    # kept, though the file has gone
@@ -168,24 +169,35 @@ def test_a_mission_reads_and_keeps_a_recordings_metadata(tmp_path):
     shutil.rmtree(src)
 
 
-def test_klv_time_dates_a_recording_whose_name_has_none(tmp_path):
+
+def test_web_video_files_are_taken_in(tmp_path):
     from trafficwb.ingest import cycle
     from trafficwb.store import DataRoot, MissionConfig
-    from trafficwb.video_process import probe_version
     src = tmp_path / "src"
     src.mkdir()
     (tmp_path / "out").mkdir()
     _klv_video(src / "sortie.ts")
-    (src / "flight.webm").write_bytes(b"")                     # web video files are taken in too
+    (src / "flight.webm").write_bytes(b"")
+    (src / "clip.ogv").write_bytes(b"")
     cfg = MissionConfig(name="uav", input_type="video", mode="object_search", country="IL", iana_zone="Asia/Jerusalem",
                         source_dir=str(src), include_subdirs=False, processing="one_time",
                         output_dir=str(tmp_path / "out"), export_formats=["csv"])
     m = DataRoot(tmp_path / "data").create_mission(cfg, "lior")
     cycle(m, stability_seconds=0)
-    names = {r[0] for r in m.con.execute("SELECT f.rel_path FROM source_file f")}
-    assert names == {"sortie.ts", "flight.webm"}
-    vid = m.con.execute("SELECT v.id FROM source_version v JOIN source_file f ON f.id=v.source_file_id "
-                        "WHERE f.rel_path='sortie.ts'").fetchone()[0]
-    from trafficwb.views import ViewService
-    p = probe_version(m.con, ViewService(m), vid)
-    assert p["start_utc"] == "2024-05-01T14:30:00.000Z" and p["start_source"] == "klv"
+    assert {r[0] for r in m.con.execute("SELECT rel_path FROM source_file")} == {"sortie.ts", "flight.webm", "clip.ogv"}
+
+
+# The example packet of MISB ST 0601 as published with the klvdata project (MIT licence,
+# github.com/paretech/klvdata, data/DynamicOnlyMISMMSPacketData.bin).
+MISB_EXAMPLE = bytes.fromhex(
+    "060e2b34020b01010e0103010100000061020800046050584e0180050271c20602fd3d070208b80d045595b66d0e045b5360"
+    "c40f02c2211002cd9c1102d9171204724a0a20130487f84b86140400000000150403830926160212811704f101a229180414"
+    "bc082b190234f34101060102c850")
+
+
+def test_the_published_misb_example_packet():
+    v = parse_0601(MISB_EXAMPLE)
+    assert v["unix_us"] == 1_231_798_102_000_000
+    assert v["heading"] == pytest.approx(159.9744, abs=1e-3) and v["lat"] == pytest.approx(60.176823, abs=1e-5)
+    assert v["lon"] == pytest.approx(128.426759, abs=1e-5) and v["alt"] == pytest.approx(14190.72, abs=0.01)
+    assert v["center_lat"] == pytest.approx(-10.542389, abs=1e-5) and v["slant_range"] == pytest.approx(68590.98, abs=0.01)

@@ -98,10 +98,11 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
       .then((r) => { setCal(r.calibration); setDistances(r.distances_m); }).catch(() => undefined);
   }, [missionId, versionId]);
   // Where a drone or aircraft camera was (DJI subtitle file or KLV in the video), when the recording carries it.
-  const [tel, setTel] = useState<{ source: string; summary: any; samples: any[] } | null>(null);
-  useEffect(() => {
-    api(`/missions/${missionId}/recordings/${versionId}/telemetry`).then((r) => setTel(r.source ? r : null)).catch(() => setTel(null));
-  }, [missionId, versionId]);
+  // Optional: read only when the operator asks for it; nothing else depends on it.
+  const [tel, setTel] = useState<{ source: string | null; summary?: any; samples?: any[] } | null>(null);
+  useEffect(() => { setTel(null); }, [missionId, versionId]);
+  const askFlight = () => api(`/missions/${missionId}/recordings/${versionId}/telemetry`)
+    .then((r) => setTel(r)).catch((e) => setMsg({ kind: "err", text: (e as ApiError).message }));
   const loadZones = useCallback(() => api(`/missions/${missionId}/recordings/${versionId}/zones`)
     .then((r) => { setZones(r.zones); setZoneNames({ line: r.line_names, area: r.area_names }); }).catch(() => undefined), [missionId, versionId]);
   useEffect(() => { loadZones(); }, [loadZones]);
@@ -427,7 +428,8 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               next event not reviewed yet.</div>}
           </div>
           {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
-          {tel && <Aircraft tel={tel} t={now} />}
+          {tel === null ? <button onClick={askFlight} title="Read the drone's or aircraft's own flight record (a DJI .srt beside the video, or KLV inside it)">Flight data</button>
+            : tel.source ? <Aircraft tel={tel as any} t={now} /> : <div className="muted small">This recording carries no flight data.</div>}
           {zones.length > 0 && <div className="card grid" style={{ gap: 4 }}>
             <strong className="small">Lines and areas of this camera</strong>
             {zones.map((z) => <div key={z.uid} className="row small" style={{ justifyContent: "space-between" }}>

@@ -156,8 +156,7 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 
 - LanePulse reads where an airborne camera was and what it looked at, with nothing to set (`video_meta.py`, table `video_telemetry`, migration 22): a DJI subtitle file beside the video (the same name, ending .srt), or KLV inside the video (MISB ST 0601, the UAS Datalink Local Set).
 - A subtitle file counts as telemetry only when most of its entries carry a position. Ordinary subtitles (speech, "[Music]") are ignored. KLV packets are checked (key, length, checksum); a damaged one is skipped.
-- Read when the recording is first analysed and kept with the mission, so it stays when the file is moved. The player shows the aircraft's position, height, heading, field of view and where it looked at that moment (`GET .../recordings/{vid}/telemetry`).
-- A recording whose name carries no time takes its start from the KLV clock (`start_source` "klv").
+- Optional: it is read only when the operator chooses "Flight data" in the player, then kept with the mission (so it stays when the file is moved). The player then shows the aircraft's position, height, heading, field of view and where it looked at that moment (`GET .../recordings/{vid}/telemetry`). Nothing else depends on it: detection, tracking, times and counts are the same with or without it.
 - Web and broadcast video files are taken in too: .webm, .ogv, .mpg, .mpeg, .m2ts and .mts.
 
 ## Workers on other computers
