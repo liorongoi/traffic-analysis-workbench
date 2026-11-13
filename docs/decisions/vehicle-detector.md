@@ -22,7 +22,16 @@ Date: 24 Oct 2026. Status: baseline for Phase 3, open to replacement after compa
 
 ## Not yet compared
 
-RT-DETR, D-FINE and RF-DETR (reported Apache-2.0) and larger YOLOX sizes. The comparison needs labelled images from your cameras. Without them, any accuracy claim would be invented.
+RT-DETR, D-FINE and larger YOLOX sizes. The comparison on labelled images from your cameras is still the deciding one.
+
+## Update, 13 Nov 2026: RF-DETR added as a second choice
+
+RF-DETR Small (Roboflow, Apache-2.0 code and weights, DINOv2 backbone Apache-2.0) is now a detector a mission can choose,
+and it trains on the learning page like YOLOX-s. On public benchmarks it finds more vehicles than YOLOX-s on every kind of
+scene, at two to three times the time per image on a CPU (docs/benchmarks/rf-detr.md). YOLOX-s stays the default because
+it is the fastest and its results on the operator's own cameras are known; switch per mission, or compare both on the
+mission's reviewed images on the learning page. RF-DETR needs no Hugging Face account or download: the weights come from
+Roboflow's own storage, are checked against the published MD5 and are shipped with the installers.
 
 ## Settings
 
