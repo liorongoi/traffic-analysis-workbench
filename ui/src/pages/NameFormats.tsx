@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, post } from "../api";
+import FolderPicker from "../components/FolderPicker";
+import { NamePick, ZonePick } from "../components/Pick";
 
 // Filename formats: the operator shows the app how their camera names files, so it can read the capture time.
 type Format = { name: string; template: string; zone: string };
@@ -27,7 +29,6 @@ export default function NameFormats() {
   const [tried, setTried] = useState<TryResult | null>(null);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [zoneFilter, setZoneFilter] = useState("");
   const tplRef = useRef<HTMLInputElement>(null);
 
   const load = () => api("/name-formats").then((r) => { setFormats(r.formats); setBuiltin(r.builtin); setTokens(r.tokens); })
@@ -52,6 +53,21 @@ export default function NameFormats() {
     setDraft(i >= 0 && formats ? { ...formats[i] } : blank);
     setExamples("");
     setTried(null);
+  };
+
+  // Example names straight from a folder of the camera's files, and a first guess of the format from them.
+  const fromFolder = async (dir: string) => {
+    setFolder(dir);
+    if (!dir) return;
+    setMsg(null);
+    try {
+      const files: { file: string }[] = (await post("/source-preview", { source_dir: dir, include_subdirs: true, limit: 5 })).files;
+      const names = files.map((f) => f.file.split(/[\\/]/).pop()!).filter(Boolean);
+      if (!names.length) { setMsg({ kind: "err", text: "No files in that folder." }); return; }
+      setExamples(names.join("\n"));
+      const r = await post<{ template: string }>("/name-formats/suggest", { examples: names });
+      if (r.template) setDraft((d) => ({ ...d, template: r.template, name: editing === -1 ? `${dir.split(/[\\/]/).filter(Boolean).pop()} cameras` : d.name }));
+    } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
   };
 
   const guess = async () => {
@@ -103,7 +119,10 @@ export default function NameFormats() {
     saveAll(formats.filter((_, k) => k !== i), "Format removed.");
   };
 
-  const shownZones = useMemo(() => zones.filter((z) => z.toLowerCase().includes(zoneFilter.toLowerCase())).slice(0, 200), [zones, zoneFilter]);
+  const folderName = folder.split(/[\\/]/).filter(Boolean).pop() ?? "";
+  const nameIdeas = [folderName && `${folderName} cameras`, tried?.results.find((r) => r.parts?.camera)?.parts?.camera
+    ? `${tried!.results.find((r) => r.parts?.camera)!.parts!.camera} cameras` : "", "Gate cameras", "Road cameras", "Junction cameras",
+    "Highway cameras", "Parking cameras", "Traffic cameras", `Format ${(formats?.length ?? 0) + 1}`].filter(Boolean);
   const canSave = !!draft.name.trim() && !!tried?.ok && !busy;
 
   return (
@@ -121,13 +140,17 @@ export default function NameFormats() {
         <div className="card">
           <h2>{editing === -1 ? "New format" : `Edit “${formats?.[editing]?.name}”`}</h2>
 
-          <label className="field"><span>1. Paste one or more filenames from your camera (one per line)</span>
-            <textarea rows={3} className="mono" value={examples} placeholder="2026_08_26T00_00_18_home_578695735485d7f4.jpg"
-              onChange={(e) => setExamples(e.target.value)} />
-          </label>
-          <div className="row"><button onClick={guess} disabled={!exampleList.length}>Guess the format from the first name</button></div>
+          <FolderPicker label="1. Choose a folder with your camera's files: its first names are used as examples and the format is guessed"
+            value={folder ? [folder] : []} onChange={(v) => fromFolder(v[0] ?? "")} />
+          {exampleList.length > 0 && <div className="mono muted bidi" style={{ fontSize: 12.5, marginBottom: 8 }}>{exampleList.map((n) => <div key={n}>{n}</div>)}</div>}
+          <details style={{ marginBottom: 8 }}>
+            <summary className="muted">Or paste filenames instead</summary>
+            <textarea rows={3} className="mono" style={{ width: "100%", marginTop: 6 }} value={examples} aria-label="Filenames, one per line"
+              placeholder="2026_08_26T00_00_18_home_578695735485d7f4.jpg" onChange={(e) => setExamples(e.target.value)} />
+            <div className="row"><button onClick={guess} disabled={!exampleList.length}>Guess the format from the first name</button></div>
+          </details>
 
-          <label className="field" style={{ marginTop: 14 }}><span>2. The format: text the names always have, and the parts that change in braces</span>
+          <label className="field" style={{ marginTop: 14 }}><span>2. The format (guessed from the examples; change it with the part buttons below)</span>
             <input ref={tplRef} className="mono" value={draft.template} placeholder="{YYYY}_{MM}_{DD}T{hh}_{mm}_{ss}_{camera}_{id}"
               onChange={(e) => setDraft((d) => ({ ...d, template: e.target.value }))} />
           </label>
@@ -143,22 +166,18 @@ export default function NameFormats() {
             <label><input type="radio" checked={draft.zone !== "UTC"} onChange={() => setDraft((d) => ({ ...d, zone: d.zone === "UTC" ? "Asia/Jerusalem" : d.zone }))} /> Local time in a time zone</label>
             {draft.zone !== "UTC" && (
               <div style={{ marginTop: 6, display: "grid", gap: 6, maxWidth: 420 }}>
-                <input placeholder="Search, e.g. Jerusalem" value={zoneFilter} onChange={(e) => setZoneFilter(e.target.value)} />
-                <select size={4} style={{ width: "100%" }} value={draft.zone} onChange={(e) => setDraft((d) => ({ ...d, zone: e.target.value }))}>
-                  {!shownZones.includes(draft.zone) && <option value={draft.zone}>{draft.zone}</option>}
-                  {shownZones.map((z) => <option key={z} value={z}>{z}</option>)}
-                </select>
+                <ZonePick zones={zones} value={draft.zone} onChange={(z) => setDraft((d) => ({ ...d, zone: z }))} />
                 <p className="muted" style={{ margin: 0 }}>Local times are turned into UTC with that zone's daylight-saving rules. A time that does not exist (clocks moved forward) is not read.</p>
               </div>
             )}
           </fieldset>
 
           <label className="field" style={{ marginTop: 14 }}><span>4. A name for this format</span>
-            <input value={draft.name} placeholder="Gate cameras" onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
+            <NamePick label="A name for this format" value={draft.name} onChange={(n) => setDraft((d) => ({ ...d, name: n }))} suggestions={nameIdeas} />
           </label>
 
           <h3>How the app reads your names</h3>
-          {!draft.template.trim() && <p className="muted">Write or guess the format to see the result.</p>}
+          {!draft.template.trim() && <p className="muted">Choose a folder above, or build the format with the part buttons, to see the result.</p>}
           {tried && !tried.ok && <div className="msg err">{tried.error}</div>}
           {tried?.ok && tried.results.length === 0 && <p className="muted">The format is valid ({tried.precision} precision). Paste a filename above to check it.</p>}
           {tried?.ok && tried.results.map((r, i) => (
@@ -180,7 +199,7 @@ export default function NameFormats() {
             <details style={{ marginTop: 10 }}>
               <summary>Check every name in a folder</summary>
               <div className="row" style={{ marginTop: 6 }}>
-                <input className="mono" style={{ flex: 1 }} placeholder={"C:\\Images\\Camera1"} value={folder} onChange={(e) => setFolder(e.target.value)} />
+                <div style={{ flex: 1 }}><FolderPicker label="Folder to check" value={folder ? [folder] : []} onChange={(v) => setFolder(v[0] ?? "")} /></div>
                 <label><input type="checkbox" checked={subdirs} onChange={(e) => setSubdirs(e.target.checked)} /> Subfolders</label>
                 <button onClick={checkFolder} disabled={!folder.trim() || busy}>Check</button>
               </div>
@@ -197,7 +216,7 @@ export default function NameFormats() {
           <div className="row" style={{ marginTop: 14 }}>
             <button className="primary" onClick={save} disabled={!canSave}>Save format</button>
             <button onClick={() => setEditing(null)}>Cancel</button>
-            {!draft.name.trim() && draft.template.trim() && <span className="muted">Give the format a name to save it.</span>}
+            {!draft.name.trim() && draft.template.trim() && <span className="muted">Choose a name for the format to save it.</span>}
           </div>
         </div>
       )}
