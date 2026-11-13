@@ -46,7 +46,7 @@ def test_a_person_on_a_bicycle_stays_two_objects():
 
 def test_tracks_never_cross_families_and_old_checkpoints_still_load():
     tr = Tracker(W, H)
-    for k in range(4):
+    for k in range(5):
         t = k * 0.2
         tr.update(t, [([10 + k, 20, 40 + k, 80], "bicycle", 0.9), ([12 + k, 10, 38 + k, 78], "pedestrian", 0.8)])
     fams = sorted(t.family for t in tr.tracks)

@@ -178,6 +178,10 @@ class VideoProcessor:
             # SAM 3.1 sees a target about once a second: a person walks several body widths in that time.
             from dataclasses import replace
             self.s = replace(self.s, tracker=replace(self.s.tracker, jump_per_s=3.0))
+        if self.kind == "sam3" and self.s.tracker.min_hits > 3:
+            # SAM 3.1 alone gives the tracker a frame a second: 3 sightings are already 3 s
+            from dataclasses import replace
+            self.s = replace(self.s, tracker=replace(self.s.tracker, min_hits=3))
 
 
     def process_all(self, progress: Callable[[int, int], None] | None = None) -> list[VideoReport]:

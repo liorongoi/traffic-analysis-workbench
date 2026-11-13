@@ -137,7 +137,7 @@ def test_min_hits_discards_blips():
 
 
 def test_occlusion_within_gap_keeps_identity_and_reentry_is_flagged():
-    p = TrackerParams(min_hits=3, gap_s=1.5, reentry_s=3.0)
+    p = TrackerParams(min_hits=3, gap_s=1.5, reentry_s=3.0, relink_s=0)      # re-linking: the next test
     tr = Tracker(W, H, p)
     box = lambda t: [40 + 50 * t, 60, 80 + 50 * t, 84]
     for i in range(5):
@@ -154,6 +154,42 @@ def test_occlusion_within_gap_keeps_identity_and_reentry_is_flagged():
     assert len(closed) == 1 and closed[0].confirmed and closed[0].reason == "lost"
     _, _, new = tr.update(3.6, [(box(3.6), "car", 0.9)])
     assert new[0].key != key and new[0].related == [key]
+
+
+def test_a_target_hidden_longer_is_relinked_by_where_it_went_and_how_it_looks():
+    """Hidden for 2.4 s (past the 1.5 s gap): taken up again when it comes back near where it was heading and looks
+    the same; something that looks different there starts a track of its own."""
+    def frame_with(box, colour):
+        img = np.full((H, W, 3), 90, np.uint8)
+        if box:
+            x1, y1, x2, y2 = (int(v) for v in box)
+            img[y1:y2, x1:x2] = colour
+            img[y1 + 4:y1 + 10, x1 + 4:x2 - 4] = (20, 20, 20)       # a windscreen: some texture inside
+        return img
+    for colour, same in (((40, 40, 200), True), ((200, 160, 40), False)):
+        tr = Tracker(W, H, TrackerParams(min_hits=3))
+        box = lambda t: [40 + 30 * t, 60, 90 + 30 * t, 90]
+        for i in range(6):
+            t = i * 0.2
+            tr.update(t, [(box(t), "car", 0.9)], image=frame_with(box(t), (40, 40, 200)))
+        key = tr.tracks[0].key
+        for t in np.arange(1.2, 3.6, 0.2):                      # hidden for 2.4 s
+            tr.update(round(float(t), 3), [], image=frame_with(None, None))
+        b = box(3.6)
+        obs, _, new = tr.update(3.6, [(b, "car", 0.9)], image=frame_with(b, colour))
+        assert (obs[0][0].key == key and not new) if same else (new and new[0].key != key), colour
+
+
+def test_a_box_inside_a_followed_target_starts_no_track():
+    tr = Tracker(W, H, TrackerParams(min_hits=3))
+    whole, half = [100, 40, 130, 120], [102, 42, 128, 80]       # a person, and the upper half of the same person
+    for i in range(4):
+        _, _, new = tr.update(i * 0.2, [(whole, "person", 0.9)] + ([(half, "person", 0.6)] if i else []))
+        assert len(tr.tracks) == 1
+    tr2 = Tracker(W, H, TrackerParams(min_hits=3))
+    tr2.update(0.0, [(whole, "person", 0.9)])
+    tr2.update(0.2, [(whole, "person", 0.9), ([200, 40, 230, 120], "person", 0.9)])
+    assert len(tr2.tracks) == 2                                 # someone beside them is someone else
 
 
 def test_tracker_state_roundtrip():

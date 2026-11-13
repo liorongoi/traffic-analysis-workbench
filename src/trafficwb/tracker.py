@@ -38,7 +38,7 @@ from .detect import family
 @dataclass
 class TrackerParams:
     iou_min: float = 0.25
-    min_hits: int = 3
+    min_hits: int = 5              # 1 s at 5 analysed frames a second (SAM 3.1 alone, a frame a second: 3)
     gap_s: float = 1.5
     reentry_s: float = 3.0
     reentry_dist: float = 2.0      # in box widths
@@ -65,12 +65,12 @@ class TrackerParams:
     # was heading, of a similar size, and (relink_app > 0) looks alike: the colours inside the box, compared with
     # what the track looked like. So a person or vehicle hidden for a moment, or missed by the detector for a few
     # frames, stays one event instead of two. 0 turns it off.
-    relink_s: float = 0.0
-    relink_dist: float = 1.0
-    relink_app: float = 0.0
+    relink_s: float = 1.5
+    relink_dist: float = 0.5
+    relink_app: float = 0.85
     # A box mostly inside a box a track holds on this frame (or holding one), of the same family, starts no track:
     # half a person, or two people in one box, next to a person already followed. 0 turns it off.
-    nested_ioa: float = 0.0
+    nested_ioa: float = 0.8
 
 
 def appearance(img, box) -> list[float] | None:
@@ -221,8 +221,13 @@ class Tracker:
         preds = [self._predict(tr, t) for tr in self.tracks]
         strong = [j for j, d in enumerate(dets) if not byte or d[2] >= self.p.high_score]
         weak = [j for j, d in enumerate(dets) if byte and d[2] < self.p.high_score]
+        # A confirmed track kept past gap_s only for re-linking is taken up only there, where looks count too.
+        late = {i for i, tr in enumerate(self.tracks)
+                if byte and self.p.relink_s > 0 and t - tr.t > self.p.gap_s}
         pairs = []
         for i, pb in enumerate(preds):
+            if i in late:
+                continue
             for j in strong:
                 db, dcls, _ = dets[j]
                 if family(dcls) != self.tracks[i].family:
@@ -245,7 +250,7 @@ class Tracker:
         if self.p.jump_per_s > 0 or first > 0:
             near = []
             for i, (tr, pb) in enumerate(zip(self.tracks, preds)):
-                if i in used_t:
+                if i in used_t or i in late:
                     continue
                 size = max(pb[2] - pb[0], pb[3] - pb[1], 1.0)
                 dt = max(t - tr.t, 1e-6)
@@ -270,7 +275,7 @@ class Tracker:
         if weak:                              # ByteTrack's second pass: weak boxes keep tracks alive
             low = []
             for i, pb in enumerate(preds):
-                if i in used_t:
+                if i in used_t or i in late:
                     continue
                 for j in weak:
                     db, dcls, _ = dets[j]
