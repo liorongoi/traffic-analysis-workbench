@@ -145,6 +145,13 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 - Heatmap: each box adds the time until the next box at the bottom middle of the box, over a disc a third of its width; one hue from faint to strong, and the scale gives the most seconds at one spot. Path map: each target's path as a thin line coloured by class (a legend names each), with a dot where it was first seen.
 - Only counted events are drawn; when the events page filters are set, the map shows just the events they leave.
 
+## Summary video
+
+- On a video's tab, "Summary video" makes a short video of the whole recording: its targets shown together over the empty road, each labelled with the time it really passed and its event number, so an hour can be looked through in a minute or two (`video_synopsis.py`, `POST .../recordings/{vid}/synopsis`).
+- Each target is cut out of the original frames inside its box (10 per second, the operator's boxes in place of the tracker's), its edges blended. Targets keep their order: a later one never starts before an earlier one. Each starts at the first moment it overlaps those already placed only a little. "How busy" (calm, normal, busy) sets how much they may overlap and how many may be on screen at once (4, 8 or 16). Up to 600 targets.
+- Only counted events are used, narrowed by the events page filters. Beside the video, "On screen now" lists the events showing at that second; each opens its event.
+- It is made in the background, one at a time per mission (a new request stops the one running), and kept with the mission's evidence until the events or their boxes change.
+
 ## Workers on other computers
 
 - Other computers can analyse segments of a long recording. The operator turns "Other computers may help" on (Workers screen). Off by default; while off, nothing is shared and workers are refused.

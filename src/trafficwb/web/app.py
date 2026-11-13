@@ -222,6 +222,12 @@ class ReviseBody(BaseModel):
     box: list[float] | None = None
 
 
+class SynopsisBody(BaseModel):
+    event_ids: list[int] | None = Field(None, max_length=100000)
+    busy: str = Field("normal", pattern="^(calm|normal|busy)$")
+    status_only: bool = False
+
+
 class MapBody(BaseModel):
     kind: str = Field("heat", pattern="^(heat|paths)$")
     event_ids: list[int] | None = Field(None, max_length=100000)
@@ -1978,6 +1984,50 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         except ValueError as exc:
             raise ApiError(400, "map", str(exc)) from None
         return {"image": "data:image/jpeg;base64," + base64.b64encode(data).decode(), "legend": legend}
+
+    from ..video_synopsis import Synopses
+    synopses = Synopses()
+
+    def _synopsis_args(m: Mission, version_id: int, body: "SynopsisBody"):
+        svc = _video(m)
+        evs = [e for e in _video_call(lambda: svc.events(version_id)) if e.counted]
+        if body.event_ids is not None:
+            keep = set(body.event_ids)
+            evs = [e for e in evs if e.id in keep]
+        rid = max((e.run_item_id or 0 for e in evs), default=0)
+        revs = sum(e.revisions for e in evs)
+        key = Synopses.key(version_id, rid, [e.id for e in evs], body.busy, revs)
+        return svc, evs, key, m.dir / "evidence" / "synopsis"
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/synopsis")
+    def synopsis_start(version_id: int, body: SynopsisBody, m: Mission = Depends(mission)):
+        """Make (or find) the summary video of these events: the targets together over the empty road, each with
+        its real time. Made in the background; ask again (same body) for its progress."""
+        from ..video_review import VideoService
+        from ..video_synopsis import render
+        svc, evs, key, folder = _synopsis_args(m, version_id, body)
+        if not evs:
+            raise ApiError(400, "synopsis", "No counted event to show in a summary.")
+        if body.status_only:
+            return synopses.status(m.id, key, folder)
+        ids = [e.id for e in evs]
+        mid = m.id
+
+        def work(out, progress, stop):
+            s2 = VideoService(DataRoot(data_root).open_mission(mid))
+            keep = set(ids)
+            ev2 = [e for e in s2.events(version_id) if e.id in keep]
+            return render(s2, version_id, ev2, out, body.busy, progress, stop)
+        return synopses.start(m.id, folder, key, work)
+
+    @app.get("/api/missions/{mission_id}/synopsis/{key}.mp4")
+    def synopsis_file(key: str, m: Mission = Depends(mission)):
+        if not key.isalnum():
+            raise ApiError(404, "synopsis", "No such summary.")
+        path = m.dir / "evidence" / "synopsis" / f"{key}.mp4"
+        if not path.is_file():
+            raise ApiError(404, "synopsis", "That summary is not made (yet).")
+        return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "private, no-transform"})
 
     @app.get("/api/missions/{mission_id}/recordings/{version_id}/zones")
     def zones_get(version_id: int, m: Mission = Depends(mission)):

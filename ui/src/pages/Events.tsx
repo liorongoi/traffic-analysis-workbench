@@ -239,6 +239,56 @@ function ZonesCard({ missionId, versionId, refresh }: { missionId: string; versi
   );
 }
 
+/** The summary video: the targets of the whole video together over its empty road, each labelled with the real
+ *  time it passed, so an hour is looked through in a minute or two. Made in the background on the workstation. */
+function SynopsisCard({ missionId, versionId, ids }: { missionId: string; versionId: number; ids: number[] | null }) {
+  const [busy, setBusy] = useState("normal");
+  const [st, setSt] = useState<any | null>(null);
+  const [want, setWant] = useState(false);
+  const [sec, setSec] = useState(0);
+  const [err, setErr] = useState<string | null>(null);
+  const key = ids ? ids.join(",") : "all";
+  const url = `/missions/${missionId}/recordings/${versionId}/synopsis`;
+  // A summary already made for these events and this setting shows at once; otherwise "Make" starts one.
+  useEffect(() => {
+    setErr(null); setSt(null);
+    post(url, { busy, event_ids: ids, status_only: true }).then(setSt).catch(() => setSt(null));
+  }, [url, busy, key]);
+  useEffect(() => {
+    if (st?.state !== "running") return;
+    const t = setTimeout(() => post(url, { busy, event_ids: ids, status_only: true }).then(setSt).catch(() => undefined), 1500);
+    return () => clearTimeout(t);
+  }, [st]);
+  const make = () => { setWant(true); setErr(null); post(url, { busy, event_ids: ids }).then(setSt).catch((e) => setErr((e as ApiError).message)); };
+  const onScreen: number[] = st?.state === "done" ? st.per_second[Math.min(st.per_second.length - 1, Math.floor(sec))] ?? [] : [];
+  return (
+    <div className="card grid synopsis" style={{ gap: 8 }}>
+      <div className="row">
+        <h2 style={{ margin: 0 }}>Summary video</h2>
+        <select aria-label="How busy" value={busy} onChange={(e) => setBusy(e.target.value)}>
+          <option value="calm">Calm: few at once, no overlaps</option>
+          <option value="normal">Normal</option>
+          <option value="busy">Busy: shortest summary</option>
+        </select>
+        {st?.state !== "done" && st?.state !== "running" && <button className="primary" onClick={make}>Make the summary</button>}
+        <span className="muted small">{ids ? `the ${ids.length} events the filters show` : "every counted event of this video"}, each with the time it really passed</span>
+      </div>
+      {err && <div className="msg err">{err}</div>}
+      {st?.state === "running" && <div className="row small"><progress value={st.progress} max={1} style={{ width: 240 }} /> Making the summary… {Math.round(st.progress * 100)}%</div>}
+      {st?.state === "failed" && want && <div className="msg err">The summary could not be made: {st.error}</div>}
+      {st?.state === "done" && <>
+        <div className="muted small">{st.targets} targets from {fmtDur(st.original_s)} of video in {fmtDur(st.length_s)}.</div>
+        <video src={`/api/missions/${missionId}/synopsis/${st.key}.mp4`} controls style={{ width: "100%", maxWidth: 960, borderRadius: 6, background: "#000" }}
+          onTimeUpdate={(e) => setSec((e.target as HTMLVideoElement).currentTime)} />
+        <div className="row small" style={{ flexWrap: "wrap", gap: 6 }}>
+          <span className="muted">On screen now:</span>
+          {onScreen.length ? onScreen.map((id) => { const e = st.events[id]; return e ? <a key={id} href={`#/m/${missionId}/events/${id}`} className="badge">{e.key} {e.cls} · {fmtT(e.t).slice(0, 8)}</a> : null; })
+            : <span className="muted">nobody</span>}
+        </div></>}
+    </div>
+  );
+}
+
 /** Where the targets of one video spent time (heatmap), or the paths they took, over the empty road. */
 function MapCard({ missionId, versionId, ids }: { missionId: string; versionId: number; ids: number[] | null }) {
   const [kind, setKind] = useState("");
@@ -515,6 +565,8 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
       </div>}
       {rec && !rec.startsWith("g") && evs && evs.length > 0 &&
         <MapCard missionId={missionId} versionId={Number(rec)} ids={filtering ? shown.map((e) => e.id) : null} />}
+      {rec && !rec.startsWith("g") && evs && evs.length > 0 &&
+        <SynopsisCard missionId={missionId} versionId={Number(rec)} ids={filtering ? shown.map((e) => e.id) : null} />}
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
       {evs && evs.length === 0 && <div className="card muted">No events match. Events appear after the recordings are processed.</div>}
       {evs && evs.length > 0 && shown.length === 0 && <div className="card muted">No event matches these filters.</div>}
