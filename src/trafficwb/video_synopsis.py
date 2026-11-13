@@ -7,6 +7,7 @@ Design (LanePulse's own):
 - Strips keep their order: a later target never starts before an earlier one in the summary. Each starts at the
   first moment, at or after the one before it, at which it overlaps the targets already placed in at most a few
   frames. "How busy" sets how much they may overlap and how many may be on screen at once.
+  A target never starts later than it did in the original, so the summary is never longer than the recording.
 - Each frame pastes, over the empty road, the part of the original frame inside each target's box, its edges
   blended so it does not look cut out, and writes the real time beside it (and its event number). Targets that
   overlap are drawn earliest first.
@@ -93,10 +94,13 @@ def place(ss: list[Strip], busy: str = "normal") -> float:
     frames: dict[int, list[list[float]]] = {}             # summary frame -> boxes already there
     earliest = 0
     end = 0
+    first = min((s.t0 for s in ss), default=0.0)
     for s in ss:
         n = len(s.boxes)
         k = earliest
-        while True:
+        # Never later than it really was: on a road that is always busy the summary is no longer than the original.
+        latest = max(earliest, int(round((s.t0 - first) * RATE)))
+        while k < latest:
             clash = 0.0
             full = False
             for i in range(n):
@@ -205,9 +209,17 @@ def render(svc, version_id: int, events, out: Path, busy: str = "normal", progre
                 roi = img[y:y + h, x:x + w].astype(np.float32)
                 img[y:y + h, x:x + w] = (roi * (1 - m) + crop.astype(np.float32) * m).astype(np.uint8)
                 labels.append((s, s.boxes[i]))
-            for s, b in labels:
+            taken: list[tuple[int, int, int, int]] = []
+            # Bigger (nearer) targets are labelled first; a label that would cover another one is left out, so a
+            # crowd of small far-away targets does not turn into a pile of text.
+            for s, b in sorted(labels, key=lambda sb: -(sb[1][2] - sb[1][0]) * (sb[1][3] - sb[1][1])):
                 txt = f"{clock(start, s.t0)} {s.key}"
                 org = (int(b[0]), max(int(12 * fs * 2), int(b[1]) - 4))
+                (tw, tth), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, fs, th + 2)
+                r = (org[0], org[1] - tth - 2, org[0] + tw, org[1] + 3)
+                if any(r[0] < q[2] and q[0] < r[2] and r[1] < q[3] and q[1] < r[3] for q in taken):
+                    continue
+                taken.append(r)
                 cv2.putText(img, txt, org, cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 0), th + 2, cv2.LINE_AA)
                 cv2.putText(img, txt, org, cv2.FONT_HERSHEY_SIMPLEX, fs, (255, 255, 255), th, cv2.LINE_AA)
             fr = av.VideoFrame.from_ndarray(np.ascontiguousarray(img[:H2, :W2]), format="bgr24")

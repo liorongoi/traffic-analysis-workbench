@@ -65,3 +65,13 @@ def test_summary_video_of_a_recording(tmp_path):
     v = c.get(f"/api/missions/{m.id}/synopsis/{r['key']}.mp4")
     assert v.status_code == 200 and v.headers["content-type"] == "video/mp4"
     assert c.post(url, json={"busy": "busy"}, headers=h).json()["state"] == "done"      # kept: made once
+
+
+def test_a_busy_road_never_makes_the_summary_longer():
+    from trafficwb.video_synopsis import Strip, place
+    # 40 cars, one every second, all on the same spot for 5 s: they cannot avoid each other.
+    ss = [Strip(i, f"E-{i}", "car", float(i), [i + k / 10 for k in range(50)], [[10, 10, 50, 40]] * 50)
+          for i in range(40)]
+    length = place(ss, "calm")
+    assert length <= 39 + 5 + 0.1
+    assert [s.start for s in ss] == sorted(s.start for s in ss)
