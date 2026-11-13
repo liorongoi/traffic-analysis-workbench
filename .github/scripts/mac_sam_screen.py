@@ -1,5 +1,6 @@
-"""Opens the new-mission screen of the running LanePulse in a browser and checks that the SAM 3.1 detector can be
-chosen there (not greyed out), as a person would see it. Saves a screenshot.
+"""Opens the new-mission screens of the running LanePulse in a browser and checks that the SAM 3.1 detector can be
+chosen there (not greyed out), as a person would see it: on the one-screen New mission page it must not say it is not
+installed, and on the step-by-step setup its option must be selectable. Saves a screenshot of the step-by-step setup.
     python mac_sam_screen.py <url> <screenshot.png>
 """
 import re
@@ -12,6 +13,12 @@ with sync_playwright() as p:
     b = p.chromium.launch()
     page = b.new_page(viewport={"width": 1280, "height": 1000})
     page.goto(url.rstrip("/") + "/#/new")
+    page.get_by_role("radio", name=re.compile(r"^SAM 3\.1")).wait_for(timeout=30000)
+    page.wait_for_function("() => !document.body.innerText.includes('Loading')", timeout=30000)
+    page.wait_for_timeout(1000)
+    if "Not installed here" in page.inner_text("body"):
+        sys.exit("The New mission page says SAM 3.1 is not installed.")
+    page.goto(url.rstrip("/") + "/#/new/full")
     # The "Both" option mentions SAM 3.1 too, so match the option whose text starts with it.
     choice = page.locator("label.choice", has_text=re.compile(r"^\s*SAM 3\.1"))
     choice.wait_for(timeout=30000)
