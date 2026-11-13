@@ -171,3 +171,48 @@ def test_klv_sensor_angles_and_moving_targets():
         {"id": 4, "centroid": [640, 480], "latitude": float(lat), "longitude": float(lon)}]}
     t = targets_on_ground(rep, G, f, 640, 480)[0]
     assert t["id"] == 4 and abs(t["apart_m"] - 3.0) < 0.6
+
+
+def test_command_line_registers_a_klv_video(tmp_path, gmap):
+    """The drone command end to end: a video with KLV frame centre and view, a map picture with its corners."""
+    import json
+    from fractions import Fraction
+
+    import av
+
+    from trafficwb.georeg import main
+    f = gmap.frame
+    w, h, rate = 320, 240, 10
+    video = tmp_path / "flight.ts"
+    with av.open(str(video), "w", format="mpegts") as o:
+        vs = o.add_stream("mpeg2video", rate=rate)
+        vs.width, vs.height, vs.pix_fmt = w, h, "yuv420p"
+        ds = o.add_data_stream("klv")
+        ds.time_base = Fraction(1, 90000)
+        for k in range(15):
+            e = -50 + 4 * k
+            Gt = pose_homography(w, h, 50, e, 0, 250, 0, -89.9)
+            frame = gmap.render(gmap.A_inv @ Gt, (w, h))
+            vf = av.VideoFrame.from_ndarray(frame[:, :, ::-1].copy(), format="rgb24")
+            vf.pts = k
+            for p in vs.encode(vf):
+                o.mux(p)
+            if k % 5 == 0:
+                lat, lon = f.to_latlon(e + 10, 8)                               # 13 m off
+                pkt = av.Packet(make_0601(1_700_000_000_000_000 + k * 100_000, float(lat) - 1e-6, float(lon), 250.0,
+                                          0.0, 50.0, (float(lat), float(lon)), "T", center_elev=0.0))
+                pkt.stream, pkt.pts, pkt.dts, pkt.time_base = ds, k * 9000, k * 9000, ds.time_base
+                o.mux(pkt)
+        for p in vs.encode():
+            o.mux(p)
+    mp = tmp_path / "map.png"
+    cv2.imwrite(str(mp), gmap.image)
+    (lt, ll), (lb, lr) = f.to_latlon(*gmap.A[:2, 2]), f.to_latlon(*apply_h(gmap.A, [[2400, 2400]])[0])
+    out = tmp_path / "out.json"
+    main(["drone", str(video), "--map", str(mp), "--corners", f"{lt},{ll},{lb},{lr}", "--out", str(out), "--offline"])
+    res = json.loads(out.read_text())
+    assert res["summary"]["flight_data"] == "klv-0601" and res["summary"]["map_matches_ok"] >= 1
+    last = res["frames"][-1]
+    e_true = -50 + 4 * 14
+    lat, lon = f.to_latlon(e_true, 0)
+    assert f.distance(*last["center"], float(lat), float(lon)) < 3.0

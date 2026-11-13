@@ -158,6 +158,7 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 - A subtitle file counts as telemetry only when most of its entries carry a position. Ordinary subtitles (speech, "[Music]") are ignored. KLV packets are checked (key, length, checksum); a damaged one is skipped.
 - Optional: it is read only when the operator chooses "Flight data" in the player, then kept with the mission (so it stays when the file is moved). The player then shows the aircraft's position, height, heading, field of view and where it looked at that moment (`GET .../recordings/{vid}/telemetry`). Nothing else depends on it: detection, tracking, times and counts are the same with or without it.
 - Web and broadcast video files are taken in too: .webm, .ogv, .mpg, .mpeg, .m2ts and .mts.
+- KLV is read as STANAG 4609 (`misb.py`): every number, text and time item of MISB ST 0601.17 (extended items in ST 1201 IMAPB), the ST 0102 security marking (shown, never acted on) and ST 0903 moving targets (pixel boxes, ground positions), nested in ST 0601 or as packets of their own. Frame corner points (offset or full) and the sensor's angles feed geo-registration (`docs/design/georegistration.md`).
 
 ## Workers on other computers
 
