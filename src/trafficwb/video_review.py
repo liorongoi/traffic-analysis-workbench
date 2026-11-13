@@ -87,6 +87,7 @@ class Event:
     fixes: list[dict] = field(default_factory=list)   # operator boxes: {"t", "box"}, by time
     continues: int | None = None       # merged recording: the event in the part before that this one carries on
     continues_key: str | None = None
+    score: float | None = None         # the detector's mean score over the track's boxes (an added target: none)
 
     @property
     def counted(self) -> bool:
@@ -113,6 +114,7 @@ class VideoService:
     def _base(self, where: str = "", args: tuple = ()) -> list[Event]:
         rows = self.con.execute(
             "SELECT e.*, f.rel_path, i.run_id, k.state AS track_state, "
+            "(SELECT AVG(o.score) FROM track_observation o WHERE o.track_id=e.track_id) AS mean_score, "
             "CASE WHEN sr.action='set' THEN sr.start_utc ELSE p.start_utc END AS effective_start_utc, "
             "CASE WHEN sr.action='set' THEN sr.precision ELSE p.start_precision END AS effective_start_precision "
             "FROM video_event e "
@@ -134,6 +136,7 @@ class VideoService:
             out[-1]._start = start_utc(r["effective_start_utc"])  # type: ignore[attr-defined]
             out[-1].run_item_id = r["run_item_id"]
             out[-1].origin = "human" if r["track_state"] == "human" else "machine"
+            out[-1].score = None if out[-1].origin == "human" or r["mean_score"] is None else round(r["mean_score"], 3)
         return out
 
     def _apply(self, events: list[Event]) -> list[Event]:
@@ -218,7 +221,9 @@ class VideoService:
                         "SELECT event_key FROM video_event WHERE id=?", (earlier,)).fetchone()[0]
 
     def events(self, version_id: int | None = None, status: str | None = None, flag: str | None = None,
-               group_id: int | None = None) -> list[Event]:
+               group_id: int | None = None, min_score: float | None = None) -> list[Event]:
+        """``min_score``: leave out the machine's events whose mean detection score is under it; what the operator
+        confirmed, re-classed or added stays."""
         where, args = "", ()
         if group_id is not None:
             vids = self.group_versions(group_id)
@@ -231,10 +236,14 @@ class VideoService:
             evs = [e for e in evs if e.status == status]
         if flag:
             evs = [e for e in evs if flag in e.flags]
+        if min_score:
+            evs = [e for e in evs if e.score is None or e.score >= min_score or e.status == "confirmed"
+                   or e.cls != e.machine_cls]
         return evs
 
     # ---------- unique counts ----------
-    def counts(self, version_id: int | None = None, bucket_s: int = 60, group_id: int | None = None) -> dict:
+    def counts(self, version_id: int | None = None, bucket_s: int = 60, group_id: int | None = None,
+               min_score: float | None = None) -> dict:
         """Unique targets per class, per recording and for the mission: one per track, not per frame.
 
         - machine: what the tracker found (one per confirmed track), by the machine class.
@@ -248,7 +257,7 @@ class VideoService:
         """
         latest = {r[0]: r[1] for r in self.con.execute(
             "SELECT source_version_id, MAX(id) FROM run_item GROUP BY source_version_id")}
-        evs = [e for e in self.events(version_id, group_id=group_id)
+        evs = [e for e in self.events(version_id, group_id=group_id, min_score=min_score)
                if latest.get(e.source_version_id) == e.run_item_id and e.continues is None]
         own = self.classes()
         uncounted = sorted(set(getattr(self.m.config(), "sam3_uncounted", None) or []) & set(own))
@@ -596,7 +605,10 @@ class VideoService:
         return [dict(r) for r in self.con.execute("SELECT * FROM clip WHERE event_id=? ORDER BY id", (event_id,))]
 
     # ---------- export ----------
-    def export(self, author: str, formats: list[str] | None = None, out_dir=None) -> list[Path]:
+    def export(self, author: str, formats: list[str] | None = None, out_dir=None,
+               min_score: float | None = None) -> list[Path]:
+        """``min_score``: the machine's events whose mean detection score is under it are left out; events the
+        operator confirmed, re-classed or added stay."""
         from .export import _fmt, write_sheets_csv, write_sheets_xlsx
         cfg = self.m.config()
         formats = formats or cfg.export_formats
@@ -609,7 +621,7 @@ class VideoService:
             from .plates import PlateService
             plates = {p.object_uid: p for p in PlateService(self.m).plates()}
         rows = []
-        evs = self.events()
+        evs = self.events(min_score=min_score)
         attrs = self.attributes(evs)
         from .video_zones import tally
         zt = tally(self, evs)
@@ -624,7 +636,7 @@ class VideoService:
                 rows.append([_fmt(x) for x in (
                     self.m.id, e.run_id, e.source_version_id, e.file, sha.get(e.source_version_id), e.key,
                     k if len(e.parts) > 1 else "", fmt_t(a), fmt_t(b), round(a, 3), round(b, 3), utc_at(st, a), utc_at(st, b),
-                    e.utc_precision or ("unknown" if st is None else ""), e.cls, e.machine_cls, e.cls_share, e.status,
+                    e.utc_precision or ("unknown" if st is None else ""), e.cls, e.machine_cls, e.cls_share, e.score, e.status,
                     e.duplicate_of or "", ",".join(e.absorbed), ",".join(e.flags), ",".join(e.related), e.end_reason,
                     e.entry[0], e.entry[1], e.exit[0], e.exit[1], fmt_t(e.machine_first_t), fmt_t(e.machine_last_t),
                     e.revisions, clips,
@@ -636,14 +648,14 @@ class VideoService:
                     " > ".join(zname.get(u, u) for u in (zt["events"].get(e.id) or {}).get("path", [])))])
         cols = ["mission_id", "run_id", "source_version_id", "file", "sha256", "event_id", "part", "start", "end",
                 "start_s", "end_s", "start_utc", "end_utc", "utc_precision", "class", "machine_class", "class_share",
-                "review_status", "duplicate_of", "merged_events", "flags", "possible_duplicate_of", "end_reason",
+                "score", "review_status", "duplicate_of", "merged_events", "flags", "possible_duplicate_of", "end_reason",
                 "entry_x", "entry_y", "exit_x", "exit_y", "machine_start", "machine_end", "operator_revisions", "clips",
                 "model", "plate_text", "plate_readability", "plate_review", "direction", "speed", "top_speed",
                 "speed_unit", "seconds_in_view", "seconds_stopped", "width", "height", "size_unit", "colour",
                 "upper_colour", "lower_colour", "path"]
         stem = "".join(c if c.isalnum() or c in "-_." else "_"
                        for c in f"{cfg.name}_events_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
-        cn = self.counts()
+        cn = self.counts(min_score=min_score)
         ccols = ["file", "source_version_id", "class", "counted_as_vehicle", "unique_machine", "unique_after_review",
                  "maybe_same_target", "unreviewed_events_in_recording"]
         crows = []
@@ -671,7 +683,7 @@ class VideoService:
                 + ([("lines_and_areas", zcols, zrows)] if zrows else []))
             paths += new
             self.con.execute("INSERT INTO export(format,path,scope,rows,status,author,created_at) VALUES (?,?,?,?,?,?,?)",
-                             (fmt, ";".join(str(p) for p in new), json.dumps({"video_events": True}), len(rows),
+                             (fmt, ";".join(str(p) for p in new), json.dumps({"video_events": True} | ({"min_score": min_score} if min_score else {})), len(rows),
                               "completed", author, utcnow()))
         return paths
 

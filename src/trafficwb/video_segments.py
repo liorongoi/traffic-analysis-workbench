@@ -25,7 +25,7 @@ from typing import Callable
 
 from .detect import family
 from .tracker import Track, Tracker, TrackerParams, iou
-from .video import camera_motion, frames, is_scene_cut, motion_frame, scene_signature
+from .video import compose, camera_motion, frames, is_scene_cut, motion_frame, scene_signature
 
 
 @dataclass
@@ -78,7 +78,7 @@ def analyse(seg: Segment, path, width: int, height: int, detect: Callable, grid_
     tracker = Tracker(width, height, params)
     pieces: dict[str, Piece] = {}
     cuts: list[float] = []
-    prev = pm = None
+    prev = pm = acc = None
     n_own = 0
     after = seg.run_a - grid_s / 2 if seg.run_a > 0 else None
     for k, (fr, nxt_after) in enumerate(frames(path, grid_s, after_t=after, next_sample_t=seg.run_a)):
@@ -89,8 +89,9 @@ def analyse(seg: Segment, path, width: int, height: int, detect: Callable, grid_
         motion = None
         if moving:
             mf = motion_frame(fr.image)
-            motion, why = camera_motion(pm, mf, width, [t.box for t in tracker.tracks])
+            step, why = camera_motion(pm, mf, width, [t.box for t in tracker.tracks])
             cut = why == "no_match" or (why == "no_texture" and pm is not None and cut)
+            motion = compose(acc, step)
             pm = mf
         prev = sig
         if cut:
@@ -99,13 +100,21 @@ def analyse(seg: Segment, path, width: int, height: int, detect: Callable, grid_
                 pieces[c.track.key].related = list(c.track.related)
             if seg.own_a <= fr.t < seg.own_b:
                 cuts.append(round(fr.t, 6))
+            motion = None
         grid_idx = int(round((nxt_after - grid_s) / grid_s))
+        found_dets = detect(fr.image, sam_every <= 1 or grid_idx % sam_every == 0)
+        if found_dets is None:              # SAM 3.1 alone on a moving camera: a frame for the motion only
+            acc = motion
+            if seg.own_a <= fr.t < seg.own_b:
+                n_own += 1
+            continue
+        acc = None
         dets, found = [], {}
-        for d in detect(fr.image, sam_every <= 1 or grid_idx % sam_every == 0):
+        for d in found_dets:
             box = list(map(float, d.box))
             found[id(box)] = getattr(d, "found_by", None)
             dets.append((box, d.cls, float(d.score)))
-        obs, closed, new = tracker.update(fr.t, dets, motion=motion)
+        obs, closed, new = tracker.update(fr.t, dets, motion=motion, image=fr.image)
         for tr in new:
             pieces[tr.key] = Piece(tr.key, tr.family)
         for tr, box, cls, score in obs:
@@ -137,6 +146,8 @@ def make_detect(kind: str, detector) -> Callable:
     def detect(img, sam: bool):
         if kind == "both" and not sam:
             return [found(d, "standard") for d in detector.standard.detect(img)]
+        if kind == "sam3" and not sam:
+            return None                     # a frame for the camera's motion only
         return [d if getattr(d, "found_by", None) else found(d, "sam3" if kind == "sam3" else "standard")
                 for d in detector.detect(img)]
     return detect

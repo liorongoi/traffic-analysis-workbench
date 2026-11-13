@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, post } from "../api";
 import { go } from "../router";
+import { ScoreSlider } from "../components/ScoreSlider";
 import { Choice } from "../components/Pick";
 import Player from "./Player";
 
@@ -12,7 +13,7 @@ export type VEvent = {
   machine_first_t: number; machine_last_t: number; cls: string; machine_cls: string; cls_share: number;
   flags: string[]; related: string[]; end_reason: string; status: string; duplicate_of: string | null;
   merged_into: number | null; absorbed: string[]; split_at: number[]; parts: [number, number][];
-  first_utc: string | null; last_utc: string | null; revisions: number;
+  first_utc: string | null; last_utc: string | null; revisions: number; score?: number | null;
   continues?: number | null; continues_key?: string | null; attrs?: Attrs;
 };
 /** What a target did and looked like (phase 6a). Colours: null not read yet, [] not observable, 2+ uncertain. */
@@ -337,6 +338,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
   const [inView, setInView] = useState("");
   const [stopped, setStopped] = useState("");
   const [speed, setSpeed] = useState("");
+  const [minScore, setMinScore] = useState(0);
   const [colour, setColour] = useState("");
   const [upper, setUpper] = useState("");
   const [lower, setLower] = useState("");
@@ -401,7 +403,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
   const doExport = async () => {
     setMsg(null);
     try {
-      const r = await post(`/missions/${missionId}/events/export`, {});
+      const r = await post(`/missions/${missionId}/events/export`, minScore > 0 ? { min_score: minScore } : {});
       setMsg({ kind: "ok", text: `Exported: ${r.files.join(", ")}` });
     } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
   };
@@ -430,10 +432,12 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
     return i >= 0 && p.slice(i + 1).includes(to);
   };
   const people = evs?.some((e) => e.attrs?.upper != null || e.cls === "person");
-  const shown = (evs ?? []).filter((e) => { const a = e.attrs; if (!a) return true;
+  // Kept whatever the slider says: what the operator confirmed, re-classed or added (as the export does).
+  const sure = (e: VEvent) => !minScore || e.score == null || e.score >= minScore || e.status === "confirmed" || e.cls !== e.machine_cls;
+  const shown = (evs ?? []).filter((e) => { if (!sure(e)) return false; const a = e.attrs; if (!a) return true;
     return (!dir || a.direction === dir) && (!inView || a.dwell_s >= Number(inView)) && (!stopped || a.stopped_s >= Number(stopped))
       && inSpeed(a) && inZone(a) && onPath(a) && (!colour || has(a.colour, colour) || has(a.upper, colour) || has(a.lower, colour)) && (!upper || has(a.upper, upper)) && (!lower || has(a.lower, lower)); });
-  const filtering = !!(dir || inView || stopped || speed || colour || upper || lower || zone || from || to);
+  const filtering = !!(minScore || dir || inView || stopped || speed || colour || upper || lower || zone || from || to);
   // One tab per analysed video; the parts of a merged recording share one tab.
   const inGroup = new Set(groups.flatMap((g) => g.members));
   const done = new Set(recs.filter((r) => r.processing_state === "done").map((r) => r.id));
@@ -514,6 +518,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
         <span className="muted">{filtering ? `${shown.length} of ${evs?.length ?? 0}` : evs?.length ?? 0} events</span>
         <span style={{ flex: 1 }} />
         {rec && !rec.startsWith("g") && <button className="primary" onClick={() => go(`/m/${missionId}/events/play-${rec}`)}>▶ Play and review this video</button>}
+        <ScoreSlider what="events" value={minScore} onChange={setMinScore} />
         <button onClick={doExport}>Export events</button>
       </div>
       {evs && evs.length > 0 && <div className="card row attr-filters">
@@ -739,6 +744,7 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
               <tr><td>End</td><td className="mono">{fmtT(ev.last_t)}{ev.last_t !== ev.machine_last_t && <span className="muted"> (machine {fmtT(ev.machine_last_t)})</span>}</td></tr>
               <tr><td>Start (UTC)</td><td className="mono">{ev.first_utc ?? "unknown: the file name has no start time"}</td></tr>
               <tr><td>Class</td><td>{ev.cls} <span className="muted">({Math.round(ev.cls_share * 100)}% of detections{ev.cls !== ev.machine_cls ? `, machine said ${ev.machine_cls}` : ""})</span></td></tr>
+              {ev.score != null && <tr><td>Confidence</td><td>{Math.round(ev.score * 100)}% <span className="muted">(the detector's mean score over the target's boxes)</span></td></tr>}
               <tr><td>Found by</td><td>{foundBy(ev.observations)}</td></tr>
               {ev.attrs && <>
                 <tr><td>Went</td><td>{ev.attrs.direction ? `${ARROW[ev.attrs.direction]} ${ev.attrs.direction === "stayed" ? "stayed in place" : ev.attrs.direction}` : ""}</td></tr>

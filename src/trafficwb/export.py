@@ -62,6 +62,7 @@ def build_tables(mission: Mission, flt: Filter | None = None) -> tuple[list[list
     models = {r["id"]: f"{r['name']} {r['version']}" for r in con.execute("SELECT id, name, version FROM model_version")}
     det_model = {r["id"]: r["model_version_id"] for r in con.execute("SELECT id, model_version_id FROM detection")}
     images, objects = [], []
+    low = flt.min_score if flt is not None and flt.min_score else None
     for row in rs.results(flt, sort="capture_utc"):
         v = con.execute("SELECT sha256, capture_precision FROM source_version WHERE id=?", (row.source_version_id,)).fetchone()
         offset = ""
@@ -77,7 +78,13 @@ def build_tables(mission: Mission, flt: Filter | None = None) -> tuple[list[list
                                          row.review_status, ";".join(row.flags)]])
         if row.processing_state != "done":
             continue
-        for o in rs.objects(row.source_version_id):
+        objs = rs.objects(row.source_version_id)
+        if low is not None and row.review_status != "approved":
+            # What the operator added, moved or re-classed stays; so does every box of an image they approved.
+            objs = [o for o in objs if o.origin != "machine" or o.correction != "none" or (o.score or 0) >= low]
+            images[-1][IMAGE_COLUMNS.index("vehicles_in_image")] = _fmt(sum(o.counted for o in objs)
+                                                                     + row.confirmed_from_candidates)
+        for o in objs:
             mb = o.machine_box or (None, None, None, None)
             objects.append([_fmt(x) for x in [
                 mission.id, row.run_id, row.source_version_id, row.filename, v["sha256"], row.capture_utc, row.capture_local,
