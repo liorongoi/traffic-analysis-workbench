@@ -25,6 +25,17 @@ Unresolved night candidates in a fully reviewed image become "ignore" areas: a d
 - Frames are grouped like images (camera view and date block), so the frames of one recording and day never sit on both sides of a split.
 - Export writes each frame as a PNG; evaluation decodes the same frame from the recording.
 
+### SAM 3.1 as the teacher (learning from what nobody reviewed)
+
+"Labels from: your reviews, and SAM 3.1 on everything else" (when freezing a dataset version, and under Run mode for full auto) lets SAM 3.1 label what no review covers, so a fast detector (YOLOX) learns what the slow, untrained SAM 3.1 finds, for example from above or in thermal pictures. It is off unless chosen.
+
+- **What SAM 3.1 labels**: every image not approved one by one (partial, bulk approved, not reviewed), and every recording not approved: an analysed frame every 3 s (at most 100 per recording), kept at least 0.4 s from the frames the reviews give. It looks for the mission's classes with the mission's words and keeps every box from score 0.30 up. Its labels are stored (table `teacher_label`) and reused by later versions; a new SAM pack version or new words label again. The labelling runs as a background job; full auto labels up to 600 images or frames a round and the rest in later rounds.
+- **Your decisions win**: on a corrected image the corrected objects stay as you left them, and a SAM box overlapping one of them (IoU 0.3 or more), or overlapping an object you removed or a night candidate you rejected, is dropped. On a recording, a confirmed event's box is the label, a rejected event's box keeps SAM out, and frames you trimmed off an event are ignored. An approved image or recording never uses SAM at all.
+- **Unsure boxes are not background**: a SAM box below score 0.50, or of a class no detector here learns, is an ignore area. Everything else in the picture counts as "no vehicle", as SAM 3.1 says.
+- **Training and validation only**: SAM's labels never go to a test split, whose groups (camera view and date block) are decided exactly as without SAM, so a model is always judged against the operator's own reviews. With no reviews at all there is no test set: a model can be trained but not judged, and full auto then keeps the model it has.
+- **Full auto**: with SAM 3.1 chosen, a round also starts when new images (as many as the round's review count) or a new recording arrive, not only after reviews: SAM 3.1 labels first, then the dataset version is frozen and training starts as usual. If SAM 3.1 cannot run on the computer, the round learns from the reviews alone and the log says why.
+- The dataset version records the teacher and its thresholds; its table shows how many images or frames per split SAM labelled.
+
 ### Classes
 
 - The five vehicle classes and **person** are learnt (category 6, COCO class 0). A mission's own class called person, pedestrian, people, human, man or woman is learnt as person. Other own classes are found by SAM 3.1 only: their boxes are ignored, never labels or background.

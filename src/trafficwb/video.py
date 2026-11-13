@@ -160,14 +160,27 @@ def motion_frame(img: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
 
+def compose(first, then):
+    """The 2x3 affine of ``first`` followed by ``then`` (either may be None: no motion known)."""
+    if first is None:
+        return then
+    if then is None:
+        return first
+    a = np.vstack([np.asarray(first, float), [0.0, 0.0, 1.0]])
+    b = np.vstack([np.asarray(then, float), [0.0, 0.0, 1.0]])
+    return (b @ a)[:2]
+
+
 def camera_motion(prev: np.ndarray | None, cur: np.ndarray, full_width: int, boxes=(),
-                  min_points: int = 30, min_inliers: float = 0.5) -> tuple[np.ndarray | None, str]:
+                  min_points: int = 30, min_inliers: float = 0.5, min_shared: float = 0.08) -> tuple[np.ndarray | None, str]:
     """How the camera moved from ``prev`` to ``cur`` (small grey frames from ``motion_frame``), as a 2x3 affine in
-    full-frame pixels: corners tracked with pyramidal Lucas-Kanade optical flow, then a RANSAC fit of rotation,
-    scale and shift. ``boxes`` (full-frame pixels) are left out so moving objects do not count as camera motion.
-    Returns (motion, reason): reason "ok"; "no_texture" when the previous frame has too few corners to tell (fog,
-    a blank wall), motion None; or "no_match" when there were corners but too few agree on one motion, which on a
-    moving camera means the picture was replaced: a cut."""
+    full-frame pixels: corners tracked with pyramidal Lucas-Kanade optical flow (kept only when tracking them back
+    lands where they started), then a RANSAC fit of rotation, scale and shift. ``boxes`` (full-frame pixels) are
+    left out so moving objects do not count as camera motion.
+    Returns (motion, reason): "ok"; "no_texture" when the previous frame has too few corners to tell (fog, a blank
+    wall), motion None; "unsure" when the two pictures share enough but no single motion explains them (a camera
+    moving forward through a deep scene, a crowd), motion None and not a cut; or "no_match" when almost nothing of
+    the previous picture is found in this one (under ``min_shared`` of its corners): the picture was replaced, a cut."""
     import cv2
     if prev is None or prev.shape != cur.shape:
         return None, "no_texture"
@@ -180,13 +193,16 @@ def camera_motion(prev: np.ndarray | None, cur: np.ndarray, full_width: int, box
     if pts is None or len(pts) < min_points:
         return None, "no_texture"
     nxt, st, _ = cv2.calcOpticalFlowPyrLK(prev, cur, pts, None, winSize=(21, 21), maxLevel=3)
-    ok = st.ravel() == 1
-    if ok.sum() < min_points:
+    back, st2, _ = cv2.calcOpticalFlowPyrLK(cur, prev, nxt, None, winSize=(21, 21), maxLevel=3)
+    ok = (st.ravel() == 1) & (st2.ravel() == 1) & (np.linalg.norm(back - pts, axis=2).ravel() < 1.0)
+    if ok.mean() < min_shared:
         return None, "no_match"
+    if ok.sum() < min_points // 2:
+        return None, "unsure"
     a, inl = cv2.estimateAffinePartial2D(pts[ok], nxt[ok], method=cv2.RANSAC, ransacReprojThreshold=3.0,
                                          maxIters=2000, confidence=0.99, refineIters=10)
     if a is None or inl is None or inl.mean() < min_inliers:
-        return None, "no_match"
+        return None, "unsure"
     a = a.astype(float)
     a[:, 2] /= s                                  # shift back to full-frame pixels; rotation and scale are unchanged
     return a, "ok"

@@ -410,3 +410,23 @@ def test_real_detector_runs_and_records_preprocessing():
         found = det.detect(read_image(Path(sample) / "C0450701_20261021T071528Z.jpg"))
         assert sum(d.cls == "car" for d in found) >= 8
         assert all(isinstance(v, float) for d in found for v in d.box)
+
+
+def test_export_leaves_out_boxes_under_the_chosen_confidence(mission):
+    m, src, out, rs = _processed(mission)
+    rows = rs.results(Filter(), sort="capture_utc")
+    v, w = rows[0].source_version_id, rows[1].source_version_id
+    top = max(o.score or 0 for r in rows for o in rs.objects(r.source_version_id) if o.origin == "machine")
+    rs.add(v, (10, 10, 60, 50), "car", "lior")          # the operator's own box stays
+    rs.approve(w, "lior")                                 # an approved image keeps every box
+    files = export(m, "lior", ["csv"], Filter(min_score=top + 0.01))
+    objs = list(csv.DictReader(open(next(p for p in files if p.name.endswith("_objects.csv")), encoding="utf-8-sig")))
+    imgs = {r["source_version_id"]: r for r in csv.DictReader(
+        open(next(p for p in files if p.name.endswith("_images.csv")), encoding="utf-8-sig"))}
+    kept = {(r["source_version_id"], r["origin"]) for r in objs}
+    assert (str(v), "human") in kept and (str(v), "machine") not in kept
+    assert (str(w), "machine") in kept
+    assert imgs[str(v)]["vehicles_in_image"] == "1"
+    assert all(r["source_version_id"] in (str(v), str(w)) for r in objs)
+    scope = json.loads(m.con.execute("SELECT scope FROM export ORDER BY id DESC").fetchone()[0])
+    assert scope["min_score"] == pytest.approx(top + 0.01)
