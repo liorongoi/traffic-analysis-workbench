@@ -96,6 +96,18 @@ CREATE TABLE IF NOT EXISTS worker_code (
   created_at TEXT NOT NULL,
   revoked_at TEXT
 );
+CREATE TABLE IF NOT EXISTS worker_request (     -- computers that found this server and ask to help
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,                 -- hash of the helping computer's own key (it keeps the key)
+  info TEXT NOT NULL DEFAULT '{}',
+  address TEXT,
+  state TEXT NOT NULL DEFAULT 'asking',          -- asking | allowed | refused
+  created_at TEXT NOT NULL,
+  seen_at TEXT NOT NULL,
+  decided_by TEXT,
+  decided_at TEXT
+);
 CREATE TABLE IF NOT EXISTS app_setting (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,              -- JSON

@@ -17,18 +17,22 @@ fw_active() {
 }
 
 # The firewalld rule for ALLOW (a network such as 192.168.1.0/24, or "any") and PORT.
-_fw_rich() { echo "rule family=\"ipv4\" source address=\"$1\" port port=\"$2\" protocol=\"tcp\" accept"; }
+_fw_rich() { echo "rule family=\"ipv4\" source address=\"$1\" port port=\"$2\" protocol=\"${3:-tcp}\" accept"; }
+# Helping computers find the server on this UDP port (trafficwb.discovery); it only answers where to connect.
+FIND_PORT=8766
 
 # fw_open ALLOW PORT: let ALLOW reach PORT (kept across reboots).
 fw_open() {
   case "$(fw_kind)" in
     firewalld)
-      if [ "$1" = any ]; then firewall-cmd -q --permanent --add-port="$2/tcp"
-      else firewall-cmd -q --permanent --add-rich-rule="$(_fw_rich "$1" "$2")"; fi
+      if [ "$1" = any ]; then firewall-cmd -q --permanent --add-port="$2/tcp" --add-port="$FIND_PORT/udp"
+      else firewall-cmd -q --permanent --add-rich-rule="$(_fw_rich "$1" "$2")" \
+        --add-rich-rule="$(_fw_rich "$1" "$FIND_PORT" udp)"; fi
       firewall-cmd -q --reload;;
     ufw)
-      if [ "$1" = any ]; then ufw allow "$2/tcp" >/dev/null
-      else ufw allow from "$1" to any port "$2" proto tcp >/dev/null; fi;;
+      if [ "$1" = any ]; then ufw allow "$2/tcp" >/dev/null; ufw allow "$FIND_PORT/udp" >/dev/null
+      else ufw allow from "$1" to any port "$2" proto tcp >/dev/null
+        ufw allow from "$1" to any port "$FIND_PORT" proto udp >/dev/null; fi;;
   esac
 }
 
@@ -38,11 +42,15 @@ fw_close() {
     firewalld)
       firewall-cmd --state >/dev/null 2>&1 || return 0
       if [ "$1" = any ]; then firewall-cmd -q --permanent --remove-port="$2/tcp" 2>/dev/null || true
-      else firewall-cmd -q --permanent --remove-rich-rule="$(_fw_rich "$1" "$2")" 2>/dev/null || true; fi
+        firewall-cmd -q --permanent --remove-port="$FIND_PORT/udp" 2>/dev/null || true
+      else firewall-cmd -q --permanent --remove-rich-rule="$(_fw_rich "$1" "$2")" 2>/dev/null || true
+        firewall-cmd -q --permanent --remove-rich-rule="$(_fw_rich "$1" "$FIND_PORT" udp)" 2>/dev/null || true; fi
       firewall-cmd -q --reload || true;;
     ufw)
       if [ "$1" = any ]; then ufw delete allow "$2/tcp" >/dev/null 2>&1 || true
-      else ufw delete allow from "$1" to any port "$2" proto tcp >/dev/null 2>&1 || true; fi;;
+        ufw delete allow "$FIND_PORT/udp" >/dev/null 2>&1 || true
+      else ufw delete allow from "$1" to any port "$2" proto tcp >/dev/null 2>&1 || true
+        ufw delete allow from "$1" to any port "$FIND_PORT" proto udp >/dev/null 2>&1 || true; fi;;
   esac
 }
 

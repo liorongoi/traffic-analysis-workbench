@@ -230,6 +230,16 @@ class WorkerCodeBody(BaseModel):
     label: str = Field("worker", max_length=60)
 
 
+class WorkerHello(BaseModel):
+    key: str = Field(..., min_length=32, max_length=128)
+    name: str = Field(..., min_length=1, max_length=80)
+    info: dict = {}
+
+
+class WorkerAnswerBody(BaseModel):
+    allow: bool
+
+
 class WorkerCall(BaseModel):
     code: str
     name: str = Field(..., min_length=1, max_length=80)
@@ -452,8 +462,17 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     from ..admin import BackupScheduler
     backups = BackupScheduler(data_root, backup_dir, backup_at) if backup_dir else None
 
+    discovery = None
+
     @asynccontextmanager
     async def lifespan(_app):
+        nonlocal discovery
+        if listening.get("lan") and listening.get("discovery", True):
+            # Helping computers on this network find the server without an address typed.
+            from ..discovery import PORT, Responder
+            from ..workers import Requests
+            discovery = Responder(listening.get("port", 8765), Requests(data_root).server_id(), __version__,
+                                  listening.get("discovery_port", PORT)).start()
         if start_monitoring:
             jobs.resume_monitoring()  # monitoring survives restarts (MIS-07)
             jobs.start_auto_loop()    # missions in Run mode "full auto" learn on their own
@@ -462,6 +481,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         yield
         if backups:
             backups.stop()
+        if discovery:
+            discovery.stop()
         jobs.shutdown()
 
     app = FastAPI(title="LanePulse", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -1692,7 +1713,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         return jobs.start(m.id, kind="process", only=ids).snapshot()
 
     # ---------- workers on other computers (phase 5) ----------
-    from ..workers import Pairing
+    import socket
+    from ..workers import Pairing, Requests
 
     def _lan_address() -> list[str]:
         import socket
@@ -1707,10 +1729,30 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
 
     @app.get("/api/workers")
     def workers_status():
-        """The switch, the pairing codes, the computers helping and the segments waiting."""
+        """The switch, the pairing codes, the computers asking to help, those helping and the segments waiting."""
         p = Pairing(data_root)
-        return jobs.hub.status() | {"codes": p.codes(), "lan": listening.get("lan", False),
-                                    "port": listening.get("port", 8765), "addresses": _lan_address()}
+        return jobs.hub.status() | {"codes": p.codes(), "asking": Requests(data_root).asking(),
+                                    "lan": listening.get("lan", False), "port": listening.get("port", 8765),
+                                    "addresses": _lan_address(),
+                                    "discovery": None if discovery is None else (discovery.error or "on")}
+
+    @app.put("/api/workers/asking/{request_id}")
+    def workers_answer(request_id: int, body: WorkerAnswerBody, u: User = Depends(user)):
+        """Allow or refuse a computer that asks to help."""
+        try:
+            Requests(data_root).decide(request_id, body.allow, u.username)
+        except KeyError:
+            raise ApiError(404, "no_request", "That computer is no longer asking.") from None
+        return workers_status()
+
+    @app.post("/api/worker/hello")
+    def worker_hello(body: WorkerHello, request: Request):
+        """A computer that found this server asks to help, with its own key. It helps once the operator allows it."""
+        r = Requests(data_root)
+        state = r.ask(body.key, body.name, body.info, request.client.host if request.client else None)
+        if state == "allowed" and not jobs.hub.enabled:
+            state = "off"
+        return {"state": state, "server_id": r.server_id(), "name": socket.gethostname()}
 
     @app.put("/api/workers/switch")
     def workers_switch(body: WorkerSwitchBody, u: User = Depends(user)):

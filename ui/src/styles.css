@@ -518,3 +518,5 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
 /* ---------- workers on other computers ---------- */
 .workers .big-code { font-size: 18px; font-weight: 700; letter-spacing: 1px; }
 .workers code.cmd { display: block; flex: 1; padding: 8px 10px; border-radius: 6px; background: rgba(127, 127, 127, 0.12); overflow-x: auto; white-space: nowrap; }
+.workers .join-how { flex-wrap: wrap; gap: 6px; }
+.workers .asking { border-left: 3px solid var(--accent, #3b82f6); }

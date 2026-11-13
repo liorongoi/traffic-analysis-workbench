@@ -106,3 +106,80 @@ def test_another_computer_shares_a_recording_with_the_same_results(tmp_path):
             w.once()
     finally:
         server.should_exit = True
+
+
+def _free_udp_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def test_a_worker_finds_the_server_on_the_network():
+    from trafficwb.discovery import Responder, find
+    port = _free_udp_port()
+    r = Responder(8765, "abc123", "9.9", port).start()
+    try:
+        assert r.error is None
+        found = find(timeout=0.5, port=port, targets=["127.0.0.1"])
+        assert found == [{"id": "abc123", "name": socket.gethostname(), "url": "http://127.0.0.1:8765",
+                          "version": "9.9"}]
+    finally:
+        r.stop()
+
+
+def test_a_computer_asks_to_help_and_the_operator_allows_it(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from trafficwb.web.app import create_app
+    from trafficwb.workers import Requests, ask_until_allowed, identity
+    app = create_app(tmp_path / "data", start_monitoring=False)
+    h = {"X-TWB": "1"}
+    me = identity(tmp_path / "w")
+    assert identity(tmp_path / "w")["key"] == me["key"]                 # one key per computer, kept
+    with TestClient(app) as c:
+        hello = {"key": me["key"], "name": "office-pc", "info": {"cpus": 8}}
+        assert c.post("/api/worker/hello", json=hello, headers=h).json()["state"] == "asking"
+        call = {"code": me["key"], "name": "office-pc"}
+        assert c.post("/api/worker/next", json=call, headers=h).status_code == 403   # helpers off, not allowed
+        st = c.get("/api/workers").json()
+        assert [a["name"] for a in st["asking"]] == ["office-pc"] and st["asking"][0]["info"]["cpus"] == 8
+        c.put("/api/workers/switch", json={"enabled": True}, headers=h)
+        assert c.post("/api/worker/next", json=call, headers=h).status_code == 401   # not allowed yet
+        st = c.put(f"/api/workers/asking/{st['asking'][0]['id']}", json={"allow": True}, headers=h).json()
+        assert st["asking"] == [] and [x["label"] for x in st["codes"]] == ["office-pc"]
+        assert c.post("/api/worker/hello", json=hello, headers=h).json()["state"] == "allowed"
+        assert c.post("/api/worker/next", json=call, headers=h).status_code == 204   # helping: nothing to do yet
+        # stopping it there makes it ask again; refusing then ends it
+        c.delete(f"/api/workers/codes/{st['codes'][0]['id']}", headers=h)
+        assert c.post("/api/worker/next", json=call, headers=h).status_code == 401
+        assert c.post("/api/worker/hello", json=hello, headers=h).json()["state"] == "asking"
+        rid = c.get("/api/workers").json()["asking"][0]["id"]
+        c.put(f"/api/workers/asking/{rid}", json={"allow": False}, headers=h)
+        assert c.post("/api/worker/hello", json=hello, headers=h).json()["state"] == "refused"
+        assert Requests(tmp_path / "data").server_id() == Requests(tmp_path / "data").server_id()
+    # the worker's own waiting loop, against a live server
+    import uvicorn
+    port = _free_port()
+    app2 = create_app(tmp_path / "data2", start_monitoring=False)
+    srv = uvicorn.Server(uvicorn.Config(app2, host="127.0.0.1", port=port, log_level="warning"))
+    threading.Thread(target=srv.run, daemon=True).start()
+    while not srv.started:
+        time.sleep(0.05)
+    try:
+        url = f"http://127.0.0.1:{port}"
+        got = {}
+        t = threading.Thread(target=lambda: got.setdefault("ok", ask_until_allowed(url, me["key"], "lab", lambda s: None,
+                                                                                   wait_s=0.1)))
+        t.start()
+        r = Requests(tmp_path / "data2")
+        for _ in range(100):
+            if r.asking():
+                break
+            time.sleep(0.05)
+        Pairing(tmp_path / "data2").set_enabled(True, "lior")
+        app2.state.jobs.hub.enabled = True
+        r.decide(r.asking()[0]["id"], True, "lior")
+        t.join(10)
+        assert got == {"ok": True}
+    finally:
+        srv.should_exit = True
