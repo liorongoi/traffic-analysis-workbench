@@ -287,6 +287,7 @@ table.t th { font-weight: 600; letter-spacing: .01em; }
 .guess > span:first-child { color: var(--muted); font-size: 13px; }
 .guess .why { display: block; color: var(--muted); font-size: 12.5px; }
 .guess input, .guess select { width: 100%; }
+.guess .namepick { display: flex; } .guess .namepick > select, .guess .namepick > input { flex: 1 1 200px; width: auto; }
 .qs-go { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 20px; }
 .qs-go .grow { flex: 1; }
 .qs .seg { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); padding: 0; gap: 1px; background: var(--line); border: 1px solid var(--line); }

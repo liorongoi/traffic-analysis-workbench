@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, post } from "../api";
 import { go } from "../router";
 import FolderPicker from "../components/FolderPicker";
+import { NamePick } from "../components/Pick";
 
 // A new mission on one screen. The person chooses the folder; LanePulse reads it and fills in the rest (name, still
 // images or video, the time zone the last mission used, an exports folder beside the source), then Create and start
@@ -30,6 +31,13 @@ function span(a: string, b: string) {
   return `${Math.round(h / 24)} days`;
 }
 const when = (iso: string) => new Date(iso).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" });
+
+/** Names to pick from: the one read from the folder first, then shorter ones with the month. */
+function nameIdeas(g: Guess): string[] {
+  const place = g.name.split(", ")[0];
+  const month = g.first_utc ? new Date(g.first_utc).toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }) : null;
+  return [g.name, ...(month ? [`${place}, ${month}`, `Traffic, ${month}`] : [place]), `${place}, ${g.input_type === "video" ? "video" : "images"}`];
+}
 
 export default function QuickStart() {
   const [ref, setRef] = useState<Ref | null>(null);
@@ -104,7 +112,7 @@ export default function QuickStart() {
       <div className="qs">
         <div style={{ display: "grid", gap: 16 }}>
           <div className="card">
-            <FolderPicker label="Source folder" value={folder} onChange={setFolder} placeholder="Type a path, or press Browse" />
+            <FolderPicker label="Source folder" value={folder} onChange={setFolder} />
             {reading && <p className="muted" role="status" aria-live="polite"><span className="pulse" />Reading the folder…</p>}
             {readErr && !reading && folder[0]?.trim() && <p className="muted" role="status">{readErr}</p>}
             {g && !reading && (
@@ -132,7 +140,8 @@ export default function QuickStart() {
           <h2>{g ? "What LanePulse filled in" : "Choose a folder to start"}</h2>
           <p className="muted" style={{ marginTop: -6 }}>{g ? "Change anything before you start." : "The name, time zone and exports folder are filled in from the folder you choose."}</p>
           <div className="guess"><span>Name</span>
-            <span><input value={name} disabled={!g} onChange={(e) => setName(e.target.value)} aria-label="Mission name" className="bidi" />
+            <span>{g ? <NamePick label="Mission name" value={name} onChange={setName} suggestions={nameIdeas(g)} style={{ width: "100%" }} />
+                : <select disabled aria-label="Mission name"><option>Chosen from the folder</option></select>}
               <span className="why">{g ? "From the folder and the dates in it" : " "}</span></span><span /></div>
           <div className="guess"><span>Time zone</span>
             <span><select value={zone} disabled={!g || !ref} onChange={(e) => setZone(e.target.value)} aria-label="Time zone">
