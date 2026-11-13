@@ -5,7 +5,9 @@ offline workstation. The application itself never downloads anything.
 
     python scripts/fetch_models.py [--dest models]
 
-It also fetches SAM 3.1 (sam3.1-w8a16, about 880 MB; --no-sam3 skips it) and the YOLOX-s training starting weights (yolox_s.pth) into training_weights/; the installers put
+It also fetches SAM 3.1 (sam3.1-w8a16, about 880 MB; --no-sam3 skips it), RF-DETR Small (exported to ONNX here; needs
+PyTorch and the rfdetr package; --no-rfdetr skips it, --rfdetr-sizes picks others) and the YOLOX-s and RF-DETR training
+starting weights (yolox_s.pth, rf-detr-small-coco.pth) into training_weights/; the installers put
 them next to their own Python (share/lanepulse), so training on the learning page never goes online.
 """
 from __future__ import annotations
@@ -160,6 +162,75 @@ def fetch_sam3(dest: Path) -> int:
     return 0
 
 
+# RF-DETR (Roboflow, Apache-2.0): the released COCO weights, checked against the MD5 the rfdetr package publishes, are
+# exported to ONNX here (needs PyTorch and the rfdetr package on this staging machine: pip install "rfdetr[onnx]"),
+# and kept without their optimizer state as training starting weights (training_weights/rf-detr-<size>-coco.pth).
+RFDETR_SIZES_DEFAULT = "small"
+RFDETR_LICENSE_URL = "https://raw.githubusercontent.com/roboflow/rf-detr/develop/LICENSE"
+
+
+def fetch_rfdetr(dest: Path, weights_dir: Path, sizes: list[str]) -> int:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    try:
+        import rfdetr  # noqa: F401
+        from trafficwb import rfdetr_train as rt
+    except ImportError as exc:
+        # Exporting RF-DETR needs PyTorch and rfdetr on this machine. Without them the other packs are still written and
+        # the installation offers RF-DETR as "not installed here"; --require-rfdetr makes this an error instead.
+        print(f"warning: RF-DETR skipped: it needs PyTorch and the rfdetr package here ({exc}); "
+              "pip install \"rfdetr[train]\" onnx", file=sys.stderr)
+        return 2
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    for size in sizes:
+        info = rt.SIZES[size]
+        name = f"rf-detr-{size}"
+        slim = weights_dir / rt.weights_name(size)
+        full = weights_dir / f"{name}-released.part"
+        if not slim.exists():
+            print(f"downloading {info['url']}")
+            fetch(info["url"], full)
+            got = hashlib.md5(full.read_bytes()).hexdigest()
+            if got != info["md5"]:
+                full.unlink()
+                print(f"error: checksum mismatch for RF-DETR {size}: {got}", file=sys.stderr)
+                return 1
+            rt.slim_checkpoint(full, slim)
+            full.unlink()
+        print(f"ok {slim}")
+        from importlib.metadata import version as _v
+        version = _v("rfdetr")
+        d = dest / name / version
+        if (d / "model.json").exists():
+            print(f"ok {d}")
+            continue
+        tmp = d.with_name(version + ".partial")
+        tmp.mkdir(parents=True, exist_ok=True)
+        model = rt._model_class(size)(pretrain_weights=str(slim.resolve()), device="cpu")
+        model.export(output_dir=str(tmp / "export"), verbose=False)
+        (tmp / "export").joinpath(next(p.name for p in (tmp / "export").glob("*.onnx"))).replace(tmp / "model.onnx")
+        import shutil
+        shutil.rmtree(tmp / "export", ignore_errors=True)
+        fetch(RFDETR_LICENSE_URL, tmp / "LICENSE")
+        res = info["resolution"]
+        card = {"name": name, "version": version, "task": "vehicle_detection", "sha256": sha256_file(tmp / "model.onnx"),
+                "license": "Apache-2.0 (RF-DETR code and the released Nano, Small and Medium weights; DINOv2 backbone "
+                           "Apache-2.0)",
+                "license_url": RFDETR_LICENSE_URL,
+                "data_note": "Weights trained on COCO 2017 (after Objects365 pre-training). COCO annotations are CC BY 4.0; "
+                             "the underlying Flickr images carry their own terms.",
+                "source": f"https://github.com/roboflow/rf-detr ({info['url']}, MD5 {info['md5']}), exported to ONNX "
+                          f"with rfdetr {version}",
+                "family": "detr", "architecture": "rf-detr", "size": size, "outputs": "boxes_logits",
+                "class_ids": "coco91", "input_size": res,
+                "input": {"colour": "RGB", "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
+                "input_format": f"RGB, stretched to {res}x{res}, ImageNet mean and std",
+                "weights": "model.onnx", "files": {"LICENSE": sha256_file(tmp / "LICENSE")}}
+        (tmp / "model.json").write_text(json.dumps(card, indent=2), encoding="utf-8")
+        tmp.replace(d)
+        print(f"ok {d}")
+    return 0
+
+
 def sha256_file(p: Path) -> str:
     h = hashlib.sha256()
     with open(p, "rb") as f:
@@ -173,6 +244,10 @@ def main(argv=None) -> int:
     ap.add_argument("--dest", default=str(Path(__file__).resolve().parents[1] / "models"))
     ap.add_argument("--training-weights", default=str(Path(__file__).resolve().parents[1] / "training_weights"))
     ap.add_argument("--no-sam3", action="store_true", help="skip SAM 3.1 (about 880 MB), e.g. for unit tests")
+    ap.add_argument("--no-rfdetr", action="store_true", help="skip RF-DETR (needs PyTorch and rfdetr on this machine)")
+    ap.add_argument("--require-rfdetr", action="store_true", help="fail when RF-DETR cannot be exported here")
+    ap.add_argument("--rfdetr-sizes", default=RFDETR_SIZES_DEFAULT,
+                    help="comma-separated RF-DETR sizes to fetch: nano, small, medium (default small)")
     a = ap.parse_args(argv)
     for p in PACKS:
         d = Path(a.dest) / p["name"] / p["version"]
@@ -204,6 +279,10 @@ def main(argv=None) -> int:
         print(f"error: checksum mismatch for {w.name}: {got}", file=sys.stderr)
         return 1
     print(f"ok {w}")
+    if not a.no_rfdetr:
+        r = fetch_rfdetr(Path(a.dest), t, [x.strip() for x in a.rfdetr_sizes.split(",") if x.strip()])
+        if r == 1 or (r == 2 and a.require_rfdetr):
+            return 1
     return 0
 
 

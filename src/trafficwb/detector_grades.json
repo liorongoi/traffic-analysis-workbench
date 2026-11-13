@@ -1,0 +1,87 @@
+{
+ "measured": "13 Nov 2026",
+ "machine": "4 CPU cores, no GPU",
+ "note": "Vehicle AP50 in percent and seconds per image, as LanePulse runs each detector (docs/benchmarks/README.md).",
+ "scenes": [
+  {
+   "key": "street",
+   "label": "Street, ordinary photos",
+   "short": "Street",
+   "set": "COCO val2017, 100 images holding a vehicle"
+  },
+  {
+   "key": "drone",
+   "label": "Drone, daylight",
+   "short": "Drone",
+   "set": "VisDrone2019-DET val, 60 images"
+  },
+  {
+   "key": "thermal",
+   "label": "Drone, thermal",
+   "short": "Thermal",
+   "set": "HIT-UAV test, 100 images"
+  }
+ ],
+ "detectors": {
+  "standard": {
+   "model": "YOLOX-s as released",
+   "ap50": {
+    "street": 67.1,
+    "drone": 48.3,
+    "thermal": 5.7
+   },
+   "seconds": {
+    "street": 0.1,
+    "drone": 0.55,
+    "thermal": 0.09
+   },
+   "trained": {
+    "thermal": 68.4
+   },
+   "trained_note": "YOLOX-s, 6 epochs, 11 min on 4 CPU cores"
+  },
+  "rfdetr": {
+   "model": "RF-DETR Small as released",
+   "ap50": {
+    "street": 74.6,
+    "drone": 59.6,
+    "thermal": 20.9
+   },
+   "seconds": {
+    "street": 0.25,
+    "drone": 1.34,
+    "thermal": 0.31
+   },
+   "trained": {
+    "thermal": 76.5
+   },
+   "trained_note": "RF-DETR Nano, 6 epochs, 45 min on 4 CPU cores"
+  },
+  "sam3": {
+   "model": "SAM 3.1 (W8A16)",
+   "ap50": {
+    "street": 83.1,
+    "drone": 72.3,
+    "thermal": 55.9
+   },
+   "seconds": {
+    "street": 10.6,
+    "drone": 11.8,
+    "thermal": 11.6
+   }
+  },
+  "both": {
+   "model": "YOLOX-s and SAM 3.1, merged",
+   "ap50": {
+    "street": 83.0,
+    "drone": 72.8,
+    "thermal": 55.9
+   },
+   "seconds": {
+    "street": 10.8,
+    "drone": 12.4,
+    "thermal": 12.6
+   }
+  }
+ }
+}

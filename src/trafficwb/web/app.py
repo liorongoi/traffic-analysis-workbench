@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..detect import VEHICLE_CLASSES
+from ..detectors import fast_of, grades as detector_grades, is_rfdetr, rfdetr_info, uses_sam
 from ..change import CONDITIONS, ChangeService
 from ..export import export as run_export
 from ..localtime import to_local
@@ -425,7 +426,9 @@ class TrainBody(BaseModel):
     dataset_id: int | None = None
     datasets: list[DatasetRef] | None = None   # several dataset versions, from this mission or others
     epochs: int = Field(20, ge=1, le=300)
-    start_from: str | None = None     # "coco" (the released YOLOX-s) or "<name>/<version>" of a trained model
+    start_from: str | None = None     # "coco" (the released weights) or "<name>/<version>" of a trained model
+    arch: str = "yolox"               # what to train from the released weights: "yolox" (YOLOX-s) or "rf-detr"
+    size: str | None = None           # RF-DETR only: nano, small or medium (default small)
 
 
 class PromoteBody(BaseModel):
@@ -688,7 +691,12 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def reference(_u: User = Depends(user)):
         return {"countries": TARGET_COUNTRIES, "country_zones": COUNTRY_ZONES, "modes": {k: sorted(v) for k, v in MODES.items()},
                 "zones": sorted(zoneinfo.available_timezones()), "classes": list(VEHICLE_CLASSES), "version": __version__,
-                "sam3": sam_info()}
+                "sam3": sam_info(), "rfdetr": rfdetr_info(data_root), "grades": detector_grades()}
+
+    @app.get("/api/detectors")
+    def detectors(_u: User = Depends(user)):
+        """For the detector picker: what RF-DETR would be here, and how each detector scored on the benchmarks."""
+        return {"rfdetr": rfdetr_info(data_root), "grades": detector_grades()}
 
     @app.get("/api/sam3")
     def sam3_status(_u: User = Depends(user)):
@@ -826,9 +834,11 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
 
     @app.post("/api/missions")
     def mission_create(body: MissionBody, u: User = Depends(user)):
-        if body.detector in ("sam3", "both") and not sam_info()["installed"]:
+        if uses_sam(body.detector) and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""),
                            "Choose the standard detector, or install the full LanePulse package.")
+        if fast_of(body.detector) == "rfdetr" and not body.vehicle_model and not rfdetr_info(data_root)["installed"]:
+            raise ApiError(400, "rfdetr_missing", rfdetr_info(data_root)["reason"], "Choose another detector.")
         if body.vehicle_model and not _saved_or_none(body.vehicle_model):
             raise ApiError(400, "invalid", f"There is no saved model named “{body.vehicle_model}”.")
         try:
@@ -913,8 +923,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "invalid", "SAM 3.1 in video runs every 0.2 to 10 seconds of the recording.")
         if body.video_workers is not None and not (1 <= body.video_workers <= 32):
             raise ApiError(400, "invalid", "Segments side by side must be 1 to 32.")
-        if body.detector in ("sam3", "both") and not sam_info()["installed"]:
+        if uses_sam(body.detector) and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""))
+        if fast_of(body.detector) == "rfdetr" and not cfg.vehicle_model and not rfdetr_info(data_root)["installed"]:
+            raise ApiError(400, "rfdetr_missing", rfdetr_info(data_root)["reason"])
         if jobs.busy(m.id):
             raise ApiError(409, "busy", "Processing is running. Change the detector when it has finished or is cancelled.")
         if body.detector != getattr(cfg, "detector", "standard"):
@@ -1732,10 +1744,19 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         if env["state"] != "ready":
             raise ApiError(400, "no_training", env.get("reason") or "Training is not available here.")
         start = body.start_from or "coco"
+        arch = "rf-detr" if body.arch in ("rf-detr", "rfdetr") else "yolox"
+        if body.arch not in ("yolox", "rf-detr", "rfdetr"):
+            raise ApiError(400, "invalid", "The model to train is YOLOX-s (yolox) or RF-DETR (rf-detr).")
+        size = body.size or "small"
+        if arch == "rf-detr" and not env.get("rfdetr"):
+            raise ApiError(400, "no_training", env.get("rfdetr_reason") or "RF-DETR cannot be trained here.")
         if start == "coco":
-            if not env.get("coco_weights"):
+            if arch == "yolox" and not env.get("coco_weights"):
                 raise ApiError(400, "no_weights", "The YOLOX-s starting weights are not installed here. Install the current "
                                "LanePulse version, or start from a model trained earlier.")
+            if arch == "rf-detr" and size not in (env.get("rfdetr_weights") or []):
+                raise ApiError(400, "no_weights", f"The RF-DETR {size} starting weights are not installed here. Install the "
+                               "current LanePulse version, or start from an RF-DETR model trained earlier.")
             init = "coco"
         else:
             name, _, version = start.partition("/")
@@ -1745,8 +1766,12 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                 raise ApiError(400, "model", str(exc)) from None
             if not (pack.card.get("torch_weights") and (pack.path / pack.card["torch_weights"]).is_file()):
                 raise ApiError(400, "model", f"{name} {pack.version} cannot be trained further (no PyTorch weights). "
-                               "Start from the released YOLOX-s instead.")
+                               "Start from the released weights instead.")
             init = str(pack.path)
+            arch = "rf-detr" if is_rfdetr(pack.card) else "yolox"   # training continues the model's own kind
+            size = pack.card.get("size") or size
+            if arch == "rf-detr" and not env.get("rfdetr"):
+                raise ApiError(400, "no_training", env.get("rfdetr_reason") or "RF-DETR cannot be trained here.")
         other = jobs.training_busy()
         if other:
             raise ApiError(409, "training_busy", "A model is already training on this computer"
@@ -1756,8 +1781,16 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             work.mkdir(parents=True, exist_ok=True)
         except OSError:
             work = None
+        if arch == "rf-detr" and start == "coco":
+            # The released RF-DETR of that size, when installed, is what the new model is compared with afterwards.
+            try:
+                rel = models.find(f"rf-detr-{size}")
+                start = f"{rel.name}/{rel.version}"
+            except models.ModelPackError:
+                pass
         return jobs.start(m.id, kind="train", dataset_id=body.dataset_id, datasets=refs, epochs=body.epochs, init=init,
-                          start_from=start, author=u.username, work_dir=str(work) if work else None).snapshot()
+                          start_from=start, author=u.username, work_dir=str(work) if work else None, arch=arch,
+                          size=size).snapshot()
 
     @app.post("/api/missions/{mission_id}/learning/train/{action}")
     def train_control(action: str, m: Mission = Depends(mission)):
@@ -1790,8 +1823,13 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     # ---------- saved models ----------
     @app.get("/api/models/saved")
     def saved_models(_u: User = Depends(user)):
+        from .. import models
         from ..learning import ModelLibrary
-        return {"saved": ModelLibrary(data_root).saved()}
+        rows = ModelLibrary(data_root).saved()
+        cards = {(c["name"], c["version"]): c for c in models.installed("vehicle_detection")}
+        for r in rows:                      # which detector choice the model belongs to (YOLOX-s or RF-DETR)
+            r["rfdetr"] = is_rfdetr(cards.get((r["model_name"], r["model_version"])) or {"name": r["model_name"]})
+        return {"saved": rows}
 
     @app.post("/api/models/saved")
     def saved_model_add(body: SaveModelBody, u: User = Depends(user)):
