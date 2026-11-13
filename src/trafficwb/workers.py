@@ -1,7 +1,9 @@
 """Workers on other computers (phase 5): pairing codes, the operator's switch, and the worker program.
 
 On the server, the operator turns "other computers may help" on and makes a pairing code on the Workers screen.
-On any other computer with LanePulse installed:
+On any other computer with LanePulse installed, open its "help another computer" launcher (Windows: Start menu
+"LanePulse - help another computer"; Mac: ~/LanePulse/Help another computer.command; Linux server:
+``lanepulse worker``) and give it the server's address and the code, or run it with them:
 
     trafficwb-worker --server http://<server>:8765 --code <pairing code>
 
@@ -268,13 +270,21 @@ def main(argv=None) -> int:
     safe_console()
     ap = argparse.ArgumentParser(prog="trafficwb-worker",
                                  description="Help a LanePulse server analyse video, from this computer.")
-    ap.add_argument("--server", required=True, help="the server's address, e.g. http://192.168.1.20:8765")
-    ap.add_argument("--code", required=True, help="the pairing code from the server's Workers screen")
+    ap.add_argument("--server", help="the server's address, e.g. http://192.168.1.20:8765 (asked when left out)")
+    ap.add_argument("--code", help="the pairing code from the server's Workers screen (asked when left out)")
     ap.add_argument("--name", help="how this computer is listed on the server (default: its name)")
     args = ap.parse_args(argv)
     try:
-        Worker(args.server, args.code, args.name).run()
-    except KeyboardInterrupt:
+        # Opened by double-clicking the "help another computer" launcher: ask for what the command line left out.
+        server = (args.server or input("The LanePulse server's address (from its Workers screen): ")).strip()
+        code = (args.code or input("The pairing code: ")).strip()
+        if not server or not code:
+            print("Both the server's address and a pairing code are needed.")
+            return 2
+        if "://" not in server:
+            server = "http://" + server
+        Worker(server, code, args.name).run()
+    except (KeyboardInterrupt, EOFError):
         pass
     return 0
 

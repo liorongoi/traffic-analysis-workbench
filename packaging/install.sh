@@ -28,6 +28,12 @@ cat > "$T/start.sh" <<EOS
 export TWB_MODELS="$T/models"
 exec "$T/app-$V/bin/trafficwb-web" serve --data "$D" "\$@"
 EOS
-chmod +x "$T/start.sh"
+cat > "$T/worker.sh" <<EOS
+#!/usr/bin/env bash
+# Lets this computer help another LanePulse server: worker.sh --server http://<server>:8765 --code <pairing code>
+export TWB_MODELS="$T/models"
+exec "$T/app-$V/bin/trafficwb-worker" "\$@"
+EOS
+chmod +x "$T/start.sh" "$T/worker.sh"
 echo "$T/app-$V" > "$T/current.txt"
 echo "Installed. Start with $T/start.sh"

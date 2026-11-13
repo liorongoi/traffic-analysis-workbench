@@ -12,17 +12,32 @@ type Status = {
   codes: { id: number; label: string; author: string; created_at: string; revoked_at: string | null }[];
 };
 
+// The helping computer runs the "help another computer" launcher its LanePulse install already has.
+type Os = "windows" | "mac" | "server" | "python";
+const LAUNCHERS: Record<Os, { label: string; run: string; open: string }> = {
+  windows: { label: "Windows", run: `"%LOCALAPPDATA%\\TrafficWorkbench\\help-another-computer.cmd"`,
+    open: "Or open Start menu, LanePulse - help another computer, and paste the address and the code when it asks." },
+  mac: { label: "Mac", run: `~/LanePulse/"Help another computer.command"`,
+    open: "Or double-click Help another computer in the LanePulse folder in your home folder (open the LanePulse app once first)." },
+  server: { label: "Linux server", run: "lanepulse worker", open: "" },
+  python: { label: "Python install (pip)", run: "trafficwb-worker", open: "" },
+};
+const guessOs = (): Os => /Mac/i.test(navigator.platform) ? "mac" : /Win/i.test(navigator.platform) ? "windows" : "server";
+
 export default function Workers() {
   const [st, setSt] = useState<Status | null>(null);
   const [fresh, setFresh] = useState<{ code: string; label: string } | null>(null);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
+  const [os, setOs] = useState<Os>(() => { try { return (localStorage.getItem("twb.worker-os") as Os) || guessOs(); } catch { return guessOs(); } });
   const load = useCallback(() => api("/workers").then(setSt).catch((e) => setMsg({ kind: "err", text: (e as ApiError).message })), []);
   useEffect(() => { load(); const t = setInterval(load, 3000); return () => clearInterval(t); }, [load]);
   if (!st) return <div className="page muted">Loading…</div>;
 
   const act = async (fn: () => Promise<unknown>) => { setMsg(null); try { await fn(); await load(); } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); } };
   const host = st.addresses[0] ?? "<this computer's address>";
-  const command = fresh ? `trafficwb-worker --server http://${host}:${st.port} --code ${fresh.code}` : "";
+  const address = `http://${host}:${st.port}`;
+  const command = fresh ? `${LAUNCHERS[os].run} --server ${address} --code ${fresh.code}` : "";
+  const pickOs = (v: Os) => { setOs(v); try { localStorage.setItem("twb.worker-os", v); } catch { /* kept for this visit only */ } };
   const live = st.codes.filter((c) => !c.revoked_at);
   const addComputer = () => act(async () => {
     const r = await post("/workers/codes", { label: `computer ${st.codes.length + 1}` });
@@ -52,9 +67,16 @@ export default function Workers() {
         {fresh && <div className="msg ok grid" style={{ gap: 6 }}>
           <div>Pairing code for <strong>{fresh.label}</strong>: <span className="mono big-code">{fresh.code}</span>
             <span className="muted"> (shown once)</span></div>
-          <div>On that computer, with LanePulse installed, run:</div>
+          <div className="row">That computer runs LanePulse on
+            <select aria-label="That computer runs" value={os} onChange={(e) => pickOs(e.target.value as Os)}>
+              {(Object.keys(LAUNCHERS) as Os[]).map((k) => <option key={k} value={k}>{LAUNCHERS[k].label}</option>)}
+            </select>. On it, run:</div>
           <div className="row"><code className="mono cmd">{command}</code>
             <button onClick={() => navigator.clipboard?.writeText(command)}>Copy</button></div>
+          {LAUNCHERS[os].open && <div className="muted small">{LAUNCHERS[os].open} The address is <span className="mono">{address}</span>
+            {" "}<button onClick={() => navigator.clipboard?.writeText(address)}>Copy address</button></div>}
+          <div className="muted small">It is the same LanePulse install as this one; nothing else to install. It fetches the
+            mission's model from this server the first time.</div>
         </div>}
         <p className="muted" style={{ margin: 0 }}>Only segments of video missions are shared. A helping computer reads just the part
           of the recording it works on and keeps nothing afterwards. If it stops, its part goes back to the queue after two

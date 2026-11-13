@@ -370,6 +370,15 @@ set TWB_MODELS=$Models
 "$Venv\Scripts\trafficwb-models.exe" import "%PACK%"
 pause
 "@ | Set-Content -Encoding ASCII (Join-Path $Target "import-model.cmd")
+@"
+@echo off
+rem Lets this computer help another LanePulse server analyse long videos. Asks for the server's address and the
+rem pairing code (both on that server's Workers screen) unless they are given: --server http://... --code XXXX-XXXX-XXXX
+title LanePulse - helping another computer
+set TWB_MODELS=$Models
+"$Venv\Scripts\trafficwb-worker.exe" %*
+pause
+"@ | Set-Content -Encoding ASCII (Join-Path $Target "help-another-computer.cmd")
 $training = Join-Path $Bundle "TRAINING.txt"
 if (Test-Path $training) { Copy-Item $training (Join-Path $Target "TRAINING.txt") -Force }
 Write-Host "Installed $($Info.version)."

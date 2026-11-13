@@ -64,6 +64,7 @@ Type: files; Name: "{autoprograms}\Lanemark.url"
 Name: "{autoprograms}\LanePulse"; Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; WorkingDir: "{app}"; IconFilename: "{app}\lanepulse.ico"; Comment: "Open LanePulse"; Flags: runminimized
 Name: "{autodesktop}\LanePulse"; Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; WorkingDir: "{app}"; IconFilename: "{app}\lanepulse.ico"; Comment: "Open LanePulse"; Flags: runminimized; Tasks: desktopicon
 Name: "{autoprograms}\LanePulse - speed check"; Filename: "{app}\speed-check.cmd"; WorkingDir: "{app}"
+Name: "{autoprograms}\LanePulse - help another computer"; Filename: "{app}\help-another-computer.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\lanepulse.ico"
 
 [Run]
 Filename: "powershell.exe"; Parameters: "{#OpenArgs}"; Description: "Open LanePulse now"; Flags: postinstall nowait runhidden skipifsilent; Check: InstallOK
