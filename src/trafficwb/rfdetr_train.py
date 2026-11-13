@@ -141,11 +141,30 @@ def _grey_unreviewed(im: np.ndarray, img: dict, boxes: list[list[float]]) -> np.
     return out
 
 
-def prepare(dataset: Path, work: Path) -> dict:
+def class_map(dataset: Path, init: str = "coco") -> tuple[dict[int, int], dict[int, str]]:
+    """(dataset category -> COCO category id, the slot of RF-DETR's head; COCO 80-class index -> name of a target the
+    operator marked). Targets of their own (categories 7 and up) take over COCO classes traffic analysis never looks
+    for, the same ones YOLOX training uses (own_classes.py), so either model reports them by their own names."""
+    try:
+        from .own_classes import OwnClassError, _init_own, category_map
+    except ImportError:                                  # an installation without marked targets
+        return dict(CAT_TO_COCO91), {}
+    from .detect import COCO91
+    try:
+        m80, own = category_map(Path(dataset), _init_own(str(init)))
+    except OwnClassError as exc:
+        raise TrainError(str(exc)) from None
+    return {c: COCO91[i] for c, i in m80.items()}, own
+
+
+def prepare(dataset: Path, work: Path, cmap: dict[int, int] | None = None, own: dict[int, str] | None = None) -> dict:
     """The exported dataset in the COCO layout RF-DETR reads (train2017, val2017, annotations/instances_*.json), with
     COCO category ids. Returns counts per split."""
+    from .detect import COCO91
     dataset = Path(dataset)
-    cats = [{"id": i, "name": n, "supercategory": "object"} for i, n in sorted(COCO_NAMES.items())]
+    cmap = cmap or CAT_TO_COCO91
+    names = dict(COCO_NAMES) | {COCO91[i]: n for i, n in (own or {}).items()}
+    cats = [{"id": i, "name": n, "supercategory": "object"} for i, n in sorted(names.items())]
     counts = {}
     (work / "annotations").mkdir(parents=True, exist_ok=True)
     for split, folder in (("train", "train2017"), ("val", "val2017")):
@@ -169,7 +188,7 @@ def prepare(dataset: Path, work: Path) -> dict:
             images.append({"id": k, "file_name": name, "width": int(im.shape[1]), "height": int(im.shape[0])})
             for a in mine:
                 x, y, bw, bh = a["bbox"]
-                anns.append({"id": len(anns) + 1, "image_id": k, "category_id": CAT_TO_COCO91.get(a["category_id"], 3),
+                anns.append({"id": len(anns) + 1, "image_id": k, "category_id": cmap.get(a["category_id"], 3),
                              "bbox": [x, y, bw, bh], "area": bw * bh, "iscrowd": 0})
         (work / "annotations" / f"instances_{folder}.json").write_text(
             json.dumps({"images": images, "annotations": anns, "categories": cats}), encoding="utf-8")
@@ -314,7 +333,10 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 20, bat
         start, init_src, size = _init_weights(init, size, work, log, download)
         name = name or f"rf-detr-{size}-tuned"
         data = work / "coco"
-        counts = prepare(dataset, data)
+        cmap, own = class_map(dataset, init)
+        if own:
+            log("Marked targets learnt as their own classes: " + ", ".join(own.values()))
+        counts = prepare(dataset, data, cmap, own)
         if not counts["train"]["images"]:
             raise TrainError("The dataset has no training images.")
         log(f"Training images: {counts['train']['images']} ({counts['train']['boxes']} vehicles), "
@@ -352,7 +374,7 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 20, bat
                   "dataset_files": {f: _sha256(dataset / f) for f in manifest.get("files", []) if (dataset / f).is_file()},
                   "init": init_src, "epochs": epochs, "batch": batch, "lr": lr, "size": size,
                   "device": describe_device(dev), "torch": torch.__version__, "seed": seed, "history": hist,
-                  "seconds": round(time.time() - t0)}
+                  "seconds": round(time.time() - t0), "own_classes": {str(k): v for k, v in sorted(own.items())}}
         try:
             from importlib.metadata import version as _version
             record["rfdetr"] = _version("rfdetr")
@@ -383,13 +405,14 @@ def write_pack(model, checkpoint: Path, out: Path, name: str, version: str, size
     slim_checkpoint(checkpoint, tmp / "model.pth")
     (tmp / "LICENSE").write_text(LICENSE_NOTE, encoding="utf-8")
     res = SIZES[size]["resolution"]
+    own = record.get("own_classes") or {}
     card = {"name": name, "version": version, "task": "vehicle_detection", "sha256": _sha256(tmp / "model.onnx"),
             "license": "Apache-2.0 (RF-DETR code and starting weights); fine-tuned on the mission's own reviewed images",
             "source": f"trafficwb-train (fine-tuned RF-DETR {size})", "family": "detr", "architecture": ARCH,
             "size": size, "outputs": "boxes_logits", "class_ids": "coco91", "input_size": res,
             "input": {"colour": "RGB", "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
             "input_format": f"RGB, stretched to {res}x{res}, ImageNet mean and std",
-            "weights": "model.onnx", "torch_weights": "model.pth",
+            "weights": "model.onnx", "torch_weights": "model.pth", **({"own_classes": own} if own else {}),
             "files": {"model.pth": _sha256(tmp / "model.pth"), "LICENSE": _sha256(tmp / "LICENSE")},
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "training": record}
     (tmp / "model.json").write_text(json.dumps(card, indent=2, ensure_ascii=False), encoding="utf-8")
