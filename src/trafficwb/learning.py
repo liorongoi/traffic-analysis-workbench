@@ -32,7 +32,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from .detect import VEHICLE_CLASSES
+from .detect import COCO_ALIASES, VEHICLE_CLASSES
 from .localtime import to_local
 from .process import RunControl
 from .regions import RegionSet
@@ -61,6 +61,24 @@ ADAPTERS = [
 ]
 
 SPLITS = ("train", "val", "test")
+
+# Classes a model can learn: the five vehicle classes and "person" (COCO class 0). A mission's own class named
+# person, pedestrian, people... is learnt as person; other own classes are found by SAM 3.1 only, so their boxes
+# are neither labels nor background.
+TRAINABLE = (*VEHICLE_CLASSES, "person")
+
+# Frames taken from a reviewed recording (video learning).
+FRAMES_PER_EVENT = 5          # an event's best frame plus up to 4 more spread over its track
+BACKGROUND_EVERY_S = 5.0      # an approved recording: also a frame every 5 s, so empty road is learnt too
+FRAME_MIN_GAP_S = 0.4         # frames closer than this are one
+FRAMES_PER_RECORDING = 300
+
+
+def trainable(cls: str | None) -> str | None:
+    """The class a model learns a label as, or None when it cannot learn it."""
+    if cls in VEHICLE_CLASSES:
+        return cls
+    return "person" if COCO_ALIASES.get(cls or "", cls) == "person" else None
 
 
 def _refs(refs) -> list[tuple[str, int]]:
@@ -106,6 +124,19 @@ def _iou(a, b) -> float:
     return inter / u if u > 0 else 0.0
 
 
+def _between(obs: list[tuple[float, list[float]]], t: float, max_gap: float = 2.0) -> list[float] | None:
+    """A track's box at time t, interpolated between its observations around t (None when they are far apart)."""
+    before = [(tt, b) for tt, b in obs if tt < t]
+    after = [(tt, b) for tt, b in obs if tt > t]
+    if not before or not after:
+        return None
+    (ta, a), (tb, b) = before[-1], after[0]
+    if tb - ta > max_gap:
+        return None
+    w = (t - ta) / (tb - ta)
+    return [round(a[i] + w * (b[i] - a[i]), 2) for i in range(4)]
+
+
 @dataclass
 class ItemLabels:
     source_version_id: int
@@ -122,9 +153,12 @@ class LearningService:
         self.rs = ReviewService(mission)
         self.views = ViewService(mission)
         self.zone = mission.config().iana_zone
+        self.video = mission.input_type == "video"
 
     # ---------- eligibility ----------
     def review_kind(self, vid: int) -> str:
+        if self.video:
+            return self._recording_kind(vid)
         st = self.rs.review_status(vid)
         if st == "approved":
             return "full"
@@ -143,9 +177,9 @@ class LearningService:
             for o in self.rs.objects(vid, include_removed=False):
                 if kind == "partial" and o.correction in (None, "none"):
                     continue            # untouched machine output is not a label in a partial review
-                if o.cls not in VEHICLE_CLASSES:
-                    # a class of the mission's own: the standard detector has no such class, and the area must not
-                    # be taught as background either
+                if trainable(o.cls) is None:
+                    # a class of the mission's own that no model here can learn (SAM 3.1 finds it): the area must
+                    # not be taught as background either
                     ignore.append([round(float(v), 2) for v in o.box])
                     continue
                 pos.append({"box": [round(float(v), 2) for v in o.box], "cls": o.cls, "uid": o.uid,
@@ -160,6 +194,149 @@ class LearningService:
             "SELECT MAX(id) FROM annotation_revision WHERE source_version_id=?", (vid,)).fetchone()[0]
         return ItemLabels(vid, kind, pos, ignore, last)
 
+    # ---------- video: frames of reviewed recordings ----------
+    def _latest_item(self, vid: int) -> int | None:
+        return self.con.execute("SELECT MAX(id) FROM run_item WHERE source_version_id=? AND processing_state='done'",
+                                (vid,)).fetchone()[0]
+
+    def _events(self, vid: int) -> list:
+        from .video_review import VideoService
+        item = self._latest_item(vid)
+        return [e for e in VideoService(self.m).events(vid) if e.run_item_id == item]
+
+    @staticmethod
+    def _reviewed(e) -> bool:
+        return e.status != "pending" or e.cls != e.machine_cls or bool(getattr(e, "fixes", None))
+
+    def recording_approved(self, vid: int) -> bool:
+        r = self.con.execute("SELECT action FROM recording_review WHERE source_version_id=? ORDER BY id DESC LIMIT 1",
+                             (vid,)).fetchone()
+        return bool(r) and r[0] == "approve"
+
+    def _recording_kind(self, vid: int) -> str:
+        evs = self._events(vid)
+        if self.recording_approved(vid) and not any(e.status == "pending" for e in evs):
+            return "full"
+        return "partial" if any(self._reviewed(e) for e in evs) else "none"
+
+    def approve_recording(self, vid: int, author: str, confirm_rest: bool = False) -> dict:
+        """The operator says every target of the recording is an event and every event is decided: its frames may
+        then teach background too (as approving a still image does). With ``confirm_rest``, the events not decided
+        yet are confirmed first, in one step."""
+        if not self.video:
+            raise LearningError("Only a recording can be approved here.")
+        if self._latest_item(vid) is None:
+            raise LearningError("Only an analysed recording can be approved.")
+        if confirm_rest:
+            from .video_review import VideoService
+            svc = VideoService(self.m)
+            for e in self._events(vid):
+                if e.status == "pending":
+                    svc.revise(e.id, "confirm", author, "confirmed when the recording was approved")
+        pending = sum(1 for e in self._events(vid) if e.status == "pending")
+        if pending:
+            raise LearningError(f"{pending} event(s) of this recording are not decided yet. Confirm or reject every "
+                                "event before approving the recording.")
+        self.con.execute("INSERT INTO recording_review(source_version_id,action,author,created_at) VALUES (?,?,?,?)",
+                         (vid, "approve", author, utcnow()))
+        return {"source_version_id": vid, "review": self.review_kind(vid)}
+
+    def reopen_recording(self, vid: int, author: str) -> dict:
+        self.con.execute("INSERT INTO recording_review(source_version_id,action,author,created_at) VALUES (?,?,?,?)",
+                         (vid, "reopen", author, utcnow()))
+        return {"source_version_id": vid, "review": self.review_kind(vid)}
+
+    def video_frames(self, vid: int) -> tuple[str, list[dict]]:
+        """The training frames of one recording and their labels: (review kind, [{t, positives, ignore_boxes}]).
+
+        - A reviewed event (confirmed, duplicate, merged, or given another class) gives its best frame and up to
+          four more spread over its track; its box on each frame is a label of its class.
+        - An approved recording (full review) also gives a frame every 5 s. There, a rejected detection and
+          everything nobody marked is background; a box the tracker saw outside any event, and an event's position
+          on a frame it was not matched on, are ignored (neither label nor background).
+        - Otherwise (partial review) only the reviewed events' boxes are labels; the rest of the frame is ignored.
+        """
+        kind = self.review_kind(vid)
+        if kind not in ("full", "partial"):
+            return kind, []
+        evs = self._events(vid)
+        item = self._latest_item(vid)
+        track_of = {r[0]: r[1] for r in self.con.execute("SELECT id, track_id FROM video_event WHERE run_item_id=?", (item,))}
+        obs: dict[int, list[tuple[float, list[float]]]] = {}
+        for r in self.con.execute(
+                "SELECT o.track_id, o.t, o.x1, o.y1, o.x2, o.y2 FROM track_observation o JOIN track k ON k.id=o.track_id "
+                "WHERE k.run_item_id=? ORDER BY o.t", (item,)):
+            obs.setdefault(r[0], []).append((round(r[1], 6), [round(float(v), 2) for v in r[2:6]]))
+        seen = sorted({t for lst in obs.values() for t, _ in lst})        # frames the analysis looked at
+        for e in evs:                       # a box the operator drew replaces the machine's on that frame
+            if e.fixes:
+                tid = track_of.get(e.id)
+                lst = [o for o in obs.get(tid, []) if not any(abs(o[0] - f["t"]) < 1e-3 for f in e.fixes)]
+                lst += [(round(f["t"], 6), [round(float(v), 2) for v in f["box"]]) for f in e.fixes]
+                obs[tid] = sorted(lst, key=lambda o: o[0])
+        teach = [e for e in evs if e.status != "rejected" and self._reviewed(e)]
+        times: list[float] = []
+        for e in teach:
+            ts = [t for t, _ in obs.get(track_of.get(e.id), []) if e.first_t - 1e-6 <= t <= e.last_t + 1e-6]
+            if not ts:
+                continue
+            # the best frame, then each time the frame farthest from those already taken
+            pick = [next((t for t in ts if abs(t - e.thumb_t) < 1e-3), ts[len(ts) // 2])]
+            while len(pick) < min(FRAMES_PER_EVENT, len(ts)):
+                pick.append(max((t for t in ts if t not in pick), key=lambda t: min(abs(t - q) for q in pick)))
+            times += pick
+        if kind == "full":
+            dur = self.con.execute("SELECT duration_s FROM video_probe WHERE source_version_id=?", (vid,)).fetchone()
+            k = 0.0
+            while dur and dur[0] and k < dur[0]:
+                # a frame the analysis looked at (so every target on it is known) nearest to every 5 s
+                near = min(seen, key=lambda t: abs(t - k)) if seen else None
+                if near is not None and abs(near - k) <= BACKGROUND_EVERY_S / 2:
+                    times.append(near)
+                k += BACKGROUND_EVERY_S
+        # frames the operator drew on come first (the surest labels), then the others kept apart from every one taken
+        must = sorted({round(f["t"], 6) for e in teach for f in e.fixes})
+        chosen = list(must)
+        for t in sorted(set(times) - set(must)):
+            if all(abs(t - c) >= FRAME_MIN_GAP_S for c in chosen):
+                chosen.append(t)
+        chosen.sort()
+        if len(chosen) > FRAMES_PER_RECORDING:
+            step = len(chosen) / FRAMES_PER_RECORDING
+            chosen = [chosen[int(i * step)] for i in range(FRAMES_PER_RECORDING)]
+        by_track = {track_of.get(e.id): e for e in evs}
+        out = []
+        for t in chosen:
+            pos, ign = [], []
+            for tid, lst in obs.items():
+                box = next((b for tt, b in lst if abs(tt - t) < 1e-3), None)
+                e = by_track.get(tid)
+                if e is None:                                  # a track that never became an event
+                    if box is not None and kind == "full":
+                        ign.append(box)
+                    continue
+                alive = e.first_t - 1e-6 <= t <= e.last_t + 1e-6
+                if e.status == "rejected":
+                    continue                                   # background where the recording is approved
+                if not self._reviewed(e):
+                    if box is not None and kind == "full":
+                        ign.append(box)
+                    continue
+                if box is not None and alive:
+                    cls = trainable(e.cls)
+                    if cls is None:
+                        ign.append(box)
+                    else:
+                        pos.append({"box": box, "cls": e.cls, "uid": f"{e.key}@{t:.3f}", "source": "human"})
+                elif alive and kind == "full":
+                    gap = _between(lst, t, float("inf") if e.origin == "human" else 2.0)
+                    if gap is not None:
+                        ign.append(gap)
+                elif box is not None and kind == "full":
+                    ign.append(box)                            # trimmed off the event by the operator: unsure
+            out.append({"t": t, "positives": pos, "ignore_boxes": ign})
+        return kind, out
+
     def _images(self) -> list:
         return self.con.execute(
             "SELECT v.id, v.sha256, v.capture_utc, f.rel_path FROM source_version v JOIN source_file f ON f.id=v.source_file_id "
@@ -170,6 +347,12 @@ class LearningService:
         counts = {"full": 0, "partial": 0, "bulk": 0, "none": 0}
         for r in self._images():
             counts[self.review_kind(r["id"])] += 1
+        if self.video:
+            return {"recordings": counts, "images": counts, "eligible": counts["full"] + counts["partial"],
+                    "rules": {"full": "approved recording: frames of every reviewed event, rejected detections and empty "
+                                      "road taught as background",
+                              "partial": "some events reviewed: frames of those events, their boxes only, the rest ignored",
+                              "none": "no event reviewed: never used"}}
         return {"images": counts, "eligible": counts["full"] + counts["partial"],
                 "rules": {"full": "approved individually: positives and background inside included regions",
                           "partial": "corrected but not approved: corrected objects only, the rest ignored",
@@ -194,6 +377,28 @@ class LearningService:
         h = hashlib.sha256(f"{seed}|{key}".encode()).digest()
         return int.from_bytes(h[:8], "big") / 2 ** 64
 
+    def _samples(self, r) -> list[tuple[ItemLabels, float | None, str]]:
+        """The samples one source gives: a still image is one; a recording gives one per training frame."""
+        if not self.video:
+            return [(self.labels(r["id"]), None, r["sha256"])]
+        kind, frames = self.video_frames(r["id"])
+        if not frames:
+            return [(ItemLabels(r["id"], kind, [], [], None), None, r["sha256"])]
+        return [(ItemLabels(r["id"], kind, f["positives"], f["ignore_boxes"], None), f["t"],
+                 hashlib.sha256(f"{r['sha256']}|{f['t']:.6f}".encode()).hexdigest()) for f in frames]
+
+    def image_of(self, row: dict):
+        """The pixels of a dataset member: the still image, or the recording's frame at its time."""
+        path = self.views._path(row["source_version_id"])
+        if row.get("frame_t") is None:
+            return read_image(path)
+        from .video import frame_at
+        f = frame_at(path, float(row["frame_t"]))
+        if f is None or abs(f.t - float(row["frame_t"])) > 0.05:
+            raise LearningError(f"The frame at {row['frame_t']:.2f} s of {row.get('rel_path') or path.name} cannot be "
+                                "read any more.")
+        return f.image
+
     def create_dataset(self, name: str, author: str, ratios: tuple[float, float, float] = (0.7, 0.15, 0.15),
                        block_days: int = 1, seed: int = 0) -> dict:
         if not name.strip():
@@ -212,20 +417,20 @@ class LearningService:
                 frozen[("vid", str(r[0]))] = "test"
         members, seen_sha, dupes, skipped = [], {}, 0, {"bulk": 0, "none": 0, "no_labels": 0}
         for r in self._images():
-            lab = self.labels(r["id"])
-            if lab.review in ("bulk", "none"):
-                skipped[lab.review] += 1
-                continue
-            if lab.review == "partial" and not lab.positives:
-                skipped["no_labels"] += 1
-                continue
-            if r["sha256"] in seen_sha:
-                dupes += 1            # identical bytes are one sample, kept with the first copy
-                continue
-            seen_sha[r["sha256"]] = r["id"]
-            g = self._group(r, block_days)
-            members.append((r, lab, g))
-        groups = sorted({g for _, _, g in members})
+            for lab, frame_t, sha in self._samples(r):
+                if lab.review in ("bulk", "none"):
+                    skipped[lab.review] += 1
+                    continue
+                if lab.review == "partial" and not lab.positives:
+                    skipped["no_labels"] += 1
+                    continue
+                if sha in seen_sha:
+                    dupes += 1            # identical bytes are one sample, kept with the first copy
+                    continue
+                seen_sha[sha] = r["id"]
+                g = self._group(r, block_days)
+                members.append((r, lab, g, frame_t, sha))
+        groups = sorted({m[2] for m in members})
         split_of = {}
         for g in groups:
             if g in frozen:
@@ -235,6 +440,8 @@ class LearningService:
             split_of[g] = "train" if b < ratios[0] else ("val" if b < ratios[0] + ratios[1] else "test")
         cond = {r[0]: r[1] for r in self.con.execute("SELECT source_version_id, condition FROM image_condition")}
         stats: dict = {"images": len(members), "groups": len(groups), "duplicates_dropped": dupes, "skipped": skipped,
+                       "frames": sum(1 for m in members if m[3] is not None),
+                       "recordings": len({m[0]["id"] for m in members if m[3] is not None}),
                        "splits": {s: {"images": 0, "groups": 0, "objects": 0, "full": 0, "partial": 0} for s in SPLITS},
                        "by_condition": {}, "by_view": {}}
         for g in groups:
@@ -244,9 +451,15 @@ class LearningService:
             did = self.con.execute(
                 "INSERT INTO training_dataset(name,task,params,stats,frozen_test_from,author,created_at) VALUES (?,?,?,?,?,?,?)",
                 (name.strip(), "vehicle_detection", json.dumps({"ratios": list(ratios), "block_days": block_days, "seed": seed,
-                                                                "classes": list(VEHICLE_CLASSES)}),
+                                                                "classes": list(TRAINABLE),
+                                                                "review_marks": self._review_marks(),
+                                                                **({"frames": {"per_event": FRAMES_PER_EVENT,
+                                                                               "background_every_s": BACKGROUND_EVERY_S,
+                                                                               "min_gap_s": FRAME_MIN_GAP_S,
+                                                                               "per_recording": FRAMES_PER_RECORDING}}
+                                                                   if self.video else {})}),
                  "{}", prev[0] if prev else None, author, utcnow())).lastrowid
-            for r, lab, g in members:
+            for r, lab, g, frame_t, sha in members:
                 sp = split_of[g]
                 st = stats["splits"][sp]
                 st["images"] += 1
@@ -256,9 +469,9 @@ class LearningService:
                 stats["by_condition"].setdefault(c, {s: 0 for s in SPLITS})[sp] += 1
                 stats["by_view"].setdefault(g[0], {s: 0 for s in SPLITS})[sp] += 1
                 self.con.execute(
-                    "INSERT INTO dataset_member(dataset_id,source_version_id,sha256,view_key,block,split,review,condition,labels,"
-                    "last_revision_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (did, r["id"], r["sha256"], g[0], g[1], sp, lab.review, cond.get(r["id"]),
+                    "INSERT INTO dataset_member(dataset_id,source_version_id,frame_t,sha256,view_key,block,split,review,"
+                    "condition,labels,last_revision_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (did, r["id"], frame_t, sha, g[0], g[1], sp, lab.review, cond.get(r["id"]),
                      json.dumps({"positives": lab.positives, "ignore_boxes": lab.ignore_boxes}), lab.last_revision_id))
             self.con.execute("UPDATE training_dataset SET stats=? WHERE id=?", (json.dumps(stats), did))
             self.con.execute("COMMIT")
@@ -309,7 +522,7 @@ class LearningService:
         if split:
             q += " AND d.split=?"
             args.append(split)
-        return [dict(r) | {"labels": json.loads(r["labels"])} for r in self.con.execute(q + " ORDER BY d.source_version_id", args)]
+        return [dict(r) | {"labels": json.loads(r["labels"])} for r in self.con.execute(q + " ORDER BY d.source_version_id, d.frame_t", args)]
 
     # ---------- several dataset versions as one ----------
     def _open(self, mission_id: str) -> "LearningService":
@@ -321,16 +534,14 @@ class LearningService:
                 m = self.m.root.open_mission(mission_id)
             except KeyError:
                 raise LearningError("A chosen dataset version belongs to a mission that no longer exists.") from None
-            if m.input_type != "images":
-                raise LearningError("Dataset versions come from still-image missions only.")
             cache[mission_id] = LearningService(m)
         return cache[mission_id]
 
     def all_datasets(self) -> list[dict]:
-        """Dataset versions of every still-image mission on this computer, this mission's first."""
+        """Dataset versions of every mission on this computer (still images and video), this mission's first."""
         out = [d | {"mission_id": self.m.id, "mission": self.m.config().name} for d in self.datasets()]
         for r in self.m.root.missions():
-            if r["id"] == self.m.id or r["input_type"] != "images" or r["state"] != "active":
+            if r["id"] == self.m.id or r["state"] != "active":
                 continue
             try:
                 ls = self._open(r["id"])
@@ -411,7 +622,7 @@ class LearningService:
             final, n = base / f"{stem}_{n}", n + 1
         tmp = final.with_name(final.name + ".partial")
         (tmp / "images").mkdir(parents=True)
-        cats = [{"id": i + 1, "name": c} for i, c in enumerate(VEHICLE_CLASSES)]
+        cats = [{"id": i + 1, "name": c} for i, c in enumerate(TRAINABLE)]
         cid = {c["name"]: c["id"] for c in cats}
         files = []
         multi = len({it["mission_id"] for it in items}) > 1
@@ -421,17 +632,28 @@ class LearningService:
             for it in (i for i in items if i["split"] == split):
                 ls, mrow = it["ls"], it["row"]
                 vid = mrow["source_version_id"]
-                img_id = vid if not multi else len(images) + 1 + 10_000_000 * SPLITS.index(split)
+                frame_t = mrow.get("frame_t")
+                img_id = vid if not multi and frame_t is None else len(images) + 1 + 10_000_000 * (SPLITS.index(split) + 1)
                 src = ls.views._path(vid)
-                ext = src.suffix.lower()
-                name = (f"{ls.m.id[:8]}_" if multi else "") + f"{vid}_{mrow['sha256'][:12]}{ext}"
-                shutil.copy2(src, tmp / "images" / name)
-                img = read_image(src)
+                prefix = f"{ls.m.id[:8]}_" if multi else ""
+                if frame_t is None:
+                    name = prefix + f"{vid}_{mrow['sha256'][:12]}{src.suffix.lower()}"
+                    shutil.copy2(src, tmp / "images" / name)
+                    img = read_image(src)
+                else:                                   # a frame of a recording, written as a still image
+                    import cv2
+                    img = ls.image_of(mrow)
+                    name = prefix + f"{vid}_{int(round(frame_t * 1000)):09d}ms_{mrow['sha256'][:12]}.png"
+                    ok, buf = cv2.imencode(".png", img)
+                    if not ok:
+                        raise LearningError(f"Could not write the frame at {frame_t:.2f} s of {mrow['rel_path']}.")
+                    (tmp / "images" / name).write_bytes(buf.tobytes())
                 view = ls.views.current_view(vid)
                 regions = RegionSet.load(ls.con, view) if view is not None else RegionSet([])
                 images.append({"id": img_id, "file_name": f"images/{name}", "width": int(img.shape[1]),
                                "height": int(img.shape[0]), "mission_id": ls.m.id, "source_version_id": vid,
-                               "sha256": mrow["sha256"], "source_file": mrow["rel_path"], "view": mrow["view_key"],
+                               "sha256": mrow["sha256"], "source_file": mrow["rel_path"], "frame_t": frame_t,
+                               "view": mrow["view_key"],
                                "date_block": mrow["block"], "condition": mrow["condition"], "review": mrow["review"],
                                "unlabelled_area": "background inside included regions" if mrow["review"] == "full" else "ignore",
                                "include_regions": [r.polygon for r in regions.include],
@@ -440,7 +662,7 @@ class LearningService:
                 for p in mrow["labels"]["positives"]:
                     x1, y1, x2, y2 = p["box"]
                     ann_id += 1
-                    anns.append({"id": ann_id, "image_id": img_id, "category_id": cid.get(p["cls"], cid["car"]),
+                    anns.append({"id": ann_id, "image_id": img_id, "category_id": cid.get(trainable(p["cls"]) or "car", cid["car"]),
                                  "bbox": [x1, y1, x2 - x1, y2 - y1], "area": (x2 - x1) * (y2 - y1), "iscrowd": 0,
                                  "label_source": p["source"]})
             f = tmp / f"annotations_{split}.json"
@@ -475,6 +697,10 @@ class LearningService:
             "INSERT INTO evaluation(dataset_id,split,model,state,author,created_at,sources) VALUES (?,?,?,?,?,?,?)",
             (home, split, json.dumps(desc), "running", author, utcnow(),
              json.dumps([{"mission_id": s["mission_id"], "dataset_id": s["dataset_id"]} for s in sources]))).lastrowid
+        # Labels of a class the detector does not look for (people, for a vehicle-only detector) are neither found
+        # nor missed: they are scored as "ignore".
+        looks_for = {trainable(c) for c in (getattr(detector, "classes", None) or {}).values()} - {None} \
+            or set(VEHICLE_CLASSES)
         per_image = []
         try:
             for n, it in enumerate(mem, 1):
@@ -483,11 +709,11 @@ class LearningService:
                 if multi:
                     mrow["view_key"] = f"{ls.m.config().name}: {mrow['view_key']}"
                 vid = mrow["source_version_id"]
-                img = read_image(ls.views._path(vid))
-                dets = [(list(map(float, d.box)), d.cls, float(d.score)) for d in detector.detect(img)]
+                img = ls.image_of(mrow)
+                dets = [(list(map(float, d.box)), trainable(d.cls) or d.cls, float(d.score)) for d in detector.detect(img)]
                 view = ls.views.current_view(vid)
                 regions = RegionSet.load(ls.con, view) if view is not None and ls.views.regions_applicable(view) else RegionSet([])
-                per_image.append(self._score_image(mrow, dets, regions, iou))
+                per_image.append(self._score_image(mrow, dets, regions, iou, looks_for))
                 if progress:
                     progress(n, len(mem))
         except Exception as exc:
@@ -510,10 +736,15 @@ class LearningService:
         return self.evaluation(eid)
 
     @staticmethod
-    def _score_image(mrow: dict, dets, regions: RegionSet, iou: float) -> dict:
+    def _score_image(mrow: dict, dets, regions: RegionSet, iou: float, looks_for: set | None = None) -> dict:
         lab = mrow["labels"]
         full = mrow["review"] == "full"
-        refs = [p for p in lab["positives"] if regions.contains_box(tuple(p["box"]))]
+        looks_for = looks_for or set(VEHICLE_CLASSES)
+        refs = [p | {"cls": trainable(p["cls"]) or p["cls"]} for p in lab["positives"]
+                if regions.contains_box(tuple(p["box"])) and trainable(p["cls"]) in looks_for]
+        ignore = list(lab["ignore_boxes"]) + [p["box"] for p in lab["positives"] if trainable(p["cls"]) not in looks_for]
+        dets = [d for d in dets if d[1] in looks_for]
+        lab = {**lab, "ignore_boxes": ignore}
         preds = sorted([d for d in dets if regions.contains_box(tuple(d[0]))], key=lambda d: -d[2])
         used, scored, tp, cls_ok = set(), [], 0, 0
         for box, cls, score in preds:
@@ -535,7 +766,7 @@ class LearningService:
                 continue                      # an unresolved night candidate: neither right nor wrong
             if full:
                 scored.append((score, 0))     # a false positive only counts where the whole image was reviewed
-        return {"id": mrow["source_version_id"], "full": full, "condition": mrow["condition"] or "unknown",
+        return {"id": mrow["source_version_id"], "frame_t": mrow.get("frame_t"), "full": full, "condition": mrow["condition"] or "unknown",
                 "view": mrow["view_key"], "refs": len(refs), "tp": tp, "fn": len(refs) - tp,
                 "fp": sum(1 for _, t in scored if t == 0), "cls_ok": cls_ok, "scored": scored,
                 "pred_count": len([p for p in preds]), "count_error": (len(preds) - len(refs)) if full else None}
@@ -562,6 +793,35 @@ class LearningService:
             if ev["state"] == "completed" and ev["data_key"] == key and (md.get("name"), md.get("version")) == (name, version):
                 return ev
         return None
+
+    # ---------- Run mode "full auto" ----------
+    _REVIEW_TABLES = (("review_decision", " AND bulk_approval_id IS NULL"), ("annotation_revision", ""),
+                      ("candidate_revision", ""), ("event_revision", ""), ("recording_review", ""))
+
+    def _review_marks(self) -> dict:
+        return {t: self.con.execute(f"SELECT COALESCE(MAX(id), 0) FROM {t}").fetchone()[0] for t, _ in self._REVIEW_TABLES}
+
+    def reviews_since_last_dataset(self) -> int:
+        """Operator decisions (on images, objects, night candidates, video events and recordings) made since the
+        newest dataset version was frozen: the automatic loop starts a round when enough have built up."""
+        last = self.con.execute("SELECT params, created_at FROM training_dataset ORDER BY id DESC LIMIT 1").fetchone()
+        marks = json.loads(last["params"]).get("review_marks") if last else None
+        n = 0
+        for table, extra in self._REVIEW_TABLES:
+            if marks is not None:
+                q, a = f"SELECT COUNT(*) FROM {table} WHERE id > ?{extra}", (marks.get(table, 0),)
+            else:
+                q, a = f"SELECT COUNT(*) FROM {table} WHERE created_at > ?{extra}", (last["created_at"] if last else "",)
+            n += self.con.execute(q, a).fetchone()[0]
+        return n
+
+    def auto_log(self, action: str, **detail) -> None:
+        self.con.execute("INSERT INTO auto_learning_log(action,detail,created_at) VALUES (?,?,?)",
+                         (action, json.dumps(detail, ensure_ascii=False), utcnow()))
+
+    def auto_history(self, limit: int = 30) -> list[dict]:
+        return [{"id": r["id"], "action": r["action"], "detail": json.loads(r["detail"]), "created_at": r["created_at"]}
+                for r in self.con.execute("SELECT * FROM auto_learning_log ORDER BY id DESC LIMIT ?", (limit,))]
 
     # ---------- training rounds ----------
     def start_training_run(self, sources, start_from: str, epochs: int, author: str) -> int:

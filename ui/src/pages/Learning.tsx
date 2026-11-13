@@ -124,6 +124,22 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
   const dataLabel = (ev: any) => (ev.sources as Ref[]).map((r) => dsLabel(s, missionId, r)).join(" + ");
   return (
     <div className="grid" style={{ gap: 10 }}>
+      <RunModeCard s={s} missionId={missionId} act={act} />
+      {s.video ? (
+      <div className="card">
+        <h2 style={{ marginTop: 0 }}>Recordings that can teach a model</h2>
+        <div className="grid cols-4">
+          <div className="card stat"><div className="n">{e.recordings.full}</div><div className="l">Approved: full labels and background</div></div>
+          <div className="card stat"><div className="n">{e.recordings.partial}</div><div className="l">Some events reviewed: those events only</div></div>
+          <div className="card stat"><div className="n">{e.recordings.none}</div><div className="l">Not reviewed: never used</div></div>
+        </div>
+        <p className="muted" style={{ marginBottom: 0 }}>
+          Each reviewed event gives its best frame and up to four more along its track. An approved recording (Events tab) also
+          gives a frame every 5 seconds, and there the empty road and the rejected detections count as “nothing here”. People
+          are learnt too; classes only SAM 3.1 finds are left out. Frames of one camera view and day always stay on one side
+          of the train/test split.
+        </p>
+      </div>) : (
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Images that can teach a model</h2>
         <div className="grid cols-4">
@@ -137,7 +153,7 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
           rest of the road there counts as “no vehicle”. Where you only corrected some objects, only those are used and the
           rest of the image is ignored. Unresolved night candidates are never counted as background.
         </p>
-      </div>
+      </div>)}
 
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Dataset versions</h2>
@@ -152,7 +168,7 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
           <button className="primary" disabled={!name.trim() || e.eligible === 0} onClick={() => act(() => {
             const r = ratios.split("/").map((x) => Number(x) / 100);
             return post(`/missions/${missionId}/learning/datasets`, { name, ratios: r, block_days: blockDays });
-          }, (r) => { setName(""); return `Dataset version “${r.name}” frozen: ${r.stats.images} images in ${r.stats.groups} groups.`; })}>Freeze a new version</button>
+          }, (r) => { setName(""); return `Dataset version “${r.name}” frozen: ${r.stats.images} ${r.stats.frames ? "frames" : "images"} in ${r.stats.groups} groups.`; })}>Freeze a new version</button>
         </div>
         <p className="muted">Images are split by camera view and date block, so frames of one view on one day never sit on both
           sides. Groups that were once in a test set stay in test in every later version.</p>
@@ -541,4 +557,89 @@ function SavedModelsCard({ s, missionId, act }: { s: any; missionId: string; act
         </div>)}
     </div>
   );
+}
+
+/** Run mode: the operator decides each step, or the automatic loop runs rounds and adopts a better model by itself. */
+function RunModeCard({ s, missionId, act }: { s: any; missionId: string; act: Act }) {
+  const a = s.auto ?? { run_mode: "manual", auto_min_reviews: 20, auto_epochs: 30, new_reviews: 0, history: [] };
+  const [mode, setMode] = useState<string>(a.run_mode);
+  const [need, setNeed] = useState<number>(a.auto_min_reviews);
+  const [epochs, setEpochs] = useState<number>(a.auto_epochs);
+  const [fresh, setFresh] = useState<boolean>(!!a.analyse_new);
+  const reset = () => { setMode(a.run_mode); setNeed(a.auto_min_reviews); setEpochs(a.auto_epochs); setFresh(!!a.analyse_new); };
+  useEffect(reset, [a.run_mode, a.auto_min_reviews, a.auto_epochs, a.analyse_new]);
+  const changed = mode !== a.run_mode || need !== a.auto_min_reviews || epochs !== a.auto_epochs || fresh !== !!a.analyse_new;
+  const save = () => act(() => api(`/missions/${missionId}/run-mode`, { method: "PUT", body: {
+    run_mode: mode, auto_min_reviews: need, auto_epochs: epochs, ...(s.video ? { analyse_new: fresh } : {}) } }),
+    (r) => (r.run_mode === "auto" ? `Full auto is on. ${AUTO_STATE[r.status?.state] ?? ""}` : "Manual decisions: nothing trains or changes model by itself.")
+      + (s.video ? (r.analyse_new || r.run_mode === "auto" ? " New videos in the input folder are analysed as they arrive, with this mission's model."
+        : " New videos wait in the catalog until you tick them.") : ""));
+  return (
+    <div className="card runmode">
+      <h2 style={{ marginTop: 0 }}>Run mode</h2>
+      <div className="seg" role="radiogroup" aria-label="Run mode">
+        {[["manual", "Manual decisions", "You freeze datasets, train, compare and choose the model."],
+          ["auto", "Full auto", "Rounds run by themselves; a new model is used only if it did better."]].map(([k, t, d]) => (
+          <button key={k} role="radio" aria-checked={mode === k} className={mode === k ? "on" : ""} onClick={() => setMode(k)}>
+            <strong>{t}</strong><small>{d}</small></button>))}
+      </div>
+      {mode === "auto" && (
+        <div className="row" style={{ marginTop: 8 }}>
+          <label>Start a round after
+            <select value={need} onChange={(e) => setNeed(Number(e.target.value))}>
+              {withValue([5, 10, 20, 50, 100, 200, 500], need).map((n) => <option key={n} value={n}>{n} new review decisions</option>)}
+            </select></label>
+          <label>Each round trains
+            <select value={epochs} onChange={(e) => setEpochs(Number(e.target.value))}>
+              {withValue([10, 20, 30, 50, 100], epochs).map((n) => <option key={n} value={n}>{n} epochs{n === 30 ? " (recommended)" : ""}</option>)}
+            </select></label>
+        </div>)}
+      {s.video && (
+        <div className="row" style={{ marginTop: 8 }}>
+          <label>New videos in the input folder
+            <select value={mode === "auto" || fresh ? "auto" : "wait"} disabled={mode === "auto"} onChange={(e) => setFresh(e.target.value === "auto")}>
+              <option value="auto">Analyse them as they arrive, with this mission's model</option>
+              <option value="wait">Wait until I tick them in the catalog</option>
+            </select></label>
+          {mode === "auto" && <span className="muted small">Always so in full auto.</span>}
+        </div>)}
+      {mode === "auto" && <p className="muted">In full auto, once enough new decisions have built up (confirmed or rejected events,
+        approved images or recordings, corrected boxes), a dataset version is frozen, the model this mission uses is trained further
+        and both are tested on the same test images. The mission switches to the new model only if it scored better; otherwise
+        it keeps its model and the data carries over to the next round. The model in production use for other missions never
+        changes by itself. To undo a switch, choose the earlier model under Saved models.</p>}
+      {a.run_mode === "auto" && !changed && <p><strong>{a.new_reviews}</strong> of {a.auto_min_reviews} new decisions toward the next round.</p>}
+      {changed && <div className="row"><button className="primary" onClick={save}>Save run mode</button>
+        <button onClick={reset}>Cancel</button></div>}
+      {a.history.length > 0 && (
+        <details style={{ marginTop: 8 }}>
+          <summary>What the automatic loop did ({a.history.length})</summary>
+          <table className="t"><thead><tr><th>When (UTC)</th><th>What</th></tr></thead>
+            <tbody>{a.history.map((h: any) => <tr key={h.id}><td className="mono">{h.created_at.replace("T", " ").replace("Z", "")}</td><td>{autoText(h)}</td></tr>)}</tbody></table>
+        </details>)}
+    </div>
+  );
+}
+
+/** The choices, plus the value saved earlier when it is not one of them. */
+const withValue = (opts: number[], v: number) => (opts.includes(v) ? opts : [...opts, v].sort((a, b) => a - b));
+
+const AUTO_STATE: Record<string, string> = {
+  waiting: "It waits for more review decisions before the first round.", busy: "It starts a round when the current job ends.",
+  blocked: "Training is not available on this computer yet; see the training card.", training: "A round has started.",
+  skipped: "The new dataset version has no training frames yet.", failed: "The last step failed; see what the loop did.",
+};
+
+function autoText(h: any): string {
+  const d = h.detail ?? {};
+  switch (h.action) {
+    case "mode": return d.run_mode === "auto" ? `Full auto turned on by ${d.author}` : `Manual decisions chosen by ${d.author}`;
+    case "waiting": return `Waiting: ${d.reason}`;
+    case "train": return `Round started on dataset version ${d.dataset_id} (${d.epochs} epochs, from ${d.start_from === "coco" ? "the released YOLOX-s" : d.start_from})`;
+    case "adopted": return `Better: the mission now uses “${d.saved_as}”${d.previous_model ? ` instead of “${d.previous_model}”` : ""}`;
+    case "kept": return `Kept the model in use: ${d.reason}`;
+    case "skipped": return `Skipped: ${d.reason}`;
+    case "failed": return `Failed (${d.step}): ${d.reason}`;
+    default: return h.action;
+  }
 }

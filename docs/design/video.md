@@ -80,6 +80,11 @@ Machine events are never changed. Each operator action is an appended revision, 
 | set class | Operator class; the machine class stays in the export |
 | merge into | This event joins another event of the same recording; the target's interval grows to cover both |
 | split at | The event is exported as parts, one row per part; the split time snaps to a frame |
+| set box / clear box | The operator's box on one frame replaces the machine's box on that frame (and extends the event's interval if outside it); clear box takes it back |
+
+A target the analysis missed is added as an operator event (key H-nnnn, its track marked `human`), confirmed, with the box drawn on one frame. Boxes drawn on other frames extend it; between two of them its box is interpolated. It counts like any other event. Only the newest analysis of a recording is listed and counted.
+
+For learning, a box the operator drew is a reviewed label and its frame is always taken as a training frame. Between two drawn boxes of an operator event, the interpolated box is ignored (neither label nor background) on an approved recording.
 
 ## Clips
 
@@ -94,15 +99,34 @@ Machine events are never changed. Each operator action is an appended revision, 
 - Rejected, duplicate and merged events are left out and counted.
 - Time limits and light conditions are judged at the event start. Analysis regions are not applied to video in this version, and the summary says so.
 
+## Catalog
+
+- The mission's overview lists every video of the source folders with a thumbnail, length, picture size, start and status. Opening it scans for new files (nothing is analysed).
+- Videos not analysed yet are ticked; "Analyse N videos" runs one job over exactly the ticked ones. Ticking an analysed video analyses it again; its newest analysis is the one that counts.
+- Each analysed video has its own results tab on the Events tab (`#/m/<id>/events/rec-<video id>`), next to "All videos".
+
+## Merged recordings (parts of one recording)
+
+- A camera that splits its files, or a recording cut up before, gives several videos of one recording. The catalog suggests them: in one folder, each video starting where the one before ends (within 2 s, from the file-name start and the length), or names that differ only by a part number (`_001`, `-2`, ` (3)`, `part4`, GoPro chapters `GH01xxxx`, `GH02xxxx`). "Merge into one" confirms a suggestion; ticking videos and "Merge the N ticked videos" merges any. "Separate" undoes it; analyses stay.
+- The parts are ordered by start time, else part number, else name. Ticking one part analyses all of its parts, in order, in one job.
+- Across each cut, an event that ends within 1 s of the end of a part and one that starts within 1 s of the start of the next part, of the same family, with boxes that overlap or nearly touch, are one target: the later event "continues" the earlier one and is not counted again (`video_groups.links`). Each event continues at most one and is continued by at most one.
+- A merged recording has one results tab and one count; its events list says which file each event is in.
+
+## New videos
+
+"New videos in the input folder" (Learning tab, Run mode card): analyse them as they arrive, with the mission's model (the saved model chosen for the mission, else the one in production use), or wait until they are ticked in the catalog. Full auto always analyses them as they arrive, so a model it adopts is used for the next videos with no step from the operator. Videos already waiting are analysed when the setting is turned on. The watch resumes after a restart.
+
 ## Player
 
-- The browser plays the original file (HTTP range requests). The tracked box of the selected event is drawn over the video at the nearest analysed frame.
+- `#/m/<id>/events/play-<video id>` plays a whole recording with every event's box drawn over it: the box on the nearest analysed frame, blended between frames across short gaps. Line style and a letter say what a box is (M machine, H added or redrawn by the operator; dashed when confirmed, dotted when rejected). A timeline under the video shows each event as a bar; clicking it picks the event and goes to it.
+- Reviewing there is the still-image flow: click a box to pick its event; C confirm and X reject (then on to the next event not reviewed), 1–9 class, J/K next or previous event to review, drag on the paused picture to redraw the picked event's box on that frame, B then drag to add a missed target, A approve the recording for learning (confirming the events left), Space play or pause, ←/→ one frame.
+- The browser plays the original file (HTTP range requests). The event page draws the tracked box of its event over the video at the nearest analysed frame.
 - If the browser cannot play the codec (for example H.265 in some browsers), the page switches to frames decoded on the workstation, one at a time, with a slider and step buttons.
 
 ## Not in this version
 
 - Night light tracking and analysis regions for video.
-- Learning from video, segments on other computers and appearance re-identification: see the phased plan.
+- Segments on other computers and appearance re-identification: see the phased plan. Learning from video: see `learning.md`.
 - Moving cameras: lines and areas drawn on a moving camera, and speed in km/h.
 - Plates in video.
 - Detecting slow camera movement (pan/zoom) as a view change.

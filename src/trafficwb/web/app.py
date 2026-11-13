@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import time
@@ -74,6 +75,7 @@ class MissionBody(BaseModel):
     sam3_interval_s: float | None = None   # video: seconds between SAM 3.1 frames (None: 1 s)
     camera: str = "fixed"                  # video: fixed | moving (PTZ, vehicle, drone, body-worn)
     video_workers: int | None = None       # video: segments analysed side by side (None: 1)
+    run_mode: str = "manual"               # learning: manual decisions | auto
 
     def config(self) -> MissionConfig:
         d = self.model_dump()
@@ -88,6 +90,21 @@ class DetectorBody(BaseModel):
     sam3_interval_s: float | None = None   # video: seconds between SAM 3.1 frames; None leaves it as it is
     camera: str | None = None              # video: fixed | moving; None leaves it as it is
     video_workers: int | None = None       # video: segments analysed side by side; None leaves it as it is
+
+
+class RunModeBody(BaseModel):
+    run_mode: str                          # manual | auto
+    auto_min_reviews: int | None = Field(None, ge=1, le=100000)
+    auto_epochs: int | None = Field(None, ge=1, le=500)
+    analyse_new: bool | None = None        # video: analyse new videos in the input folder with the mission's model
+
+
+class AnalyseBody(BaseModel):
+    version_ids: list[int]                 # the videos ticked in the catalog
+
+
+class RecordingReviewBody(BaseModel):
+    action: str                            # approve | confirm_rest_and_approve | reopen
 
 
 class VehicleModelBody(BaseModel):
@@ -202,6 +219,14 @@ class ReviseBody(BaseModel):
     cls: str | None = None
     target: int | None = None
     t: float | None = None
+    box: list[float] | None = None
+
+
+class AddTargetBody(BaseModel):
+    t: float = Field(..., ge=0)
+    box: list[float]
+    cls: str
+    note: str | None = None
 
 
 class PlateReviseBody(BaseModel):
@@ -483,6 +508,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     async def lifespan(_app):
         if start_monitoring:
             jobs.resume_monitoring()  # monitoring survives restarts (MIS-07)
+            jobs.start_auto_loop()    # missions in Run mode "full auto" learn on their own
         if backups:
             backups.start()
         yield
@@ -746,7 +772,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         if cfg.processing != "continuous":
             raise ApiError(400, "one_time", "Monitoring applies to continuous missions only.")
         m.update_config(u.username, "monitoring " + ("on" if body.enabled else "off"), monitoring_enabled=body.enabled)
-        jobs.set_monitoring(m.id, body.enabled)
+        jobs.watch_new_videos(m.id)
         return {"enabled": body.enabled}
 
     @app.put("/api/missions/{mission_id}/sam3-words")
@@ -1424,9 +1450,16 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     # ---------- learning ----------
     def _learn(m: Mission):
         from ..learning import LearningService
-        if m.input_type != "images":
-            raise ApiError(400, "not_images", "Training datasets are built from reviewed still images only, for now.")
         return LearningService(m)
+
+    def _auto_soon(mission_id: str) -> None:
+        """After a review decision, let a mission in full auto check whether a round is due (in the background)."""
+        def go():
+            try:
+                jobs.auto_learn(mission_id)
+            except Exception:
+                pass
+        threading.Thread(target=go, name="auto-learning-check", daemon=True).start()
 
     def _learn_call(fn):
         from ..learning import LearningError
@@ -1451,13 +1484,57 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         saved = ModelLibrary(data_root).saved()
         by_pack = {(x["model_name"], x["model_version"]): x["name"] for x in saved}
         installed = [md | {"saved_as": by_pack.get((md["name"], md["version"]))} for md in models.installed("vehicle_detection")]
+        cfg = m.config()
+        auto = {"run_mode": cfg.run_mode, "auto_min_reviews": cfg.auto_min_reviews, "auto_epochs": cfg.auto_epochs,
+                "analyse_new": cfg.analyse_new, "new_reviews": ls.reviews_since_last_dataset(), "history": ls.auto_history()}
         return {"in_use": in_use, "eligibility": ls.eligibility(), "datasets": ls.datasets(), "evaluations": ls.evaluations(),
+                "auto": auto, "video": m.input_type == "video",
                 "all_datasets": ls.all_datasets(), "training_runs": ls.training_runs(), "carry_over": ls.carry_over(),
                 "saved_models": saved, "mission_model": getattr(m.config(), "vehicle_model", None),
                 "adapters": ADAPTERS, "models": installed,
                 "production": prod, "history": reg.history("vehicle_detection")[:20],
                 "training": {**training_env.status(), "busy_mission": tj.mission_id if tj else None,
                              "job": (lambda j: j.snapshot() if j else None)(jobs.training_job(m.id))}}
+
+    @app.put("/api/missions/{mission_id}/run-mode")
+    def run_mode_set(body: RunModeBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Manual decisions (the operator builds datasets, trains and chooses the model) or full auto (the loop does
+        it and adopts a new model for this mission only when it did better)."""
+        from ..store import RUN_MODES
+        if body.run_mode not in RUN_MODES:
+            raise ApiError(400, "invalid", "Run mode must be manual or auto.")
+        cfg = m.config()
+        changes = {k: v for k, v in (("run_mode", body.run_mode), ("auto_min_reviews", body.auto_min_reviews),
+                                     ("auto_epochs", body.auto_epochs), ("analyse_new", body.analyse_new))
+                   if v is not None and getattr(cfg, k) != v}
+        if changes:
+            what = ("run mode set to " + ("full auto" if body.run_mode == "auto" else "manual decisions")
+                    if "run_mode" in changes else "automatic learning settings changed")
+            m.update_config(u.username, what, **changes)
+            from ..learning import LearningService
+            LearningService(m).auto_log("mode", run_mode=body.run_mode, author=u.username, **{
+                k: v for k, v in changes.items() if k != "run_mode"})
+        status = jobs.auto_learn(m.id) if body.run_mode == "auto" else {"state": "manual"}
+        jobs.watch_new_videos(m.id)
+        c2 = m.config()
+        return {"run_mode": c2.run_mode, "auto_min_reviews": c2.auto_min_reviews, "auto_epochs": c2.auto_epochs,
+                "analyse_new": c2.analyse_new,
+                "status": {k: v for k, v in status.items() if k != "job"}}
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/review")
+    def recording_review(version_id: int, body: RecordingReviewBody, m: Mission = Depends(mission),
+                         u: User = Depends(user)):
+        """Approve a recording for learning (every target is an event and every event is decided), or reopen it."""
+        ls = _learn(m)
+        if body.action in ("approve", "confirm_rest_and_approve"):
+            out = _learn_call(lambda: ls.approve_recording(version_id, u.username,
+                                                           confirm_rest=body.action == "confirm_rest_and_approve"))
+        elif body.action == "reopen":
+            out = _learn_call(lambda: ls.reopen_recording(version_id, u.username))
+        else:
+            raise ApiError(400, "invalid", "Action must be approve, confirm_rest_and_approve or reopen.")
+        _auto_soon(m.id)
+        return out
 
     @app.post("/api/missions/{mission_id}/learning/datasets")
     def dataset_create(body: DatasetBody, m: Mission = Depends(mission), u: User = Depends(user)):
@@ -1645,9 +1722,72 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         d["parts"] = e.parts
         return d
 
+    # ---------- video catalog ----------
+    def _catalog(m: Mission):
+        from ..video_catalog import VideoCatalog
+        if m.input_type != "video":
+            raise ApiError(400, "not_video", "The catalog lists the videos of a video mission.")
+        return VideoCatalog(m)
+
+    @app.get("/api/missions/{mission_id}/catalog")
+    def catalog_list(refresh: bool = True, m: Mission = Depends(mission)):
+        """Every video in the source folders with its details; looks for new files first unless a job is running."""
+        cat = _catalog(m)
+        if refresh and not jobs.busy(m.id):
+            cat.refresh(stability_seconds=stability_seconds)
+        return cat.overview() | {"busy": jobs.busy(m.id)}
+
+    @app.post("/api/missions/{mission_id}/catalog/merge")
+    def catalog_merge(body: AnalyseBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Merge videos that are parts of one recording: one job, a target crossing a cut counted once, one tab."""
+        from ..video_catalog import CatalogError
+        try:
+            return _catalog(m).merge(body.version_ids, u.username)
+        except CatalogError as exc:
+            raise ApiError(400, "catalog", str(exc)) from None
+
+    @app.delete("/api/missions/{mission_id}/catalog/groups/{group_id}")
+    def catalog_separate(group_id: int, m: Mission = Depends(mission)):
+        """Separate a merged recording into its videos again (their analyses stay)."""
+        from ..video_catalog import CatalogError
+        try:
+            _catalog(m).separate(group_id)
+        except CatalogError as exc:
+            raise ApiError(400, "catalog", str(exc)) from None
+        return {"ok": True}
+
+    @app.post("/api/missions/{mission_id}/catalog/analyse")
+    def catalog_analyse(body: AnalyseBody, m: Mission = Depends(mission)):
+        """Analyse exactly the ticked videos, in one job."""
+        from ..video_catalog import CatalogError
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "A job is running for this mission. Wait for it or cancel it first.")
+        cat = _catalog(m)
+        try:
+            ids = cat.queue(body.version_ids)
+        except CatalogError as exc:
+            raise ApiError(400, "catalog", str(exc)) from None
+        return jobs.start(m.id, kind="process", only=ids).snapshot()
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/thumb")
+    def recording_thumb(version_id: int, h: int = 96, m: Mission = Depends(mission)):
+        from ..video_catalog import CatalogError
+        cat = _catalog(m)
+        try:
+            data = cat.thumbnail(version_id, max(48, min(int(h), 360)))
+        except (CatalogError, TypeError) as exc:
+            raise ApiError(404, "no_thumb", str(exc)) from None
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
     @app.get("/api/missions/{mission_id}/recordings")
     def recordings(m: Mission = Depends(mission)):
-        return {"recordings": _video(m).recordings()}
+        from ..learning import LearningService
+        from ..video_groups import Groups
+        ls = LearningService(m)
+        return {"recordings": [r | {"review": ls.review_kind(r["id"]), "approved": ls.recording_approved(r["id"]),
+                                    "pending": sum(1 for e in ls._events(r["id"]) if e.status == "pending")}
+                               for r in _video(m).recordings()],
+                "groups": Groups(m).all()}
 
     @app.put("/api/missions/{mission_id}/recordings/{version_id}/start-time")
     def recording_start_time(version_id: int, body: VideoStartBody, m: Mission = Depends(mission), u: User = Depends(user)):
@@ -1681,15 +1821,17 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
 
     @app.get("/api/missions/{mission_id}/events")
     def events(m: Mission = Depends(mission), version_id: int | None = None, status: str | None = None,
-               flag: str | None = None):
+               flag: str | None = None, group_id: int | None = None):
         svc = _video(m)
-        return {"events": [_event_dict(e) for e in svc.events(version_id, status, flag)], "classes": svc.classes()}
+        evs = _video_call(lambda: svc.events(version_id, status, flag, group_id=group_id))
+        return {"events": [_event_dict(e) for e in evs], "classes": svc.classes()}
 
     @app.get("/api/missions/{mission_id}/counts")
     def counts(m: Mission = Depends(mission), version_id: int | None = None,
-               bucket_s: int = Query(60, ge=10, le=3600)):
+               bucket_s: int = Query(60, ge=10, le=3600), group_id: int | None = None):
         """Unique targets per class (one per track), per recording and for the mission, before and after review."""
-        return _video(m).counts(version_id, bucket_s)
+        svc = _video(m)
+        return _video_call(lambda: svc.counts(version_id, bucket_s, group_id=group_id))
 
     @app.get("/api/missions/{mission_id}/events/{event_id}")
     def event_get(event_id: int, m: Mission = Depends(mission)):
@@ -1711,6 +1853,29 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             e = _video_call(lambda: svc.revise(event_id, body.action, u.username, body.note, **payload))
         except KeyError as exc:
             raise ApiError(400, "video", f"Missing field: {exc.args[0]}") from None
+        if getattr(m.config(), "run_mode", "manual") == "auto":
+            _auto_soon(m.id)
+        return _event_dict(e)
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/overlay")
+    def recording_overlay(version_id: int, m: Mission = Depends(mission)):
+        """The player's data: every event of the recording's newest analysis with its boxes by time."""
+        svc = _video(m)
+        out = _video_call(lambda: svc.overlay(version_id))
+        from ..learning import LearningService
+        ls = LearningService(m)
+        out["recording"] |= {"review": ls.review_kind(version_id), "approved": ls.recording_approved(version_id),
+                             "pending": sum(1 for e in out["events"] if e["status"] == "pending")}
+        return out
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/targets")
+    def recording_add_target(version_id: int, body: AddTargetBody, m: Mission = Depends(mission),
+                             u: User = Depends(user)):
+        """A target the analysis missed, drawn on one frame: a new confirmed event of the operator's."""
+        svc = _video(m)
+        e = _video_call(lambda: svc.add_target(version_id, body.t, body.box, body.cls, u.username, body.note))
+        if getattr(m.config(), "run_mode", "manual") == "auto":
+            _auto_soon(m.id)
         return _event_dict(e)
 
     @app.post("/api/missions/{mission_id}/events/{event_id}/clip")
