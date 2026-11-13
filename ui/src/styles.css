@@ -515,6 +515,12 @@ a.play-link { white-space: nowrap; font-weight: 600; font-size: 12.5px; }
 .badge.part { font-size: 11px; padding: 1px 6px; background: var(--accent-soft, rgba(74, 163, 255, 0.18)); }
 button.linkish { background: none; border: none; padding: 0; color: var(--accent, #4aa3ff); cursor: pointer; font-weight: 600; }
 
+/* ---------- workers on other computers ---------- */
+.workers .big-code { font-size: 18px; font-weight: 700; letter-spacing: 1px; }
+.workers code.cmd { display: block; flex: 1; padding: 8px 10px; border-radius: 6px; background: rgba(127, 127, 127, 0.12); overflow-x: auto; white-space: nowrap; }
+.workers .join-how { flex-wrap: wrap; gap: 6px; }
+.workers .asking { border-left: 3px solid var(--accent, #3b82f6); }
+
 /* Pick-from-list controls (components/Pick.tsx) */
 .namepick, .zonepick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .namepick > input { min-width: 200px; }

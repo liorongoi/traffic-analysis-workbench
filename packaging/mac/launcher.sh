@@ -114,6 +114,15 @@ Z="${Z%\'}"; Z="${Z#\'}"; Z="${Z%% }"; Z="${Z//\\ / }"
   --models "$H/models" import "$Z"
 read -r -p "Press Return to close."
 CMD
-chmod +x "$HOME_DIR/Stop LanePulse.command" "$HOME_DIR/Import Model.command"
+cat > "$HOME_DIR/Help another computer.command" <<'CMD'
+#!/bin/bash
+# Lets this Mac help another LanePulse server analyse long videos. Asks for the server's address and the pairing
+# code (both on that server's Workers screen) unless they are given: --server http://... --code XXXX-XXXX-XXXX
+H="$(cd "$(dirname "$0")" && pwd)"
+printf '\033]0;LanePulse - helping another computer\007'
+TWB_MODELS="$H/models" "$H/runtime/python/bin/python3" -m trafficwb.workers "$@"
+read -r -p "Press Return to close."
+CMD
+chmod +x "$HOME_DIR/Stop LanePulse.command" "$HOME_DIR/Import Model.command" "$HOME_DIR/Help another computer.command"
 
 [ -n "${LANEPULSE_NO_BROWSER:-}" ] || open "$URL"

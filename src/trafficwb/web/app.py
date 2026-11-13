@@ -222,6 +222,33 @@ class ReviseBody(BaseModel):
     box: list[float] | None = None
 
 
+class WorkerSwitchBody(BaseModel):
+    enabled: bool
+
+
+class WorkerCodeBody(BaseModel):
+    label: str = Field("worker", max_length=60)
+
+
+class WorkerHello(BaseModel):
+    key: str = Field(..., min_length=32, max_length=128)
+    name: str = Field(..., min_length=1, max_length=80)
+    info: dict = {}
+
+
+class WorkerAnswerBody(BaseModel):
+    allow: bool
+
+
+class WorkerCall(BaseModel):
+    code: str
+    name: str = Field(..., min_length=1, max_length=80)
+    can: list[str] = ["standard"]
+    info: dict = {}
+    result: dict | None = None
+    error: str | None = None
+
+
 class AddTargetBody(BaseModel):
     t: float = Field(..., ge=0)
     box: list[float]
@@ -418,8 +445,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True,
                plate_factory: Callable | None = None, model_loader: Callable | None = None,
                backup_dir: Path | str | None = None, backup_at: str = "02:00",
-               sam_factory: Callable | None = None, sam_status: Callable[[], dict] | None = None) -> FastAPI:
+               sam_factory: Callable | None = None, sam_status: Callable[[], dict] | None = None,
+               listening: dict | None = None) -> FastAPI:
     data_root = Path(data_root)
+    listening = dict(listening or {})       # how the server was started (for the Workers screen)
     DataRoot(data_root)  # create folders and control.db
     jobs = JobManager(data_root, detector_factory or (lambda: default_detector_factory(data_root)), monitor_interval,
                       stability_seconds, plate_factory, model_loader, sam_factory)
@@ -433,8 +462,17 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     from ..admin import BackupScheduler
     backups = BackupScheduler(data_root, backup_dir, backup_at) if backup_dir else None
 
+    discovery = None
+
     @asynccontextmanager
     async def lifespan(_app):
+        nonlocal discovery
+        if listening.get("lan") and listening.get("discovery", True):
+            # Helping computers on this network find the server without an address typed.
+            from ..discovery import PORT, Responder
+            from ..workers import Requests
+            discovery = Responder(listening.get("port", 8765), Requests(data_root).server_id(), __version__,
+                                  listening.get("discovery_port", PORT)).start()
         if start_monitoring:
             jobs.resume_monitoring()  # monitoring survives restarts (MIS-07)
             jobs.start_auto_loop()    # missions in Run mode "full auto" learn on their own
@@ -443,6 +481,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         yield
         if backups:
             backups.stop()
+        if discovery:
+            discovery.stop()
         jobs.shutdown()
 
     app = FastAPI(title="LanePulse", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -1672,6 +1712,150 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "catalog", str(exc)) from None
         return jobs.start(m.id, kind="process", only=ids).snapshot()
 
+    # ---------- workers on other computers (phase 5) ----------
+    import socket
+    from ..workers import Pairing, Requests
+
+    def _lan_address() -> list[str]:
+        import socket
+        out = []
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+                sk.connect(("10.255.255.255", 1))            # no packet is sent; this picks the outgoing address
+                out.append(sk.getsockname()[0])
+        except OSError:
+            pass
+        return out
+
+    @app.get("/api/workers")
+    def workers_status():
+        """The switch, the pairing codes, the computers asking to help, those helping and the segments waiting."""
+        p = Pairing(data_root)
+        return jobs.hub.status() | {"codes": p.codes(), "asking": Requests(data_root).asking(),
+                                    "lan": listening.get("lan", False), "port": listening.get("port", 8765),
+                                    "addresses": _lan_address(),
+                                    "discovery": None if discovery is None else (discovery.error or "on")}
+
+    @app.put("/api/workers/asking/{request_id}")
+    def workers_answer(request_id: int, body: WorkerAnswerBody, u: User = Depends(user)):
+        """Allow or refuse a computer that asks to help."""
+        try:
+            Requests(data_root).decide(request_id, body.allow, u.username)
+        except KeyError:
+            raise ApiError(404, "no_request", "That computer is no longer asking.") from None
+        return workers_status()
+
+    @app.post("/api/worker/hello")
+    def worker_hello(body: WorkerHello, request: Request):
+        """A computer that found this server asks to help, with its own key. It helps once the operator allows it."""
+        r = Requests(data_root)
+        state = r.ask(body.key, body.name, body.info, request.client.host if request.client else None)
+        if state == "allowed" and not jobs.hub.enabled:
+            state = "off"
+        return {"state": state, "server_id": r.server_id(), "name": socket.gethostname()}
+
+    @app.put("/api/workers/switch")
+    def workers_switch(body: WorkerSwitchBody, u: User = Depends(user)):
+        Pairing(data_root).set_enabled(body.enabled, u.username)
+        jobs.hub.enabled = body.enabled
+        return workers_status()
+
+    @app.post("/api/workers/codes")
+    def workers_code(body: WorkerCodeBody, u: User = Depends(user)):
+        """A new pairing code. It is shown once; only its hash is kept."""
+        return Pairing(data_root).new_code(body.label, u.username)
+
+    @app.delete("/api/workers/codes/{code_id}")
+    def workers_revoke(code_id: int):
+        Pairing(data_root).revoke(code_id)
+        jobs.hub.forget_code(code_id)
+        return {"ok": True}
+
+    def _worker(code: str | None) -> int:
+        if not jobs.hub.enabled:
+            raise ApiError(403, "workers_off", "This server does not take help from other computers now. Turn it on "
+                                               "on the Workers screen.")
+        cid = Pairing(data_root).check(code)
+        if cid is None:
+            raise ApiError(401, "bad_code", "That pairing code is not valid (or was revoked). Make a new one on the "
+                                            "server's Workers screen.")
+        return cid
+
+    def _own_lease(lease_id: str, cid: int):
+        ls = jobs.hub.lease(lease_id)
+        if ls is None:
+            return None
+        h = jobs.hub.helpers.get(ls.worker)
+        if not ls.remote or h is None or h.code_id != cid:
+            raise ApiError(403, "not_yours", "That segment was given to another worker.")
+        return ls
+
+    @app.post("/api/worker/next")
+    def worker_next(body: WorkerCall):
+        cid = _worker(body.code)
+        jobs.hub.seen(body.name, cid, body.info)
+        ls = jobs.hub.take(body.name, remote=True, can=set(body.can))
+        if ls is None:
+            return Response(status_code=204)
+        inf = float("inf")
+        s = ls.seg
+        return {"lease": ls.id, "mission_id": ls.job.mission_id, "version_id": ls.job.version_id,
+                "segment": {"idx": s.idx, "own_a": s.own_a, "own_b": None if s.own_b == inf else s.own_b,
+                            "run_a": s.run_a, "run_b": None if s.run_b == inf else s.run_b},
+                "spec": ls.job.spec, "lease_s": jobs.hub.lease_s}
+
+    @app.get("/api/worker/lease/{lease_id}/video")
+    def worker_video(lease_id: str, code: str):
+        """The recording of a leased segment; the worker reads only the range it needs (HTTP range requests)."""
+        cid = _worker(code)
+        ls = jobs.hub.lease(lease_id)
+        if ls is None or (jobs.hub.helpers.get(ls.worker) and jobs.hub.helpers[ls.worker].code_id != cid):
+            raise ApiError(410, "lease_ended", "That segment is no longer yours.")
+        m = DataRoot(data_root).open_mission(ls.job.mission_id)
+        path = _video(m).path(ls.job.version_id)
+        return FileResponse(path, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/worker/lease/{lease_id}/renew")
+    def worker_renew(lease_id: str, body: WorkerCall):
+        cid = _worker(body.code)
+        return {"ok": _own_lease(lease_id, cid) is not None and jobs.hub.renew(lease_id)}
+
+    @app.post("/api/worker/lease/{lease_id}/result")
+    def worker_result(lease_id: str, body: WorkerCall):
+        from ..video_process import _result
+        cid = _worker(body.code)
+        if _own_lease(lease_id, cid) is None or body.result is None:
+            return {"ok": False, "reason": "the lease ended; the segment went to another worker"}
+        try:
+            res = _result(body.result)
+        except (KeyError, TypeError, ValueError) as exc:
+            jobs.hub.give_back(lease_id, f"bad result: {exc}")
+            raise ApiError(400, "bad_result", "The segment's result could not be read.") from None
+        return {"ok": jobs.hub.complete(lease_id, res)}
+
+    @app.post("/api/worker/lease/{lease_id}/give-back")
+    def worker_give_back(lease_id: str, body: WorkerCall):
+        cid = _worker(body.code)
+        if _own_lease(lease_id, cid) is not None:
+            jobs.hub.give_back(lease_id, body.error)
+        return {"ok": True}
+
+    @app.get("/api/worker/model/{sha}")
+    def worker_model(sha: str, code: str):
+        """A model pack an open job uses, packed for a worker that does not have it (fetched once)."""
+        import io
+        import tarfile
+        _worker(code)
+        path = jobs.hub_packs.get(sha)
+        if path is None or not path.is_dir():
+            raise ApiError(404, "no_model", "No open job uses that model.")
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as t:
+            for f in sorted(path.iterdir()):
+                if f.is_file():
+                    t.add(f, arcname=f.name)
+        return Response(buf.getvalue(), media_type="application/gzip")
+
     @app.get("/api/missions/{mission_id}/recordings/{version_id}/thumb")
     def recording_thumb(version_id: int, h: int = 96, m: Mission = Depends(mission)):
         from ..video_catalog import CatalogError
@@ -1836,7 +2020,9 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     if args.cmd == "serve":
         host = "0.0.0.0" if args.lan else "127.0.0.1"
-        uvicorn.run(create_app(args.data, backup_dir=args.backup_dir, backup_at=args.backup_at), host=host, port=args.port, log_level="info")
+        uvicorn.run(create_app(args.data, backup_dir=args.backup_dir, backup_at=args.backup_at,
+                               listening={"lan": args.lan, "port": args.port}),
+                    host=host, port=args.port, log_level="info")
         return 0
     ap.print_help()
     return 1

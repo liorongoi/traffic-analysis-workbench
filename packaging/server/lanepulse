@@ -64,6 +64,9 @@ case "$cmd" in
     OUT="$(dirname "$MODELS")/trained"; mkdir -p "$OUT"
     "$PY" -c 'import sys; from trafficwb.train import main; sys.exit(main(sys.argv[1:]))' run --dataset "$DS" --out "$OUT" "$@"
     echo "To use it: sudo lanepulse import-model $(ls -t "$OUT"/*.zip | head -1)";;
+  worker)
+    # Help another LanePulse server analyse long videos (asks for its address and pairing code when left out).
+    TWB_MODELS="$MODELS" "$PY" -m trafficwb.workers "$@";;
   version) basename "$(readlink -f "$BASE/current")" | sed 's/^lanepulse-//';;
   *)
     cat <<HELP
@@ -78,6 +81,7 @@ sudo lanepulse firewall          allow only $ALLOW to port $PORT (and SSH), turn
 sudo lanepulse rollback          go back to the previous version
 lanepulse setup-training         which GPU training on the learning page uses (PyTorch is built in)
 sudo lanepulse train FOLDER      train on an exported dataset from the command line
+lanepulse worker [--server URL --code CODE]  help another LanePulse server analyse long videos
 Settings: $CONF (then sudo lanepulse restart)
 HELP
     ;;

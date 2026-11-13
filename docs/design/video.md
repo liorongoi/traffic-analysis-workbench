@@ -123,10 +123,19 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 - The browser plays the original file (HTTP range requests). The event page draws the tracked box of its event over the video at the nearest analysed frame.
 - If the browser cannot play the codec (for example H.265 in some browsers), the page switches to frames decoded on the workstation, one at a time, with a slider and step buttons.
 
+## Workers on other computers
+
+- Other computers can analyse segments of a long recording. The operator turns "Other computers may help" on (Workers screen). Off by default; while off, nothing is shared and workers are refused.
+- A helping computer has the same LanePulse install; nothing else is installed. Its launcher is "LanePulse - help another computer" (Windows Start menu), "Help another computer" in `~/LanePulse` (Mac), `lanepulse worker` (Linux server) or `trafficwb-worker` (pip).
+- With no address given, it finds the server: a server started with network access answers on UDP port 8766 with its id, name and port (`discovery.py`). Several servers: it asks which one. It then asks to help with its own key, made once and kept in `~/.lanepulse-worker`; the server keeps only the key's hash. The computer appears under "Asking to help"; the operator answers Allow or Refuse from a dropdown. An allowed computer is listed with the pairing codes and stopped the same way; after a stop it asks again. At most 20 computers wait for an answer at once.
+- After it is allowed, it offers to help by itself whenever the computer signs in (Windows Startup folder, Mac LaunchAgent, Linux systemd user service; `--start-at-signin off` undoes it). If the server's address changes, it finds it again.
+- Across separate networks or a VPN, where it cannot be found, "Make a pairing code" gives a code (shown once, kept as a hash) and a ready-made command for the chosen system.
+- A worker takes one segment at a time, reads only that time range of the recording from the server (HTTP range requests), runs the mission's exact detector (the model checked by its checksum, fetched once if missing), and posts back the tracks. It keeps nothing of the recording. It renews its lease every 20 s; a lease not renewed for 120 s ends and the segment goes back to the front of the queue. A late result is ignored. A worker without SAM 3.1 is not given segments of missions that use it.
+
 ## Not in this version
 
 - Night light tracking and analysis regions for video.
-- Segments on other computers and appearance re-identification: see the phased plan. Learning from video: see `learning.md`.
+- Appearance re-identification: see the phased plan. Learning from video: see `learning.md`.
 - Moving cameras: lines and areas drawn on a moving camera, and speed in km/h.
 - Plates in video.
 - Detecting slow camera movement (pan/zoom) as a view change.

@@ -87,6 +87,33 @@ CREATE TABLE IF NOT EXISTS saved_model (
   author TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+-- Workers on other computers (phase 5): pairing codes (only their hash is kept) and the operator's on/off switch.
+CREATE TABLE IF NOT EXISTS worker_code (
+  id INTEGER PRIMARY KEY,
+  label TEXT NOT NULL,
+  code_hash TEXT NOT NULL UNIQUE,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS worker_request (     -- computers that found this server and ask to help
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,                 -- hash of the helping computer's own key (it keeps the key)
+  info TEXT NOT NULL DEFAULT '{}',
+  address TEXT,
+  state TEXT NOT NULL DEFAULT 'asking',          -- asking | allowed | refused
+  created_at TEXT NOT NULL,
+  seen_at TEXT NOT NULL,
+  decided_by TEXT,
+  decided_at TEXT
+);
+CREATE TABLE IF NOT EXISTS app_setting (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,              -- JSON
+  author TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 MISSION_SCHEMA = """
