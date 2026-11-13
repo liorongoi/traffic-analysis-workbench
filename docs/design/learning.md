@@ -88,6 +88,13 @@ Unresolved night candidates in a fully reviewed image become "ignore" areas: a d
 - Rounds that did not improve since the last one that did hand their dataset versions on: the next training and evaluation start with that data plus the newest dataset version. The operator can change the choice.
 - Loss per epoch is shown as a graph (training, validation or both) and as numbers.
 
+### Which detector is trained
+
+- YOLOX-s (`train.py`), RF-DETR (`rfdetr_train.py`), D-FINE and RT-DETRv2 (`detr_train.py`) all train from the same exported dataset, so each learns from the same labels: the operator's reviews, SAM 3.1's labels on what nobody reviewed (reviews win), and confirmed marked targets. Areas nobody looked at (partial reviews, excluded regions, unsure SAM boxes and other ignore boxes) are left out of YOLOX's loss and painted plain grey for the transformer detectors, whose set loss cannot leave them out.
+- D-FINE (sizes nano, small, medium, large, xlarge) and RT-DETRv2 (r18, r34, r50, r101) start from their released COCO weights (Apache-2.0) and keep the 80-class COCO head, so a car stays a car and a taught target takes a free COCO class as in YOLOX (`own_classes.py`), named in the pack's card. The trained pack holds `model.onnx` (boxes as centre and size in 0..1 plus class logits: `outputs: boxes_logits`, `class_ids: coco80`, RGB in 0..1, stretched to 640x640), and `config.json` with `model.safetensors` to train further.
+- Training never contacts a model hub: the installers ship the starting weights next to their own Python (`share/lanepulse/<owner>__<model>/`), and the trainer runs with the hub switched off (no account, token, telemetry or online check).
+- Checked: the ONNX model gives the PyTorch model's scores to within 0.0002 on real street frames; both trainers taught a new target on real frames (see the traceability note).
+
 ## Saved models
 
 - A model can be saved by a name of the operator's choosing, with a description. Saving freezes it: its files are made read-only, its checksum is kept in `control.db`, and it is checked each time the model is loaded; a changed model is not used.
