@@ -222,6 +222,24 @@ class ReviseBody(BaseModel):
     box: list[float] | None = None
 
 
+class SynopsisBody(BaseModel):
+    event_ids: list[int] | None = Field(None, max_length=100000)
+    busy: str = Field("normal", pattern="^(calm|normal|busy)$")
+    status_only: bool = False
+
+
+class MapBody(BaseModel):
+    kind: str = Field("heat", pattern="^(heat|paths)$")
+    event_ids: list[int] | None = Field(None, max_length=100000)
+    zones: bool = True
+
+
+class ZoneBody(BaseModel):
+    kind: str = Field(..., pattern="^(line|area)$")
+    name: str = Field("", max_length=60)
+    points: list[list[float]] = Field(..., min_length=2, max_length=64)
+
+
 class CrowdAlertBody(BaseModel):
     people: int | None = Field(None, ge=2, le=10000)
 
@@ -2024,8 +2042,118 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             from ..video_attributes import read_colours_soon
             from ..video_review import VideoService
             reading = read_colours_soon(m.id, lambda: VideoService(DataRoot(data_root).open_mission(m.id)))
+        from ..video_zones import tally
+        zt = tally(svc, evs)
+        zone_names = {z["uid"]: z["name"] for r in zt["recordings"] for z in r["zones"]}
+        for e in evs:
+            p = zt["events"].get(e.id)
+            attrs[e.id]["path"] = p["path"] if p else []
+            # per zone: a line's crossing directions in order, or "inside" for an area it entered
+            attrs[e.id]["zones"] = {u: ([h["dir"] for h in hits] if "dir" in hits[0] else ["inside"])
+                                    for u, hits in (p["zones"] if p else {}).items()}
         return {"events": [_event_dict(e) | {"attrs": attrs[e.id]} for e in evs], "classes": svc.classes(),
-                "reading_colours": reading}
+                "reading_colours": reading, "zones": zone_names}
+
+    @app.get("/api/missions/{mission_id}/zones")
+    def zones_tally(m: Mission = Depends(mission), version_id: int | None = None, group_id: int | None = None):
+        """Each line's crossings (in and out) and each area's entries and time inside, by class, per video."""
+        from ..video_zones import tally
+        svc = _video(m)
+        evs = _video_call(lambda: [e for e in svc.events(version_id, group_id=group_id) if e.continues is None])
+        out = tally(svc, evs)
+        out.pop("events")
+        return out
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/map")
+    def recording_map(version_id: int, body: MapBody, m: Mission = Depends(mission)):
+        """A heatmap (where targets spent time) or a path map of one video, over its empty road, as a JPEG data URL.
+        ``event_ids`` narrows it to the events the events page shows; otherwise every counted event."""
+        import base64
+        from ..video_maps import render
+        from ..video_zones import Zones
+        svc = _video(m)
+        evs = [e for e in _video_call(lambda: svc.events(version_id)) if e.counted]
+        if body.event_ids is not None:
+            keep = set(body.event_ids)
+            evs = [e for e in evs if e.id in keep]
+        try:
+            data, legend = render(svc, version_id, body.kind, evs, Zones(m).of(version_id) if body.zones else [])
+        except ValueError as exc:
+            raise ApiError(400, "map", str(exc)) from None
+        return {"image": "data:image/jpeg;base64," + base64.b64encode(data).decode(), "legend": legend}
+
+    from ..video_synopsis import Synopses
+    synopses = Synopses()
+
+    def _synopsis_args(m: Mission, version_id: int, body: "SynopsisBody"):
+        svc = _video(m)
+        evs = [e for e in _video_call(lambda: svc.events(version_id)) if e.counted]
+        if body.event_ids is not None:
+            keep = set(body.event_ids)
+            evs = [e for e in evs if e.id in keep]
+        rid = max((e.run_item_id or 0 for e in evs), default=0)
+        revs = sum(e.revisions for e in evs)
+        key = Synopses.key(version_id, rid, [e.id for e in evs], body.busy, revs)
+        return svc, evs, key, m.dir / "evidence" / "synopsis"
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/synopsis")
+    def synopsis_start(version_id: int, body: SynopsisBody, m: Mission = Depends(mission)):
+        """Make (or find) the summary video of these events: the targets together over the empty road, each with
+        its real time. Made in the background; ask again (same body) for its progress."""
+        from ..video_review import VideoService
+        from ..video_synopsis import render
+        svc, evs, key, folder = _synopsis_args(m, version_id, body)
+        if not evs:
+            raise ApiError(400, "synopsis", "No counted event to show in a summary.")
+        if body.status_only:
+            return synopses.status(m.id, key, folder)
+        ids = [e.id for e in evs]
+        mid = m.id
+
+        def work(out, progress, stop):
+            s2 = VideoService(DataRoot(data_root).open_mission(mid))
+            keep = set(ids)
+            ev2 = [e for e in s2.events(version_id) if e.id in keep]
+            return render(s2, version_id, ev2, out, body.busy, progress, stop)
+        return synopses.start(m.id, folder, key, work)
+
+    @app.get("/api/missions/{mission_id}/synopsis/{key}.mp4")
+    def synopsis_file(key: str, m: Mission = Depends(mission)):
+        if not key.isalnum():
+            raise ApiError(404, "synopsis", "No such summary.")
+        path = m.dir / "evidence" / "synopsis" / f"{key}.mp4"
+        if not path.is_file():
+            raise ApiError(404, "synopsis", "That summary is not made (yet).")
+        return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "private, no-transform"})
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/zones")
+    def zones_get(version_id: int, m: Mission = Depends(mission)):
+        from ..video_zones import AREA_NAMES, LINE_NAMES, ZoneError, Zones
+        _video(m)
+        try:
+            return {"zones": Zones(m).of(version_id), "line_names": LINE_NAMES, "area_names": AREA_NAMES}
+        except ZoneError as exc:
+            raise ApiError(404, "zone", str(exc)) from None
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/zones")
+    def zones_add(version_id: int, body: ZoneBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """A counting line or an area on this camera's picture (every video in the same folder uses it)."""
+        from ..video_zones import ZoneError, Zones
+        _video(m)
+        try:
+            return Zones(m).add(version_id, body.kind, body.name, body.points, u.username)
+        except ZoneError as exc:
+            raise ApiError(400, "zone", str(exc)) from None
+
+    @app.delete("/api/missions/{mission_id}/zones/{uid}")
+    def zones_delete(uid: str, m: Mission = Depends(mission), u: User = Depends(user)):
+        from ..video_zones import ZoneError, Zones
+        _video(m)
+        try:
+            Zones(m).delete(uid, u.username)
+        except ZoneError as exc:
+            raise ApiError(404, "zone", str(exc)) from None
+        return {"ok": True}
 
     @app.get("/api/missions/{mission_id}/in-view")
     def in_view(m: Mission = Depends(mission), version_id: int | None = None, group_id: int | None = None):

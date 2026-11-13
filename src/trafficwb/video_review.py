@@ -611,6 +611,9 @@ class VideoService:
         rows = []
         evs = self.events()
         attrs = self.attributes(evs)
+        from .video_zones import tally
+        zt = tally(self, evs)
+        zname = {z["uid"]: z["name"] for r in zt["recordings"] for z in r["zones"]}
         for e in evs:
             clips = ";".join(c["path"] for c in self.clips(e.id))
             at = attrs[e.id]
@@ -629,14 +632,15 @@ class VideoService:
                     pl.text if pl else "", pl.readability if pl else "", pl.review if pl else "",
                     at["direction"] or "", at["speed"] if at["speed"] is not None else "", at["top_speed"]
                     if at["top_speed"] is not None else "", at["unit"], at["dwell_s"], at["stopped_s"], at["w"], at["h"],
-                    at["size_unit"], look(at["colour"]), look(at["upper"]), look(at["lower"]))])
+                    at["size_unit"], look(at["colour"]), look(at["upper"]), look(at["lower"]),
+                    " > ".join(zname.get(u, u) for u in (zt["events"].get(e.id) or {}).get("path", [])))])
         cols = ["mission_id", "run_id", "source_version_id", "file", "sha256", "event_id", "part", "start", "end",
                 "start_s", "end_s", "start_utc", "end_utc", "utc_precision", "class", "machine_class", "class_share",
                 "review_status", "duplicate_of", "merged_events", "flags", "possible_duplicate_of", "end_reason",
                 "entry_x", "entry_y", "exit_x", "exit_y", "machine_start", "machine_end", "operator_revisions", "clips",
                 "model", "plate_text", "plate_readability", "plate_review", "direction", "speed", "top_speed",
                 "speed_unit", "seconds_in_view", "seconds_stopped", "width", "height", "size_unit", "colour",
-                "upper_colour", "lower_colour"]
+                "upper_colour", "lower_colour", "path"]
         stem = "".join(c if c.isalnum() or c in "-_." else "_"
                        for c in f"{cfg.name}_events_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
         cn = self.counts()
@@ -656,10 +660,15 @@ class VideoService:
         mcols = ["file", "source_version_id", "from", "to", *cn["classes"]]
         mrows = [[r["file"], r["source_version_id"], fmt_t(b["start_s"]), fmt_t(b["start_s"] + cn["bucket_s"]),
                   *[b["counts"].get(c, 0) for c in cn["classes"]]] for r in cn["recordings"] for b in r["per_bucket"]]
+        zcols = ["file", "source_version_id", "zone", "kind", "class", "in", "out", "entries", "seconds_inside"]
+        zrows = [[r["file"], r["source_version_id"], z["name"], z["kind"], c, v.get("in", ""), v.get("out", ""),
+                  v.get("entries", ""), v.get("inside_s", "")]
+                 for r in zt["recordings"] for z in r["zones"] for c, v in sorted(z["by_class"].items())]
         paths = []
         for fmt in formats:
             new = (write_sheets_csv if fmt == "csv" else write_sheets_xlsx)(
-                out, stem, [("events", cols, rows), ("counts", ccols, crows), ("counts_per_minute", mcols, mrows)])
+                out, stem, [("events", cols, rows), ("counts", ccols, crows), ("counts_per_minute", mcols, mrows)]
+                + ([("lines_and_areas", zcols, zrows)] if zrows else []))
             paths += new
             self.con.execute("INSERT INTO export(format,path,scope,rows,status,author,created_at) VALUES (?,?,?,?,?,?,?)",
                              (fmt, ";".join(str(p) for p in new), json.dumps({"video_events": True}), len(rows),

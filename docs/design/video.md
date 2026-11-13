@@ -132,6 +132,26 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 - "Most in view at once": per family (vehicles, people), the most counted targets in view at the same moment and when. The crowd alert (5 to 100 people, or off) lists the periods with that many people in view, with links to play them.
 - Not yet: hats, bags and other worn items (they need a model of their own), ground speed from a moving or airborne camera (phase 7), lines and areas in video (phase 6b).
 
+## Lines, areas and paths
+
+- In the player, "Lines and areas" draws a counting line (drag; L) or an area (click each corner, then the first again or Enter), named from a list. They belong to the camera: every video in the same folder uses them. The side panel lists them, with Remove (`video_zones.py`, table `video_zone`, migration 21).
+- A target crosses a line when the bottom middle of its box passes from one side to the other within the line's length. "In" is to the right of the line as drawn (an arrow shows it). A crossing back within 1 s cancels the one before, and a crossing counts only once the target is a fifth of its height clear of the line, so a target standing on the line is not counted.
+- A target is in an area while that point is inside; entries shorter than 0.5 s are ignored. Its path is the order of the lines it crossed and areas it entered.
+- The events page shows "Lines and areas": each line's crossings in and out, and each area's entries and average time inside, by class (counted events only). The filters add "Crossed X (in, out)", "Was in X" and "From X to Y"; the events list has a Path column. The export adds a path column and a `lines_and_areas` sheet.
+
+## Heatmaps and path maps
+
+- On a video's tab, "Map" shows where its targets spent time (heatmap) or the paths they took, over the empty road (the median of nine frames, so moving targets vanish), with the camera's lines and areas on top (`video_maps.py`, `POST .../recordings/{vid}/map`).
+- Heatmap: each box adds the time until the next box at the bottom middle of the box, over a disc a third of its width; one hue from faint to strong, and the scale gives the most seconds at one spot. Path map: each target's path as a thin line coloured by class (a legend names each), with a dot where it was first seen.
+- Only counted events are drawn; when the events page filters are set, the map shows just the events they leave.
+
+## Summary video
+
+- On a video's tab, "Summary video" makes a short video of the whole recording: its targets shown together over the empty road, each labelled with the time it really passed and its event number, so an hour can be looked through in a minute or two (`video_synopsis.py`, `POST .../recordings/{vid}/synopsis`).
+- Each target is cut out of the original frames inside its box (10 per second, the operator's boxes in place of the tracker's), its edges blended. Where labels would cover each other, the nearer (bigger) target keeps its label. Targets keep their order: a later one never starts before an earlier one. Each starts at the first moment it overlaps those already placed only a little. "How busy" (calm, normal, busy) sets how much they may overlap and how many may be on screen at once (4, 8 or 16). A target never starts later than it did in the original, so on a road that is always busy the summary is no longer than the recording. Up to 600 targets.
+- Only counted events are used, narrowed by the events page filters. Beside the video, "On screen now" lists the events showing at that second; each opens its event.
+- It is made in the background, one at a time per mission (a new request stops the one running), and kept with the mission's evidence until the events or their boxes change.
+
 ## Workers on other computers
 
 - Other computers can analyse segments of a long recording. The operator turns "Other computers may help" on (Workers screen). Off by default; while off, nothing is shared and workers are refused.

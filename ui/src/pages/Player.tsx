@@ -78,6 +78,13 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   const [distances, setDistances] = useState<number[]>([]);
   const [measuring, setMeasuring] = useState(false);
   const [line, setLine] = useState<number[] | null>(null);
+  // Lines and areas of this camera (every video in the same folder): drawn here, counted on the events page.
+  type Zone = { uid: string; kind: "line" | "area"; name: string; points: number[][] };
+  const [zones, setZones] = useState<Zone[]>([]);
+  const [zoneNames, setZoneNames] = useState<{ line: string[]; area: string[] }>({ line: [], area: [] });
+  const [zoning, setZoning] = useState<"" | "line" | "area">("");
+  const [zoneName, setZoneName] = useState("");
+  const [zpts, setZpts] = useState<number[][]>([]);
   const video = useRef<HTMLVideoElement>(null);
   const svg = useRef<SVGSVGElement>(null);
 
@@ -90,6 +97,22 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
     api(`/missions/${missionId}/recordings/${versionId}/calibration`)
       .then((r) => { setCal(r.calibration); setDistances(r.distances_m); }).catch(() => undefined);
   }, [missionId, versionId]);
+  const loadZones = useCallback(() => api(`/missions/${missionId}/recordings/${versionId}/zones`)
+    .then((r) => { setZones(r.zones); setZoneNames({ line: r.line_names, area: r.area_names }); }).catch(() => undefined), [missionId, versionId]);
+  useEffect(() => { loadZones(); }, [loadZones]);
+  const startZone = (k: "" | "line" | "area") => {
+    setZoning(k); setZpts([]); setAdding(false); setMeasuring(false); setSel(null); pause();
+    if (k) setZoneName((k === "line" ? zoneNames.line : zoneNames.area).find((n) => !zones.some((z) => z.name === n)) ?? "");
+  };
+  const saveZone = async (pts: number[][]) => {
+    await act(async () => {
+      await post(`/missions/${missionId}/recordings/${versionId}/zones`, { kind: zoning, name: zoneName, points: pts });
+      await loadZones(); setZoning(""); setZpts([]);
+    }, `${zoning === "line" ? "Line" : "Area"} "${zoneName}" added. Its counts are on the events page, for every video from this camera.`);
+  };
+  const deleteZone = (z: Zone) => act(async () => {
+    await api(`/missions/${missionId}/zones/${z.uid}`, { method: "DELETE" }); await loadZones();
+  }, `"${z.name}" removed.`);
   const saveMeasure = async (meters: number) => {
     if (!line) return;
     await act(async () => {
@@ -171,11 +194,17 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
     const x = (ev.clientX - r.left - (r.width - W * s) / 2) / s, y = (ev.clientY - r.top - (r.height - H * s) / 2) / s;
     return { x: Math.max(0, Math.min(W, x)), y: Math.max(0, Math.min(H, y)) };
   };
-  const drawing = adding || measuring || selEv != null;
+  const drawing = adding || measuring || !!zoning || selEv != null;
   const onDown = (ev: React.PointerEvent) => {
     if (!drawing || ev.button !== 0) return;
     pause();
     const p = toImage(ev);
+    if (zoning === "area") {                             // an area: one click per corner; click the first to close it
+      const first = zpts[0];
+      if (first && zpts.length >= 3 && Math.hypot(first[0] - p.x, first[1] - p.y) < 12 * Math.max(W / (svg.current?.clientWidth || W), 1)) saveZone(zpts);
+      else setZpts([...zpts, [p.x, p.y]]);
+      return;
+    }
     setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
     (ev.target as Element).setPointerCapture?.(ev.pointerId);
   };
@@ -184,6 +213,10 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
     if (!drag) return;
     const box = [Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1), Math.max(drag.x0, drag.x1), Math.max(drag.y0, drag.y1)];
     setDrag(null);
+    if (zoning === "line") {
+      if (Math.hypot(drag.x1 - drag.x0, drag.y1 - drag.y0) >= 10) saveZone([[drag.x0, drag.y0], [drag.x1, drag.y1]]);
+      return;
+    }
     if (measuring) {                                     // a line between two points, not a box
       if (Math.hypot(drag.x1 - drag.x0, drag.y1 - drag.y0) >= 10) setLine([drag.x0, drag.y0, drag.x1, drag.y1]);
       return;
@@ -217,7 +250,9 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
       else if (k === "m") { setMeasuring((v) => !v); setLine(null); setAdding(false); setSel(null); pause(); }
       else if (k === "a") approve();
       else if (k === "h") setShow((s) => (s === "none" ? "all" : "none"));
-      else if (k === "escape") { setDrag(null); setAdding(false); setMeasuring(false); setLine(null); setSel(null); setHelp(false); }
+      else if (k === "l") startZone(zoning === "line" ? "" : "line");
+      else if (k === "enter" && zoning === "area" && zpts.length >= 3) saveZone(zpts);
+      else if (k === "escape") { setDrag(null); setAdding(false); setMeasuring(false); setLine(null); setZoning(""); setZpts([]); setSel(null); setHelp(false); }
       else if (k === "?") setHelp((h) => !h);
       else if (/^[1-9]$/.test(k) && Number(k) <= classes.length) setClass(classes[Number(k) - 1]);
       else return;
@@ -267,7 +302,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
                 const look = LOOK[e.status === "rejected" ? "rejected" : e.origin === "human" || e.fixes.length ? "human" : e.status] ?? LOOK.pending;
                 const on = e.id === sel;
                 return (
-                  <g key={e.id} onPointerDown={(ev) => { if (!adding && !measuring && e.id !== sel) { ev.stopPropagation(); pick(e); pause(); } }}
+                  <g key={e.id} onPointerDown={(ev) => { if (!adding && !measuring && !zoning && e.id !== sel) { ev.stopPropagation(); pick(e); pause(); } }}
                     style={{ cursor: "pointer" }}>
                     <rect x={b[0]} y={b[1]} width={b[2] - b[0]} height={b[3] - b[1]} fill={on ? "rgba(255,255,255,0.06)" : "transparent"}
                       stroke={look.stroke} strokeDasharray={look.dash ? look.dash.split(" ").map((v) => Number(v) * sw / 2).join(" ") : undefined}
@@ -277,6 +312,26 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
                   </g>
                 );
               })}
+              {show !== "none" && zones.map((z) => {
+                const pts = z.points;
+                if (z.kind === "area") return <g key={z.uid} className="measure-line">
+                  <polygon points={pts.map((q) => q.join(",")).join(" ")} fill="rgba(74,163,255,0.10)" stroke="var(--accent, #4aa3ff)" strokeWidth={sw} strokeDasharray={`${4 * sw} ${2 * sw}`} />
+                  <text x={pts[0][0]} y={pts[0][1] + fs} fontSize={fs} fill="var(--accent, #4aa3ff)" paintOrder="stroke" stroke="#000" strokeWidth={3 * px}>{z.name}</text></g>;
+                const [[x1, y1], [x2, y2]] = pts;
+                const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, len = Math.hypot(x2 - x1, y2 - y1) || 1;
+                // the "in" side: to the right of the line as drawn from its first point to its second
+                const nx = -(y2 - y1) / len, ny = (x2 - x1) / len, a = 18 * px;
+                return <g key={z.uid} className="measure-line">
+                  <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--accent, #4aa3ff)" strokeWidth={sw * 1.5} />
+                  <line x1={mx} y1={my} x2={mx + nx * a} y2={my + ny * a} stroke="var(--accent, #4aa3ff)" strokeWidth={sw} markerEnd="url(#zarrow)" />
+                  <text x={mx + nx * a * 1.4} y={my + ny * a * 1.4} fontSize={fs} fill="var(--accent, #4aa3ff)" paintOrder="stroke" stroke="#000" strokeWidth={3 * px}>{z.name} · in</text></g>;
+              })}
+              <defs><marker id="zarrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent, #4aa3ff)" /></marker></defs>
+              {zoning === "area" && zpts.length > 0 && <g className="measure-line">
+                <polyline points={zpts.map((q) => q.join(",")).join(" ")} fill="none" stroke="var(--human)" strokeWidth={sw} />
+                {zpts.map((q, i) => <circle key={i} cx={q[0]} cy={q[1]} r={(i === 0 ? 6 : 4) * px} fill="var(--human)" />)}</g>}
+              {zoning === "line" && drag && <line x1={drag.x0} y1={drag.y0} x2={drag.x1} y2={drag.y1} stroke="var(--human)" strokeWidth={sw * 1.5} />}
               {(() => {
                 const l = measuring ? (drag ? [drag.x0, drag.y0, drag.x1, drag.y1] : line) : cal ? cal.points : null;
                 if (!l) return null;
@@ -288,7 +343,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
                     stroke="#000" strokeWidth={3 * px} textAnchor="middle">{lab}</text>}
                 </g>;
               })()}
-              {drag && !measuring && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)}
+              {drag && !measuring && !zoning && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)}
                 height={Math.abs(drag.y1 - drag.y0)} fill="none" stroke="var(--human)" strokeWidth={sw} strokeDasharray={`${4 * sw} ${2 * sw}`} />}
             </svg>
           </div>
@@ -318,10 +373,23 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               {distances.map((d) => <option key={d} value={d}>{d} m apart</option>)}
             </select>}
             {measuring && cal && <button onClick={clearMeasure}>Remove the measure</button>}
+            <select aria-label="Lines and areas" value={zoning} onChange={(e) => startZone(e.target.value as "" | "line" | "area")}>
+              <option value="">Lines and areas…</option>
+              <option value="line">Draw a counting line (L)</option>
+              <option value="area">Draw an area</option>
+            </select>
+            {zoning && <select aria-label="Name" value={zoneName} onChange={(e) => setZoneName(e.target.value)}>
+              {(zoning === "line" ? zoneNames.line : zoneNames.area).map((n) => <option key={n} value={n}>{n}{zones.some((z) => z.name === n) ? " (another)" : ""}</option>)}
+            </select>}
+            {zoning === "area" && zpts.length >= 3 && <button className="primary" onClick={() => saveZone(zpts)}>Finish the area</button>}
             <button onClick={() => setHelp(!help)} title="Keys (?)">?</button>
           </div>
           <Timeline lanes={tl} dur={dur} now={now} sel={sel} onSeek={(t) => { pause(); seek(t); }} onPick={(e) => pick(e, true)} />
           {fallback && <div className="msg warn">This browser cannot play the video's format, so its frames are decoded on the workstation, five a second.</div>}
+          {zoning === "line" && <div className="msg">Drag the line across the road. Targets crossing it are counted both ways; "in" is
+            to the right of the line as you draw it (the arrow shows it). Every video from this camera uses it.</div>}
+          {zoning === "area" && <div className="msg">Click each corner of the area; click the first corner again (or Enter) to finish.
+            The time each target spends inside is counted. Every video from this camera uses it.</div>}
           {measuring && <div className="msg">{line ? "Pick the real distance between the two points." :
             "Pause where you can see the road. Drag a line between two points on the road whose distance you know (a car's length, a lane's width, road markings), at the depth where the targets pass."}
             {" "}One measure covers this video and the other videos from the same folder.</div>}
@@ -329,7 +397,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
           {help && <div className="msg small">
             Space play or pause · ← → one frame (Shift: one second) · J / K next or previous event to review · C confirm ·
             X or Delete reject · 1–{classes.length} class ({classes.map((c, i) => `${i + 1} ${c}`).join(", ")}) ·
-            B missed target · M measure the camera · drag on the paused picture to redraw the picked event's box · A approve for learning ·
+            B missed target · M measure the camera · L counting line · drag on the paused picture to redraw the picked event's box · A approve for learning ·
             H hide boxes · Esc let go</div>}
         </div>
         <div className="grid" style={{ gap: 10, alignContent: "start" }}>
@@ -354,6 +422,12 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               next event not reviewed yet.</div>}
           </div>
           {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
+          {zones.length > 0 && <div className="card grid" style={{ gap: 4 }}>
+            <strong className="small">Lines and areas of this camera</strong>
+            {zones.map((z) => <div key={z.uid} className="row small" style={{ justifyContent: "space-between" }}>
+              <span>{z.kind === "line" ? "Line" : "Area"}: {z.name}</span>
+              <button className="danger" onClick={() => deleteZone(z)}>Remove</button></div>)}
+          </div>}
           <div className="card" style={{ padding: 0, maxHeight: "48vh", overflow: "auto" }}>
             <table className="t"><tbody>
               {[...evs].sort((a, b) => a.first_t - b.first_t).map((e) => (
