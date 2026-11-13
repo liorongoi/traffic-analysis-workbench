@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, AreaProposal, AreaTask, Backgrounds, Job, post, Region, Sam3Status } from "../api";
+import { NamePick } from "../components/Pick";
 
 type Kind = "include" | "exclude";
 type Data = { width: number; height: number; representatives: Record<string, number[]>; regions: Region[] };
@@ -8,6 +9,19 @@ const pointsAttr = (poly: [number, number][]) => poly.map((p) => p.join(",")).jo
 const pct = (x: number) => (x >= 0.1 ? `${Math.round(x * 100)}%` : `${(x * 100).toFixed(1)}%`);
 
 // Points are stored in the view's original pixels; display size and zoom never change them (VIEW-03).
+/** Areas SAM 3.1 can be asked to outline, beyond the few shown as chips, and names for hand-drawn regions. */
+const AREA_WORDS: Record<Kind, string[]> = {
+  include: ["road", "highway lane", "intersection", "bridge", "lane", "bus lane", "bike lane", "roundabout", "ramp", "tunnel",
+    "parking lot", "parking space", "driveway", "gas station", "toll booth", "crosswalk", "dirt road", "gravel road"],
+  exclude: ["parking lot", "sidewalk", "building", "sky", "vegetation", "trees", "grass", "field", "water", "fence", "wall",
+    "railway track", "billboard", "traffic sign", "pole", "median strip", "car wash", "timestamp overlay"],
+};
+const REGION_NAMES: Record<Kind, string[]> = {
+  include: ["Road", "Northbound lanes", "Southbound lanes", "Eastbound lanes", "Westbound lanes", "Junction", "Roundabout",
+    "Bridge", "Ramp", "Bus lane", "Parking lot", "Entrance", "Exit", "Gate"],
+  exclude: ["Parking lot", "Sidewalk", "Buildings", "Sky", "Trees", "Field", "Billboard", "Timestamp overlay", "Camera mask", "Opposite road"],
+};
+
 export default function RegionEditor({ missionId, viewId }: { missionId: string; viewId: number }) {
   const [data, setData] = useState<Data | null>(null);
   const [bgId, setBgId] = useState<number | null>(null);
@@ -168,7 +182,8 @@ export default function RegionEditor({ missionId, viewId }: { missionId: string;
               <>
                 <p className="muted">Click on the image to add corners. <kbd>Backspace</kbd> removes the last one, <kbd>Enter</kbd> saves, <kbd>Esc</kbd> clears.</p>
                 <KindSwitch kind={kind} setKind={setKind} />
-                <label className="field" style={{ marginTop: 12 }}><span>Name (optional)</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. parking lot" /></label>
+                <label className="field" style={{ marginTop: 12 }}><span>Name (optional)</span>
+                  <NamePick optional label="Region name" value={name} onChange={setName} suggestions={REGION_NAMES[kind]} /></label>
                 <div className="mono muted">{pts.length} corner(s){hover ? ` · pointer at ${hover[0]}, ${hover[1]} px` : ""}</div>
                 <div className="row" style={{ marginTop: 8 }}>
                   <button className="primary" disabled={pts.length < 3} onClick={save}>Save region</button>
@@ -215,6 +230,7 @@ function FindPanel(p: {
   const { sam, kind } = p;
   const [chosen, setChosen] = useState<Record<Kind, string[]>>({ include: ["road"], exclude: [] });
   const [extra, setExtra] = useState("");
+  const [ownWord, setOwnWord] = useState(false);
   if (!sam) return <p className="muted">Checking for SAM 3.1…</p>;
   if (!sam.installed) {
     return (
@@ -230,7 +246,7 @@ function FindPanel(p: {
   const addExtra = () => {
     const w = extra.trim().toLowerCase();
     if (w && !words.includes(w)) setChosen((c) => ({ ...c, [kind]: [...c[kind], w] }));
-    setExtra("");
+    setExtra(""); setOwnWord(false);
   };
   const t = p.task;
   const n = p.picked.size;
@@ -244,10 +260,18 @@ function FindPanel(p: {
           <button key={w} className={`chip${words.includes(w) ? " on" : ""}`} aria-pressed={words.includes(w)} disabled={p.busy} onClick={() => toggle(w)}>{w}</button>
         ))}
       </div>
-      <form className="row" style={{ marginTop: 10 }} onSubmit={(e) => { e.preventDefault(); addExtra(); }}>
-        <input value={extra} onChange={(e) => setExtra(e.target.value)} placeholder="Other words, e.g. bus lane" maxLength={60} disabled={p.busy} style={{ flex: 1 }} aria-label="Other words to look for" />
+      <div className="row" style={{ marginTop: 10 }}>
+        <select aria-label="More words to look for" value="" disabled={p.busy} style={{ flex: 1 }}
+          onChange={(e) => { const w = e.target.value; if (w === "\u0000own") setOwnWord(true); else if (w && !words.includes(w)) setChosen((c) => ({ ...c, [kind]: [...c[kind], w] })); }}>
+          <option value="">More words to look for…</option>
+          {AREA_WORDS[kind].filter((w) => !suggestions.includes(w)).map((w) => <option key={w} value={w}>{w}</option>)}
+          <option value={"\u0000own"}>Something else…</option>
+        </select>
+      </div>
+      {ownWord && <form className="row" style={{ marginTop: 6 }} onSubmit={(e) => { e.preventDefault(); addExtra(); }}>
+        <input autoFocus value={extra} onChange={(e) => setExtra(e.target.value)} placeholder="Your own words" maxLength={60} disabled={p.busy} style={{ flex: 1 }} aria-label="Other words to look for" />
         <button type="submit" disabled={!extra.trim() || p.busy}>Add</button>
-      </form>
+      </form>}
       <div className="row" style={{ marginTop: 12 }}>
         <button className="primary" disabled={!words.length || p.busy} onClick={() => p.onFind(words, kind)}>
           {p.busy ? "Looking…" : `Find ${kind === "include" ? "areas to analyse" : "areas to leave out"}`}
