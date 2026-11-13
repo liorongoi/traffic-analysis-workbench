@@ -5,11 +5,15 @@ offline workstation. The application itself never downloads anything.
 
     python scripts/fetch_models.py [--dest models]
 
-It also fetches SAM 3.1 (sam3.1-w8a16, about 880 MB; --no-sam3 skips it), RF-DETR Small (exported to ONNX here; needs
-PyTorch and the rfdetr package; --no-rfdetr skips it, --rfdetr-sizes picks others) and the YOLOX-s and RF-DETR training
-starting weights (yolox_s.pth, rf-detr-small-coco.pth, d-fine-small-coco.pth, rt-detr-r18-coco.pth; D-FINE and
-RT-DETRv2 need PyTorch and transformers, --no-detr skips them) into training_weights/; the installers put
-them next to their own Python (share/lanepulse), so training on the learning page never goes online.
+Every size of the four fast detectors is fetched by default, so the app can choose the one that suits each computer
+(hardware.py): YOLOX nano, tiny, s, m, l, x; RF-DETR nano, small, medium (exported to ONNX here; needs PyTorch and the
+rfdetr package; --no-rfdetr skips it); D-FINE nano to xlarge and RT-DETRv2 R18 to R101 (need PyTorch and transformers;
+--no-detr skips them). --yolox-sizes, --rfdetr-sizes and --detr-sizes pick fewer; --minimal keeps one of each.
+It also fetches SAM 3.1 (sam3.1-w8a16, about 880 MB; --no-sam3 skips it) and the training starting weights
+(yolox_<size>.pth, rf-detr-<size>-coco.pth, d-fine-<size>-coco.pth, rt-detr-<size>-coco.pth) into training_weights/;
+the installers put them next to their own Python (share/lanepulse), so training on the learning page never goes
+online. Files already in --dest and --training-weights are checked and kept, so with everything staged it runs
+without a network.
 """
 from __future__ import annotations
 
@@ -34,6 +38,8 @@ PACKS = [
         "input_size": 640,
         "input_format": "BGR uint8 values as float32, letterboxed top-left, pad value 114, no normalisation",
         "classes": "coco80",
+        "architecture": "yolox",
+        "size": "s",
     },
     {
         "name": "plate-yolov9-t-640",
@@ -69,6 +75,30 @@ PACKS = [
     },
 ]
 
+# The other released YOLOX sizes (same release, license and data as YOLOX-s): ONNX for detection, PyTorch checkpoint
+# for training. Nano and tiny take 416x416 pictures. Nano (depthwise layers) runs but is not trained here.
+YOLOX_RELEASE = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/"
+YOLOX_OTHER = {     # size: (onnx sha256, input size, pth sha256 or None)
+    "nano": ("c789161ed43c8269fcd4e67c67eeeb4e80c622da2eb296a20bc6007bd18a0b7d", 416, None),
+    "tiny": ("427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7", 416,
+             "9de513de589ac98bb92d3bca53b5af7b9acfa9b0bacb831f7999d0f7afaee8f0"),
+    "m": ("21ff6cfdeb53b013bac2249599e55f00bff3cfdfdab37ed7a4620818c1d15b3f", 640,
+          "60076992b32da82951c90cfa7bd6ab70eba9eda243e08b940a396f60ac2d19b6"),
+    "l": ("7860ae79de6c89a3c1eb72ae9a2756c0ccfbe04b7791bb5880afabd97855a411", 640,
+          "1e6b7fa6240375370b2a8a8eab9066b3cdd43fd1d0bfa8d2027fd3a51def2917"),
+    "x": ("c892d7aaf1c4746d8a4d675bec669a4db4f434b4ee1efb654bc9b353379c7c55", 640,
+          "5652330b6ae860043f091b8f550a60c10e1129f416edfdb65c259be6caf355cf"),
+}
+YOLOX_ALL = ["nano", "tiny", "s", "m", "l", "x"]
+
+
+def yolox_pack(size: str) -> dict:
+    if size == "s":
+        return PACKS[0]
+    sha, res, _ = YOLOX_OTHER[size]
+    return dict(PACKS[0], name=f"yolox-{size}", weights_url=f"{YOLOX_RELEASE}yolox_{size}.onnx", sha256=sha,
+                input_size=res, size=size)
+
 
 # Starting weights for training the vehicle detector (PyTorch checkpoint of the same released YOLOX-s).
 TRAINING_WEIGHTS = {
@@ -76,6 +106,32 @@ TRAINING_WEIGHTS = {
     "sha256": "f55ded7181e1b0c13285c56e7790b8f0e8f8db590fe4edb37f0b7f345c913a30",
     "file": "yolox_s.pth",
 }
+
+
+def fetch_yolox_weights(weights_dir: Path, size: str) -> int:
+    """yolox_<size>.pth for tiny, m, l, x: the released checkpoint, checked by its SHA-256, then kept without its
+    optimizer state when PyTorch is here (half the size; trainer and loader read only its "model")."""
+    _, _, want = YOLOX_OTHER[size]
+    w = weights_dir / f"yolox_{size}.pth"
+    if want is None or w.is_file():
+        return 0
+    part = weights_dir / f"yolox_{size}.released.part"
+    print(f"downloading {YOLOX_RELEASE}yolox_{size}.pth")
+    fetch(f"{YOLOX_RELEASE}yolox_{size}.pth", part)
+    got = sha256_file(part)
+    if got != want:
+        part.unlink()
+        print(f"error: checksum mismatch for yolox_{size}.pth: {got}", file=sys.stderr)
+        return 1
+    try:
+        import torch
+        ck = torch.load(part, map_location="cpu", weights_only=True)
+        torch.save({"model": ck["model"]}, w)
+        part.unlink()
+    except ImportError:
+        part.replace(w)
+    print(f"ok {w}")
+    return 0
 
 
 # SAM 3.1 (Meta's Segment Anything 3.1): the 8-bit weight-compressed (W8A16) OpenVINO export by
@@ -166,12 +222,21 @@ def fetch_sam3(dest: Path) -> int:
 # RF-DETR (Roboflow, Apache-2.0): the released COCO weights, checked against the MD5 the rfdetr package publishes, are
 # exported to ONNX here (needs PyTorch and the rfdetr package on this staging machine: pip install "rfdetr[onnx]"),
 # and kept without their optimizer state as training starting weights (training_weights/rf-detr-<size>-coco.pth).
-RFDETR_SIZES_DEFAULT = "small"
+RFDETR_SIZES_DEFAULT = "all"
+RFDETR_ALL = ["nano", "small", "medium"]
+
+
+def _staged(dest: Path, weights_dir: Path, name: str, weights: str) -> bool:
+    """A pack and its training weights already here (copied in for an offline build): nothing to fetch or export."""
+    return (weights_dir / weights).is_file() and any((dest / name).glob("*/model.json"))
 RFDETR_LICENSE_URL = "https://raw.githubusercontent.com/roboflow/rf-detr/develop/LICENSE"
 
 
 def fetch_rfdetr(dest: Path, weights_dir: Path, sizes: list[str]) -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    sizes = [s for s in sizes if not _staged(dest, weights_dir, f"rf-detr-{s}", f"rf-detr-{s}-coco.pth")]
+    if not sizes:
+        return 0
     try:
         import rfdetr  # noqa: F401
         from trafficwb import rfdetr_train as rt
@@ -235,11 +300,16 @@ def fetch_rfdetr(dest: Path, weights_dir: Path, sizes: list[str]) -> int:
 # D-FINE and RT-DETRv2 (Apache-2.0): the released COCO weights at a fixed commit, checked by SHA-256 (detr_train.ARCHS),
 # kept as training starting weights (training_weights/<arch>-<size>-coco.pth) and exported to ONNX as packs the app
 # runs (models/<arch>-<size>/coco). Needs PyTorch and transformers on this staging machine.
-DETR_SIZES_DEFAULT = "d-fine:small,rt-detr:r18"
+DETR_SIZES_DEFAULT = "all"
+DETR_ALL = ["d-fine:nano", "d-fine:small", "d-fine:medium", "d-fine:large", "d-fine:xlarge",
+            "rt-detr:r18", "rt-detr:r34", "rt-detr:r50", "rt-detr:r101"]
 
 
 def fetch_detr(dest: Path, weights_dir: Path, wanted: list[str]) -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    wanted = [w for w in wanted if not _staged(dest, weights_dir, w.replace(":", "-"), w.replace(":", "-") + "-coco.pth")]
+    if not wanted:
+        return 0
     try:
         from trafficwb import detr_train as dt
         if not dt.available()["ok"]:
@@ -279,24 +349,42 @@ def main(argv=None) -> int:
     ap.add_argument("--no-rfdetr", action="store_true", help="skip RF-DETR (needs PyTorch and rfdetr on this machine)")
     ap.add_argument("--require-rfdetr", action="store_true", help="fail when RF-DETR cannot be exported here")
     ap.add_argument("--rfdetr-sizes", default=RFDETR_SIZES_DEFAULT,
-                    help="comma-separated RF-DETR sizes to fetch: nano, small, medium (default small)")
+                    help="comma-separated RF-DETR sizes to fetch: nano, small, medium, or all (the default)")
+    ap.add_argument("--yolox-sizes", default="all",
+                    help="comma-separated YOLOX sizes to fetch: nano, tiny, s, m, l, x, or all (the default)")
+    ap.add_argument("--minimal", action="store_true",
+                    help="only YOLOX-s, RF-DETR Small, D-FINE Small and RT-DETRv2 R18 (quick test builds)")
     ap.add_argument("--no-detr", action="store_true", help="skip D-FINE and RT-DETRv2 (need PyTorch and transformers)")
     ap.add_argument("--require-detr", action="store_true", help="fail when D-FINE and RT-DETRv2 cannot be fetched here")
     ap.add_argument("--detr-sizes", default=DETR_SIZES_DEFAULT,
-                    help="comma-separated arch:size to fetch, e.g. d-fine:small,rt-detr:r18 (the default)")
+                    help="comma-separated arch:size to fetch, e.g. d-fine:small,rt-detr:r18, or all (the default)")
     a = ap.parse_args(argv)
-    for p in PACKS:
+    if a.minimal:
+        a.yolox_sizes, a.rfdetr_sizes, a.detr_sizes = "s", "small", "d-fine:small,rt-detr:r18"
+    every = {"yolox": YOLOX_ALL, "rfdetr": RFDETR_ALL, "detr": DETR_ALL}
+
+    def sizes(text: str, kind: str) -> list[str]:
+        items = [x.strip() for x in text.split(",") if x.strip()]
+        return list(every[kind]) if items == ["all"] else items
+
+    yolox = sizes(a.yolox_sizes, "yolox")
+    bad = [x for x in yolox if x not in YOLOX_ALL]
+    if bad:
+        print(f"error: unknown YOLOX size {', '.join(bad)}", file=sys.stderr)
+        return 1
+    for p in [*(yolox_pack(z) for z in yolox if z != "s"), *PACKS]:
         d = Path(a.dest) / p["name"] / p["version"]
         d.mkdir(parents=True, exist_ok=True)
         w = d / "model.onnx"
-        if not w.exists() or hashlib.sha256(w.read_bytes()).hexdigest() != p["sha256"]:
+        if not w.exists() or sha256_file(w) != p["sha256"]:
             print(f"downloading {p['weights_url']}")
             fetch(p["weights_url"], w)
-        got = hashlib.sha256(w.read_bytes()).hexdigest()
+        got = sha256_file(w)
         if got != p["sha256"]:
             print(f"error: checksum mismatch for {p['name']}: {got}", file=sys.stderr)
             return 1
-        fetch(p["license_url"], d / "LICENSE")
+        if not (d / "LICENSE").is_file():                 # staged already: no network needed
+            fetch(p["license_url"], d / "LICENSE")
         card = {k: v for k, v in p.items() if k not in ("weights_url",)}
         card["weights"] = "model.onnx"
         (d / "model.json").write_text(json.dumps(card, indent=2), encoding="utf-8")
@@ -306,21 +394,24 @@ def main(argv=None) -> int:
     t = Path(a.training_weights)
     t.mkdir(parents=True, exist_ok=True)
     w = t / TRAINING_WEIGHTS["file"]
-    if not w.exists() or hashlib.sha256(w.read_bytes()).hexdigest() != TRAINING_WEIGHTS["sha256"]:
+    if not w.exists() or sha256_file(w) != TRAINING_WEIGHTS["sha256"]:
         print(f"downloading {TRAINING_WEIGHTS['url']}")
         fetch(TRAINING_WEIGHTS["url"], w)
-    got = hashlib.sha256(w.read_bytes()).hexdigest()
+    got = sha256_file(w)
     if got != TRAINING_WEIGHTS["sha256"]:
         w.unlink()
         print(f"error: checksum mismatch for {w.name}: {got}", file=sys.stderr)
         return 1
     print(f"ok {w}")
+    for z in yolox:
+        if z != "s" and fetch_yolox_weights(t, z):
+            return 1
     if not a.no_rfdetr:
-        r = fetch_rfdetr(Path(a.dest), t, [x.strip() for x in a.rfdetr_sizes.split(",") if x.strip()])
+        r = fetch_rfdetr(Path(a.dest), t, sizes(a.rfdetr_sizes, "rfdetr"))
         if r == 1 or (r == 2 and a.require_rfdetr):
             return 1
     if not a.no_detr:
-        r = fetch_detr(Path(a.dest), t, [x.strip() for x in a.detr_sizes.split(",") if x.strip()])
+        r = fetch_detr(Path(a.dest), t, sizes(a.detr_sizes, "detr"))
         if r == 1 or (r == 2 and a.require_detr):
             return 1
     return 0

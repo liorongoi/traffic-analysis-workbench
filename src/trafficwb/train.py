@@ -54,7 +54,20 @@ COCO_WEIGHTS = {
     "sha256": "f55ded7181e1b0c13285c56e7790b8f0e8f8db590fe4edb37f0b7f345c913a30",
     "name": "yolox-s", "version": "0.1.1rc0",
 }
-LICENSE_NOTE = """This model was fine-tuned from YOLOX-s (Megvii, https://github.com/Megvii-BaseDetection/YOLOX).
+# The released YOLOX weights of every size that is trained here (nano has depthwise layers and is only run). "sha256"
+# is the published file; the installers ship tiny, m, l and x without their optimizer state (only {"model": ...}),
+# made from that file by slim_checkpoint, so only YOLOX-s is checked by its hash when found on disk.
+YOLOX_RELEASE = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/"
+YOLOX_WEIGHTS = {
+    "tiny": "9de513de589ac98bb92d3bca53b5af7b9acfa9b0bacb831f7999d0f7afaee8f0",
+    "s": COCO_WEIGHTS["sha256"],
+    "m": "60076992b32da82951c90cfa7bd6ab70eba9eda243e08b940a396f60ac2d19b6",
+    "l": "1e6b7fa6240375370b2a8a8eab9066b3cdd43fd1d0bfa8d2027fd3a51def2917",
+    "x": "5652330b6ae860043f091b8f550a60c10e1129f416edfdb65c259be6caf355cf",
+}
+YOLOX_SIZES = list(YOLOX_WEIGHTS)                         # trainable sizes, smallest first
+YOLOX_DEFAULT = "s"
+LICENSE_NOTE = """This model was fine-tuned from YOLOX-{size} (Megvii, https://github.com/Megvii-BaseDetection/YOLOX).
 YOLOX code and released weights: Apache License 2.0, https://www.apache.org/licenses/LICENSE-2.0
 The starting weights were trained on COCO 2017 (annotations CC BY 4.0; the Flickr images carry their own terms).
 Fine-tuning used the mission's own reviewed images, exported from LanePulse.
@@ -238,31 +251,57 @@ def shipped_weights_dirs() -> list[Path]:
     return dirs
 
 
-def find_coco_weights() -> Path | None:
+def weights_name(size: str = YOLOX_DEFAULT) -> str:
+    return f"yolox_{size}.pth"
+
+
+def _check_size(size: str, init: str = "coco") -> str:
+    """Released weights exist for YOLOX_SIZES; a trained pack, a .pth or random weights (tests) may be any size."""
+    from .yolox_torch import SIZES
+    if size not in (YOLOX_WEIGHTS if init == "coco" else SIZES):
+        raise TrainError(f"YOLOX size must be one of {', '.join(YOLOX_SIZES)} (YOLOX-nano runs but is not trained here).")
+    return size
+
+
+def find_coco_weights(size: str = YOLOX_DEFAULT) -> Path | None:
     for d in shipped_weights_dirs():
-        p = d / "yolox_s.pth"
-        if p.is_file() and _sha256(p) == COCO_WEIGHTS["sha256"]:
+        p = d / weights_name(size)
+        if p.is_file() and (size != "s" or _sha256(p) == COCO_WEIGHTS["sha256"]):
             return p
     return None
 
 
-def coco_weights(log=print, download: bool = True) -> Path:
-    found = find_coco_weights()
+def slim_checkpoint(src: Path, dest: Path) -> Path:
+    """Keep only the weights of a released YOLOX checkpoint, not its optimizer state (half the size)."""
+    ck = torch.load(src, map_location="cpu", weights_only=True)
+    tmp = dest.with_name(dest.name + ".partial")
+    torch.save({"model": ck["model"]}, tmp)
+    tmp.replace(dest)
+    return dest
+
+
+def coco_weights(log=print, download: bool = True, size: str = YOLOX_DEFAULT) -> Path:
+    _check_size(size)
+    found = find_coco_weights(size)
     if found:
         return found
     if not download:
-        raise TrainError("The YOLOX-s starting weights are not installed here (yolox_s.pth in "
+        raise TrainError(f"The YOLOX-{size} starting weights are not installed here ({weights_name(size)} in "
                          f"{Path(sys.prefix) / 'share' / 'lanepulse'}). Reinstall LanePulse, or continue from a trained model.")
-    path = _cache_dir() / "yolox_s.pth"
+    path = _cache_dir() / weights_name(size)
     path.parent.mkdir(parents=True, exist_ok=True)
-    log(f"Fetching the YOLOX-s starting weights (about 70 MB) into {path.parent} ...")
+    log(f"Fetching the YOLOX-{size} starting weights into {path.parent} ...")
     tmp = path.with_suffix(".part")
-    with urllib.request.urlopen(COCO_WEIGHTS["url"], timeout=60) as r, open(tmp, "wb") as f:
+    with urllib.request.urlopen(YOLOX_RELEASE + weights_name(size), timeout=60) as r, open(tmp, "wb") as f:
         shutil.copyfileobj(r, f)
-    if _sha256(tmp) != COCO_WEIGHTS["sha256"]:
+    if _sha256(tmp) != YOLOX_WEIGHTS[size]:
         tmp.unlink(missing_ok=True)
         raise TrainError("The downloaded starting weights do not match their published checksum; nothing was used.")
-    tmp.replace(path)
+    if size == "s":
+        tmp.replace(path)
+    else:
+        slim_checkpoint(tmp, path)
+        tmp.unlink(missing_ok=True)
     return path
 
 
@@ -279,15 +318,32 @@ def _open_pack(src: Path, work: Path) -> Path:
     return hits[0]
 
 
-def load_init(model: YOLOX, init: str, work: Path, log=print, download: bool = True) -> dict:
+def init_size(init: str) -> str | None:
+    """The YOLOX size of a trained pack (its card), or None for anything else."""
+    p = Path(str(init))
+    if init in ("coco", "none") or p.suffix == ".pth" or not p.exists():
+        return None
+    work = Path(tempfile.mkdtemp(prefix="lanepulse-size-"))
+    try:
+        card = json.loads((_open_pack(p, work) / "model.json").read_text(encoding="utf-8"))
+    except (TrainError, OSError, ValueError, zipfile.BadZipFile):
+        return None
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if card.get("architecture") not in (None, "yolox"):
+        raise TrainError(f"{p.name} is not a YOLOX model ({card.get('architecture')}); train it as that detector.")
+    return card.get("size") or "s"                         # packs made before sizes were all YOLOX-s
+
+
+def load_init(model: YOLOX, init: str, work: Path, log=print, download: bool = True, size: str = YOLOX_DEFAULT) -> dict:
     """Load starting weights; returns what they were, for the model card."""
     if init == "none":                                     # random weights: only for tests
         return {"file": None}
     if init == "coco":
-        p = coco_weights(log, download)
+        p = coco_weights(log, download, size)
         missing = load_checkpoint(model, str(p))
-        src = {"name": COCO_WEIGHTS["name"], "version": COCO_WEIGHTS["version"], "file": "yolox_s.pth",
-               "sha256": COCO_WEIGHTS["sha256"]}
+        src = {"name": f"yolox-{size}", "version": COCO_WEIGHTS["version"], "file": p.name,
+               "sha256": YOLOX_WEIGHTS[size]}
     else:
         p = Path(init)
         if p.suffix == ".pth" and p.is_file():
@@ -310,7 +366,7 @@ def load_init(model: YOLOX, init: str, work: Path, log=print, download: bool = T
             missing = sorted(set(own) - set(fit))
             src = {"name": card["name"], "version": card["version"], "sha256": card["sha256"]}
     if missing:
-        raise TrainError(f"The starting weights do not fit YOLOX-s ({len(missing)} missing, e.g. {missing[0]}).")
+        raise TrainError(f"The starting weights do not fit YOLOX-{size} ({len(missing)} missing, e.g. {missing[0]}).")
     return src
 
 
@@ -366,8 +422,8 @@ def validate(model, loader, dev, amp) -> float | None:
 
 
 def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, batch: int | None = None,
-          lr: float | None = None, device: str = "auto", workers: int | None = None, name: str = "yolox-s-tuned",
-          version: str | None = None, seed: int = 0, freeze_bn: bool | None = None, size: str = "s",
+          lr: float | None = None, device: str = "auto", workers: int | None = None, name: str | None = None,
+          version: str | None = None, seed: int = 0, freeze_bn: bool | None = None, size: str | None = None,
           log=print, progress=None, control=None, download: bool = True, on_epoch=None,
           mp_context: str | None = None) -> Path:
     """Train and write the model pack; returns the .zip path.
@@ -384,6 +440,11 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, bat
                 raise TrainCancelled("Training was stopped; no model was written.") from None
 
     dataset, out = Path(dataset), Path(out)
+    from_pack = init_size(str(init))
+    if from_pack and size and size != from_pack:
+        raise TrainError(f"{Path(str(init)).name} is a YOLOX-{from_pack}; it cannot go on as YOLOX-{size}.")
+    size = _check_size(from_pack or size or YOLOX_DEFAULT, str(init))
+    name = name or f"yolox-{size}-tuned"
     manifest_f = dataset / "manifest.json"
     if not manifest_f.is_file():
         raise TrainError(f"{dataset} is not an exported dataset (no manifest.json). Export one on the learning page.")
@@ -420,7 +481,7 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, bat
     work = Path(tempfile.mkdtemp(prefix="lanepulse-train-"))
     try:
         model = YOLOX(size, 80)
-        init_src = load_init(model, init, work, log, download)
+        init_src = load_init(model, init, work, log, download, size)
         model.to(dev)
         ema = EMA(model)
         opt = torch.optim.SGD(_param_groups(model, 5e-4), lr=lr, momentum=0.9, nesterov=True)
@@ -480,7 +541,7 @@ def train(dataset: Path, out: Path, *, init: str = "coco", epochs: int = 40, bat
                   "device": describe_device(dev), "torch": torch.__version__, "seed": seed,
                   "val_loss_before": None if base_val is None else round(base_val, 4),
                   "val_loss_after": None if vl is None else round(best, 4), "history": hist,
-                  "seconds": round(time.time() - t0), "own_classes": {str(k): v for k, v in sorted(own.items())}}
+                  "seconds": round(time.time() - t0), "size": size, "own_classes": {str(k): v for k, v in sorted(own.items())}}
         return write_pack(final, out, name, version or datetime.now().strftime("%Y%m%d-%H%M"), record, log)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -516,11 +577,13 @@ def write_pack(model: YOLOX, out: Path, name: str, version: str, record: dict, l
     except ImportError:
         log("onnxruntime is not installed here, so the exported file was not double-checked.")
     torch.save(model.state_dict(), tmp / "model.pt")
-    (tmp / "LICENSE").write_text(LICENSE_NOTE, encoding="utf-8")
+    size = record.get("size") or "s"
+    (tmp / "LICENSE").write_text(LICENSE_NOTE.format(size=size), encoding="utf-8")
     record["export_check_max_difference"] = check
     card = {"name": name, "version": version, "task": "vehicle_detection", "sha256": _sha256(onnx_path),
             "license": "Apache-2.0 (YOLOX code and starting weights); fine-tuned on the mission's own reviewed images",
-            "source": "trafficwb-train (fine-tuned YOLOX-s)", "input_size": SIZE,
+            "source": f"trafficwb-train (fine-tuned YOLOX-{size})", "architecture": "yolox", "size": size,
+            "input_size": SIZE,
             "input_format": "BGR uint8 values as float32, letterboxed top-left, pad value 114, no normalisation",
             "classes": "coco80", "weights": "model.onnx", "torch_weights": "model.pt",
             **({"own_classes": {str(k): v for k, v in sorted(own.items())}} if own else {}),
@@ -547,9 +610,9 @@ def main(argv=None) -> int:
     r.add_argument("--dataset", required=True, help="folder exported from the learning page")
     r.add_argument("--out", required=True, help="where to write the model pack and its .zip")
     r.add_argument("--arch", default="yolox", choices=sorted(TRAINERS),
-                   help="yolox (YOLOX-s, default), rf-detr (RF-DETR, rfdetr_train.py), d-fine or rt-detr (D-FINE or "
+                   help="yolox (YOLOX, default), rf-detr (RF-DETR, rfdetr_train.py), d-fine or rt-detr (D-FINE or "
                         "RT-DETRv2, detr_train.py)")
-    r.add_argument("--size", help="model size: RF-DETR nano, small (default), medium; D-FINE nano, small (default), "
+    r.add_argument("--size", help="model size: YOLOX tiny, s (default), m, l, x; RF-DETR nano, small (default), medium; D-FINE nano, small (default), "
                                   "medium, large, xlarge; RT-DETRv2 r18 (default), r34, r50, r101")
     r.add_argument("--init", default="coco", help="coco (released weights), a .pth file, or an earlier trained pack")
     r.add_argument("--epochs", type=int, default=40)
@@ -557,7 +620,7 @@ def main(argv=None) -> int:
     r.add_argument("--lr", type=float, help="learning rate (default 0.01 x batch / 64)")
     r.add_argument("--device", default="auto", choices=["auto", "cuda", "mps", "cpu"])
     r.add_argument("--workers", type=int, help="image loading processes (default up to 4)")
-    r.add_argument("--name", help="model name (default yolox-s-tuned, or rf-detr-<size>-tuned)")
+    r.add_argument("--name", help="model name (default <detector>-<size>-tuned)")
     r.add_argument("--version", help="model version (default: date and time)")
     r.add_argument("--seed", type=int, default=0)
     sub.add_parser("device", help="show which accelerator training would use")
@@ -572,8 +635,8 @@ def main(argv=None) -> int:
                       **({"size": args.size} if args.size else {}))
         elif args.cmd == "run":
             train(Path(args.dataset), Path(args.out), init=args.init, epochs=args.epochs, batch=args.batch, lr=args.lr,
-                  device=args.device, workers=args.workers, name=args.name or "yolox-s-tuned", version=args.version,
-                  seed=args.seed)
+                  device=args.device, workers=args.workers, name=args.name, version=args.version,
+                  seed=args.seed, size=args.size)
         elif args.cmd == "device":
             print(describe_device(pick_device()))
         else:

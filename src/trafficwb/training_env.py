@@ -20,14 +20,27 @@ def _probe() -> dict:
     try:
         from . import train as tr
         dev = tr.pick_device("auto")
-        return {"state": "ready", "device_type": dev.type, "device": tr.describe_device(dev),
-                "coco_weights": tr.find_coco_weights() is not None,
-                **_rfdetr(),
-                "detr": _detr(),
-                # suggested rounds: a GPU does 40 in an hour or two; a CPU needs a night for about 20
-                "suggested_epochs": 40 if dev.type in ("cuda", "mps") else 20}
+        yw = [s for s in tr.YOLOX_SIZES if tr.find_coco_weights(s) is not None]
+        out = {"state": "ready", "device_type": dev.type, "device": tr.describe_device(dev),
+               "coco_weights": "s" in yw, "yolox_weights": yw, "yolox_sizes": list(tr.YOLOX_SIZES),
+               **_rfdetr(),
+               "detr": _detr(),
+               # suggested rounds: a GPU does 40 in an hour or two; a CPU needs a night for about 20
+               "suggested_epochs": 40 if dev.type in ("cuda", "mps") else 20}
+        out["recommended"] = recommended(out)
+        return out
     except Exception as exc:                       # a broken PyTorch must never break the learning page
         return {"state": "unavailable", "reason": f"PyTorch does not start here: {type(exc).__name__}: {exc}"}
+
+
+def recommended(env: dict) -> dict:
+    """The size of each detector a training starts from on this computer, among the starting weights shipped here
+    (hardware.levels: the GPU's memory, an Apple GPU, or the processor), and why: {"why", "sizes": {family: size}}."""
+    from . import hardware
+    lv = hardware.levels()["train"]
+    have = {"yolox": env.get("yolox_weights") or [], "rf-detr": env.get("rfdetr_weights") or [],
+            **{a: v.get("weights") or [] for a, v in (env.get("detr") or {}).items()}}
+    return {"why": lv[1], "level": lv[0], "sizes": {f: hardware.pick(f, lv[0], w) for f, w in have.items()}}
 
 
 def _rfdetr() -> dict:

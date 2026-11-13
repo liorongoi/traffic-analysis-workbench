@@ -90,9 +90,24 @@ Unresolved night candidates in a fully reviewed image become "ignore" areas: a d
 
 ### Which detector is trained
 
-- YOLOX-s (`train.py`), RF-DETR (`rfdetr_train.py`), D-FINE and RT-DETRv2 (`detr_train.py`) all train from the same exported dataset, so each learns from the same labels: the operator's reviews, SAM 3.1's labels on what nobody reviewed (reviews win), and confirmed marked targets. Areas nobody looked at (partial reviews, excluded regions, unsure SAM boxes and other ignore boxes) are left out of YOLOX's loss and painted plain grey for the transformer detectors, whose set loss cannot leave them out.
+- YOLOX (`train.py`; tiny, s, m, l, x), RF-DETR (`rfdetr_train.py`), D-FINE and RT-DETRv2 (`detr_train.py`) all train from the same exported dataset, so each learns from the same labels: the operator's reviews, SAM 3.1's labels on what nobody reviewed (reviews win), and confirmed marked targets. Areas nobody looked at (partial reviews, excluded regions, unsure SAM boxes and other ignore boxes) are left out of YOLOX's loss and painted plain grey for the transformer detectors, whose set loss cannot leave them out.
 - D-FINE (sizes nano, small, medium, large, xlarge) and RT-DETRv2 (r18, r34, r50, r101) start from their released COCO weights (Apache-2.0) and keep the 80-class COCO head, so a car stays a car and a taught target takes a free COCO class as in YOLOX (`own_classes.py`), named in the pack's card. The trained pack holds `model.onnx` (boxes as centre and size in 0..1 plus class logits: `outputs: boxes_logits`, `class_ids: coco80`, RGB in 0..1, stretched to 640x640), and `config.json` with `model.safetensors` to train further.
-- Training never contacts a model hub: the installers ship the starting weights as one file each next to their own Python (`share/lanepulse/d-fine-small-coco.pth`, `rt-detr-r18-coco.pth`; other sizes with `fetch_models.py --detr-sizes`), fetched when the installer is built from a fixed commit and checked by SHA-256, and the trainer runs with the hub switched off (no account, token, telemetry or online check). The released models are also installed as packs (`d-fine-small`, `rt-detr-r18`), so the detector comparison lists them and a trained model is compared with its starting point.
+- Training never contacts a model hub: the installers ship the starting weights of every size as one file each next to their own Python (`share/lanepulse/yolox_<size>.pth`, `rf-detr-<size>-coco.pth`, `d-fine-<size>-coco.pth`, `rt-detr-<size>-coco.pth`), fetched when the installer is built from a fixed commit or release and checked by SHA-256, and the trainer runs with the hub switched off (no account, token, telemetry or online check). The released models are also installed as packs (`yolox-<size>`, `rf-detr-<size>`, `d-fine-<size>`, `rt-detr-<size>`), so the detector comparison lists them and a trained model is compared with the released model of its size.
+
+### Which size, on this computer
+
+Every size of the four fast detectors is installed (YOLOX nano to x, RF-DETR nano to medium, D-FINE nano to xlarge, RT-DETRv2 R18 to R101). `hardware.py` reads the computer once per start (NVIDIA GPUs and their memory through `nvidia-smi`, Apple Silicon, processor threads and memory, ONNX Runtime's accelerators) and gives two levels, 0 to 4, each mapped to one size per detector:
+
+| | Level 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| Detection (ONNX Runtime) | processor, under 8 threads or 16 GB | larger processor; NVIDIA under 4 GB | NVIDIA 4 to 8 GB; DirectML GPU | NVIDIA 8 to 16 GB | NVIDIA 16 GB or more |
+| Training (PyTorch) | processor | NVIDIA under 6 GB; Apple under 16 GB | NVIDIA 6 to 12 GB; Apple 16 to 32 GB | NVIDIA 12 to 20 GB; Apple 32 GB or more | NVIDIA 20 GB or more |
+| YOLOX | tiny | s | m | l | x |
+| RF-DETR | nano | small | medium | medium | medium |
+| D-FINE | nano | small | medium | large | xlarge |
+| RT-DETRv2 | r18 | r18 | r34 | r50 | r101 |
+
+If that size is not installed, the nearest smaller one is used, then the nearest larger. Missions with the standard detector run that size of YOLOX, and RF-DETR missions that size of RF-DETR, unless a model is promoted. The learning page shows the hardware, the size each detector runs and the size recommended for training, with a dropdown per detector ("Automatic (s for this computer)" or a size) that an administrator changes (`GET /api/hardware`, `PUT /api/hardware/sizes`, kept in `detector_sizes.json` in the data folder). "Start from" lists every installed size, marks the one recommended for this computer and picks it by default. YOLOX-nano runs but is not trained (its released weights use depthwise layers).
 - Checked: the ONNX model gives the PyTorch model's scores to within 0.0002 on real street frames; D-FINE nano, taught a new target on 44 real street frames, found 15 of 21 on unseen frames (LRN-10).
 
 ## Saved models

@@ -26,14 +26,21 @@ def _rfdetr_pack(root, name, card=None):
                  {"dets": np.array([[[0.5, 0.5, 0.2, 0.2]]], np.float32), "labels": logits})
 
 
-def test_which_rfdetr_a_mission_uses(tmp_path):
+def test_which_rfdetr_a_mission_uses(tmp_path, monkeypatch):
+    from trafficwb import hardware
+    small = {"cpu_threads": 4, "memory_gb": 8, "nvidia": [], "apple_silicon": False, "onnx": []}
+    monkeypatch.setattr(hardware, "detect", lambda: small | {"cpu_threads": 16, "memory_gb": 32})
     with pytest.raises(models.ModelPackError, match="not installed"):
         detectors.rfdetr_pack(models_root=tmp_path)
     assert detectors.rfdetr_info(models_root=tmp_path)["installed"] is False
     _rfdetr_pack(tmp_path, "rf-detr-nano")
     assert detectors.rfdetr_pack(models_root=tmp_path).name == "rf-detr-nano"
-    _rfdetr_pack(tmp_path, "rf-detr-small")                     # Small is preferred when both are there
+    _rfdetr_pack(tmp_path, "rf-detr-small")                     # a strong processor: Small when both are there
     assert detectors.rfdetr_info(models_root=tmp_path)["model"]["name"] == "rf-detr-small"
+    monkeypatch.setattr(hardware, "detect", lambda: small)      # a small processor: Nano
+    assert detectors.rfdetr_pack(models_root=tmp_path).name == "rf-detr-nano"
+    hardware.set_choice(tmp_path, "rf-detr", "small")           # unless the operator chose a size
+    assert detectors.rfdetr_pack(tmp_path, models_root=tmp_path).name == "rf-detr-small"
     assert detectors.is_rfdetr({"name": "custom", "architecture": "rf-detr"})
     assert detectors.is_rfdetr({"name": "rf-detr-small-tuned"}) and not detectors.is_rfdetr({"name": "yolox-s"})
 

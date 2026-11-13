@@ -99,8 +99,9 @@ def main(argv: list[str] | None = None) -> int:
         m = root.open_mission(a.mission)
         chosen = m.config().detector if m.input_type == "images" else "standard"
         from .detectors import fast_of, uses_sam
-        model = a.model or (chosen if chosen == "sam3" else "both" if uses_sam(chosen) else "yolox-s")
-        fast = "yolox-s"
+        from .hardware import yolox_pack
+        fast = yolox_pack(a.data).name
+        model = a.model or (chosen if chosen == "sam3" else "both" if uses_sam(chosen) else fast)
         if not a.model and fast_of(chosen) == "rfdetr":
             from .detectors import rfdetr_pack
             fast = rfdetr_pack(a.data).name

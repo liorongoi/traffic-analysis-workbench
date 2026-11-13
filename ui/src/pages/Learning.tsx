@@ -299,6 +299,7 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
           <li key={h.id}>{h.created_at}: {h.action === "promote" ? "promoted" : "rolled back from"} {h.name} {h.version} by {h.author}{h.note ? ` (${h.note})` : ""}</li>)}</ul>}
       </div>
 
+      <SizesCard />
       <div className="card">
         <h2 style={{ marginTop: 0 }}>What can learn</h2>
         <table className="t"><tbody>{s.adapters.map((a: any) => <tr key={a.algorithm}><td>{a.algorithm}</td><td>{a.adapter}</td><td>{a.status.replace("_", " ")}</td></tr>)}</tbody></table>
@@ -333,7 +334,11 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
   const ds = refs ?? defaultRefs(s, missionId);
   const [start, setStart] = useState<string>("");
   const [epochs, setEpochs] = useState<number | "">("");
-  const startFrom = start || (trainable.some((md) => `${md.name}/${md.version}` === prodKey) ? prodKey : (t.coco_weights ? "coco" : (trainable[0] ? `${trainable[0].name}/${trainable[0].version}` : "")));
+  const rec: Record<string, string | null> = t.recommended?.sizes ?? {};
+  const yw: string[] = t.yolox_weights ?? (t.coco_weights ? ["s"] : []);
+  const recNote = (fam: string, sz: string) => (rec[fam] === sz ? " (recommended for this computer)" : "");
+  const autoStart = rec.yolox && yw.includes(rec.yolox) ? `yolox:${rec.yolox}` : (yw[0] ? `yolox:${yw[0]}` : "");
+  const startFrom = start || (trainable.some((md) => `${md.name}/${md.version}` === prodKey) ? prodKey : (autoStart || (trainable[0] ? `${trainable[0].name}/${trainable[0].version}` : "")));
   const ep = epochs === "" ? (t.suggested_epochs ?? 20) : epochs;
   const control = (a: string) => act(() => post(`/missions/${missionId}/learning/train/${a}`));
   const pct = job && job.total ? Math.round((100 * job.done) / job.total) : 0;
@@ -352,10 +357,10 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
           <DatasetPicker s={s} missionId={missionId} value={ds} onChange={setRefs} label="Dataset versions to train on" />
           <label>Start from
             <select value={startFrom} onChange={(ev) => setStart(ev.target.value)}>
-              {t.coco_weights && <option value="coco">the original detector (YOLOX-s)</option>}
-              {t.rfdetr && (t.rfdetr_weights ?? []).map((sz: string) => <option key={sz} value={`rf-detr:${sz}`}>the released RF-DETR {sz} (more accurate, slower to train)</option>)}
+              {yw.map((sz: string) => <option key={`yolox:${sz}`} value={`yolox:${sz}`}>the released YOLOX-{sz}{recNote("yolox", sz)}</option>)}
+              {t.rfdetr && (t.rfdetr_weights ?? []).map((sz: string) => <option key={sz} value={`rf-detr:${sz}`}>the released RF-DETR {sz} (more accurate, slower to train){recNote("rf-detr", sz)}</option>)}
               {Object.entries(t.detr ?? {}).filter(([, d]: [string, any]) => d.ok).flatMap(([a, d]: [string, any]) => (d.weights ?? []).map((sz: string) =>
-                <option key={`${a}:${sz}`} value={`${a}:${sz}`}>the released {d.title} {sz} (transformer, slower to train)</option>))}
+                <option key={`${a}:${sz}`} value={`${a}:${sz}`}>the released {d.title} {sz} (transformer, slower to train){recNote(a, sz)}</option>))}
               {trainable.map((md: any) => <option key={`${md.name}/${md.version}`} value={`${md.name}/${md.version}`}>{md.saved_as ? `${md.saved_as} (${md.name} ${md.version})` : `${md.name} ${md.version}`}{md.trained_on ? `, trained on “${md.trained_on}”` : ""}{`${md.name}/${md.version}` === prodKey ? " (in use)" : ""}</option>)}
             </select>
           </label>
@@ -364,11 +369,12 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
               options={[...new Set([...EPOCHS, t.suggested_epochs ?? 20])].sort((a, b) => a - b).map((n): [number, string] => [n, n === (t.suggested_epochs ?? 20) ? `${n} (suggested)` : String(n)])} />
           </label>
           <button className="primary" disabled={ds.length === 0 || !startFrom || !!t.busy_mission} onClick={() => act(
-            () => post(`/missions/${missionId}/learning/train`, /^(rf-detr|d-fine|rt-detr):/.test(startFrom)
+            () => post(`/missions/${missionId}/learning/train`, /^(yolox|rf-detr|d-fine|rt-detr):/.test(startFrom)
               ? { datasets: ds, epochs: ep, start_from: "coco", arch: startFrom.split(":")[0], size: startFrom.split(":")[1] }
               : { datasets: ds, epochs: ep, start_from: startFrom }),
             () => "Training started. You can close the browser; it continues on this computer.")}>Train</button>
         </div>}
+        {!active && t.recommended?.why && <p className="muted" style={{ marginTop: 6 }}>Recommended sizes are chosen for training on {t.recommended.why}.</p>}
         {!active && (s.carry_over?.runs?.length ?? 0) > 0 && refs === null && <div className="msg warn">
           {s.carry_over.runs.length === 1 ? "The last training round" : `The last ${s.carry_over.runs.length} training rounds`}{" "}
           ({s.carry_over.runs.map((r: number) => `#${r}`).join(", ")}) did not improve on the model they started from, so their data is
@@ -406,6 +412,42 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
               <tbody>{r.history.map((h: any) => <tr key={h.epoch}><td>{h.epoch}</td><td>{h.train_loss}</td><td>{h.val_loss ?? "–"}</td></tr>)}</tbody></table>
           </details></div>}
       </div>}
+    </div>
+  );
+}
+
+/** Which size of each fast detector runs here: chosen from this computer's hardware, or by the operator. */
+function SizesCard() {
+  const [h, setH] = useState<any>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { api("/hardware").then(setH).catch((e) => setErr(String(e?.message ?? e))); }, []);
+  const choose = (family: string, size: string) =>
+    api("/hardware/sizes", { method: "PUT", body: { family, size: size || null } }).then((r) => { setH(r); setErr(null); })
+      .catch((e) => setErr(e instanceof ApiError ? e.message : String(e)));
+  if (!h) return err ? <div className="card"><div className="msg err">{err}</div></div> : null;
+  const hw = h.hardware;
+  const gpus = (hw.nvidia ?? []).map((g: any) => `${g.name} (${g.memory_gb} GB)`).join(", ");
+  return (
+    <div className="card">
+      <h2 style={{ marginTop: 0 }}>Detector sizes on this computer</h2>
+      <p style={{ marginTop: 0 }}>This computer: {hw.cpu_threads} processor threads, {hw.memory_gb ?? "?"} GB memory
+        {gpus ? `, ${gpus}` : hw.apple_silicon ? ", Apple GPU" : ", no NVIDIA GPU"}. Detection runs on <b>{h.run_on}</b>;
+        training on <b>{h.train_on}</b>. Larger sizes find more but are slower.</p>
+      <table className="t">
+        <thead><tr><th>Detector</th><th>Size for detection</th><th>Recommended for training</th><th>Installed</th></tr></thead>
+        <tbody>{Object.entries(h.families).map(([f, d]: [string, any]) => (
+          <tr key={f}><td>{d.title}</td>
+            <td>{d.installed.length === 0 ? <span className="muted">not installed</span> :
+              <select value={d.chosen && d.installed.includes(d.chosen) ? d.chosen : ""} onChange={(ev) => choose(f, ev.target.value)}>
+                <option value="">Automatic ({d.auto} for this computer)</option>
+                {d.installed.map((sz: string) => <option key={sz} value={sz}>{sz}</option>)}
+              </select>}</td>
+            <td>{d.train_auto ?? <span className="muted">–</span>}</td>
+            <td className="muted">{d.installed.join(", ") || "–"}</td></tr>))}</tbody>
+      </table>
+      <p className="muted" style={{ marginBottom: 0 }}>YOLOX runs in missions with the standard detector, and RF-DETR in missions that choose
+        it, unless a model is promoted. A promoted or saved model always runs as it is.</p>
+      {err && <div className="msg err">{err}</div>}
     </div>
   );
 }
