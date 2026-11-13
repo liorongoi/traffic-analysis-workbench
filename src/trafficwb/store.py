@@ -36,6 +36,7 @@ EXPORT_FORMATS = {"xlsx", "csv"}
 # every sam3_interval_s seconds of the recording and the tracker carries what it found between those frames.
 DETECTORS = {"standard", "sam3", "both"}
 CAMERAS = {"fixed", "moving"}
+RUN_MODES = {"manual", "auto"}
 
 CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -902,6 +903,46 @@ CREATE TABLE video_segment (
   UNIQUE (run_item_id, idx)
 );
 """,
+    18: """
+-- Learning from video: an operator's word that every target of a recording is an event and every event is reviewed
+-- (as approving a still image says the image is complete). Append-only; the newest row counts.
+CREATE TABLE recording_review (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  action TEXT NOT NULL,             -- approve | reopen
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_recording_review ON recording_review(source_version_id, id);
+-- Dataset members may be frames of a recording: one row per (image) or per (recording, frame time).
+CREATE TABLE dataset_member_v18 (
+  dataset_id INTEGER NOT NULL REFERENCES training_dataset(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  frame_t REAL,                      -- video: presentation time of the frame; NULL for a still image
+  sha256 TEXT NOT NULL,              -- a still image's bytes; a frame: the recording's bytes and the time
+  view_key TEXT NOT NULL,
+  block TEXT NOT NULL,
+  split TEXT NOT NULL,
+  review TEXT NOT NULL,
+  condition TEXT,
+  labels TEXT NOT NULL,
+  last_revision_id INTEGER
+);
+INSERT INTO dataset_member_v18(dataset_id,source_version_id,frame_t,sha256,view_key,block,split,review,condition,labels,
+  last_revision_id) SELECT dataset_id,source_version_id,NULL,sha256,view_key,block,split,review,condition,labels,
+  last_revision_id FROM dataset_member;
+DROP TABLE dataset_member;
+ALTER TABLE dataset_member_v18 RENAME TO dataset_member;
+CREATE UNIQUE INDEX ux_member ON dataset_member(dataset_id, source_version_id, IFNULL(frame_t, -1));
+CREATE INDEX ix_member_split ON dataset_member(dataset_id, split);
+-- What the automatic learning loop decided and why (Run mode "full auto"); one row per decision.
+CREATE TABLE auto_learning_log (
+  id INTEGER PRIMARY KEY,
+  action TEXT NOT NULL,             -- waiting | dataset | train | adopted | kept | skipped | failed
+  detail TEXT NOT NULL,             -- JSON
+  created_at TEXT NOT NULL
+);
+""",
 }
 
 
@@ -987,6 +1028,9 @@ class MissionConfig:
     sam3_interval_s: float | None = None  # video: seconds of recording between SAM 3.1 frames (None: 1 s)
     camera: str = "fixed"            # video: fixed | moving (PTZ, vehicle, drone, body-worn): camera motion is removed
     video_workers: int | None = None  # video: segments analysed side by side on this computer (None: 1)
+    run_mode: str = "manual"         # learning: manual (the operator decides each step) | auto (see learning.auto_step)
+    auto_min_reviews: int = 20       # auto: new review decisions since the last dataset version before a round starts
+    auto_epochs: int = 30            # auto: training epochs per round
 
     def sources(self) -> list[str]:
         """Every source folder of the mission, the first being source_dir."""
@@ -1046,6 +1090,12 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         v.errors.append(f"Detector must be one of {sorted(DETECTORS)}.")
     if cfg.video_workers is not None and not (1 <= cfg.video_workers <= 32):
         v.errors.append("Workers must be 1 to 32.")
+    if cfg.run_mode not in RUN_MODES:
+        v.errors.append(f"Run mode must be one of {sorted(RUN_MODES)}.")
+    if not (1 <= cfg.auto_min_reviews <= 100000):
+        v.errors.append("Reviews before an automatic round must be 1 to 100000.")
+    if not (1 <= cfg.auto_epochs <= 500):
+        v.errors.append("Epochs per automatic round must be 1 to 500.")
     if cfg.camera not in CAMERAS:
         v.errors.append(f"Camera must be one of {sorted(CAMERAS)}.")
     if cfg.sam3_interval_s is not None and not (0.2 <= cfg.sam3_interval_s <= 10):

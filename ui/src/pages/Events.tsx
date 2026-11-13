@@ -21,6 +21,10 @@ export const fmtT = (t: number | null | undefined) => {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(ms % 1000).padStart(3, "0")}`;
 };
 
+const REVIEW_TEXT: Record<string, string> = {
+  full: "Approved: full labels", partial: "Some events reviewed", none: "Not reviewed",
+};
+
 const FLAG_LABEL: Record<string, string> = {
   appeared_inside_frame: "appeared inside the frame", ended_inside_frame: "lost inside the frame",
   possible_duplicate: "possible duplicate", class_uncertain: "class uncertain",
@@ -149,6 +153,17 @@ function EventList({ missionId }: { missionId: string }) {
       setMsg({ kind: "ok", text: "Manual UTC start cleared; the filename time is in use when available." });
     } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
   };
+  const review = async (r: any, action: "approve" | "confirm_rest_and_approve" | "reopen") => {
+    setMsg(null);
+    try {
+      await post(`/missions/${missionId}/recordings/${r.id}/review`, { action });
+      const updated = await api(`/missions/${missionId}/recordings`);
+      setRecs(updated.recordings); setTimeRevision((x) => x + 1);
+      setMsg({ kind: "ok", text: action !== "reopen"
+        ? "Recording approved for learning: its frames teach every reviewed target, and the empty road and rejected detections as background."
+        : "Recording reopened: only its reviewed events teach, the rest of each frame is ignored." });
+    } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
+  };
   const doExport = async () => {
     setMsg(null);
     try {
@@ -161,7 +176,7 @@ function EventList({ missionId }: { missionId: string }) {
       <CountsCard missionId={missionId} versionId={rec} refresh={timeRevision} />
       <div className="card">
         <h2>Recordings</h2>
-        <table className="t"><thead><tr><th>File</th><th>Start (UTC)</th><th className="num">Length</th><th>Frame rate</th><th>Processing</th><th className="num">Events</th></tr></thead>
+        <table className="t"><thead><tr><th>File</th><th>Start (UTC)</th><th className="num">Length</th><th>Frame rate</th><th>Processing</th><th className="num">Events</th><th>For learning</th></tr></thead>
           <tbody>{recs.map((r) => (
             <tr key={r.id}>
               <td className="mono bidi">{r.rel_path}</td>
@@ -188,7 +203,18 @@ function EventList({ missionId }: { missionId: string }) {
               <td>{r.nominal_fps ? `${Number(r.nominal_fps).toFixed(2)} fps` : ""}{r.variable_frame_rate ? " (variable)" : ""}</td>
               <td>{r.error ? <span className="badge failed" title={r.error}>cannot decode</span> : r.processing_state ?? ""}</td>
               <td className="num">{r.events}</td>
+              <td>
+                <div>{REVIEW_TEXT[r.review] ?? ""}</div>
+                {r.processing_state === "done" && (r.approved
+                  ? <button onClick={() => review(r, "reopen")}>Reopen</button>
+                  : <button onClick={() => review(r, r.pending ? "confirm_rest_and_approve" : "approve")}
+                      title="Say that every target in this recording is an event and every event is right; events not decided yet are confirmed">
+                      {r.pending ? `Confirm ${r.pending} left and approve` : "Approve recording"}</button>)}
+              </td>
             </tr>))}</tbody></table>
+        <p className="muted" style={{ marginBottom: 0 }}>Reviewed events teach the vehicle detector on the Learning tab. Approving a
+          recording also says that nothing was missed, so the empty road and the rejected detections in its frames are learnt
+          as background, as approving a still image does.</p>
       </div>
       <div className="card row">
         <select value={rec} onChange={(e) => setRec(e.target.value)} aria-label="Recording">

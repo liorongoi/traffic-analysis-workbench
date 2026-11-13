@@ -16,7 +16,7 @@ from typing import Callable
 
 from ..ingest import Monitor, cycle
 from ..process import Processor, RunControl
-from ..store import DataRoot
+from ..store import DataRoot, utcnow
 
 _resource_lock = threading.Lock()
 _training_lock = threading.Lock()      # one training at a time on this computer: it uses the whole GPU or CPU
@@ -540,6 +540,8 @@ class JobManager:
                         final = "cancelled"
                         return
                     job.result["evaluation_error"] = f"{type(exc).__name__}: {exc}"
+            if p.get("auto"):
+                self._auto_decide(m, ls, job, run_id, r, p)
             final = "finished"
         except Exception as exc:
             try:
@@ -564,6 +566,114 @@ class JobManager:
                 pass
             if final:
                 job.state = final
+
+    # ---------- Run mode "full auto" ----------
+    def auto_learn(self, mission_id: str) -> dict:
+        """One step of the automatic learning loop of a mission in Run mode "full auto": when enough new reviews have
+        built up and nothing else is training, freeze a dataset version and start a training round. The round's end
+        (``_auto_decide``) switches the mission to the new model only if it beat the model it started from."""
+        from .. import models, training_env
+        from ..learning import LearningError, LearningService, ModelLibrary
+        m = DataRoot(self.data_root).open_mission(mission_id)
+        cfg = m.config()
+        if getattr(cfg, "run_mode", "manual") != "auto":
+            return {"state": "manual"}
+        ls = LearningService(m)
+        new, need = ls.reviews_since_last_dataset(), int(cfg.auto_min_reviews)
+        st = {"state": "waiting", "new_reviews": new, "needed": need}
+        if new < need:
+            return st
+        if self.busy(mission_id) or self.training_busy():
+            return st | {"state": "busy"}
+        env = training_env.status(wait=True)
+        start, init = "coco", "coco"
+        if cfg.vehicle_model:
+            saved = ModelLibrary(self.data_root).get(cfg.vehicle_model)
+            if saved:
+                try:
+                    pack = models.find(saved["model_name"], saved["model_version"])
+                    if pack.card.get("torch_weights") and (pack.path / pack.card["torch_weights"]).is_file():
+                        start, init = f"{saved['model_name']}/{saved['model_version']}", str(pack.path)
+                except models.ModelPackError:
+                    pass
+        reason = None
+        if env["state"] != "ready":
+            reason = env.get("reason") or "Training is not available on this computer."
+        elif start == "coco" and not env.get("coco_weights"):
+            reason = "The YOLOX-s starting weights are not installed here."
+        if reason:
+            last = ls.auto_history(1)
+            if not last or last[0]["action"] != "waiting" or last[0]["detail"].get("reason") != reason:
+                ls.auto_log("waiting", reason=reason, new_reviews=new)
+            return st | {"state": "blocked", "reason": reason}
+        try:
+            ds = ls.create_dataset(f"auto {utcnow()[:16].replace('T', ' ')}", "auto")
+        except LearningError as exc:
+            ls.auto_log("failed", step="dataset", reason=str(exc))
+            return st | {"state": "failed", "reason": str(exc)}
+        if not ds["stats"]["splits"]["train"]["images"]:
+            ls.auto_log("skipped", dataset_id=ds["id"], reason="the new dataset version has no training images yet")
+            return st | {"state": "skipped"}
+        refs = [*ls.carry_over()["datasets"], {"mission_id": m.id, "dataset_id": ds["id"]}]
+        work = Path(cfg.output_dir) / ".training"
+        try:
+            work.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            work = None
+        ls.auto_log("train", dataset_id=ds["id"], datasets=refs, start_from=start, epochs=int(cfg.auto_epochs),
+                    previous_model=cfg.vehicle_model)
+        job = self.start(m.id, kind="train", datasets=refs, epochs=int(cfg.auto_epochs), init=init, start_from=start,
+                         author="auto", auto=True, previous_model=cfg.vehicle_model,
+                         work_dir=str(work) if work else None)
+        return st | {"state": "training", "dataset_id": ds["id"], "job": job.snapshot()}
+
+    def _auto_decide(self, m, ls, job: Job, run_id: int, r: dict, p: dict) -> None:
+        """End of an automatic round: adopt the new model for this mission only when it did better."""
+        from ..learning import ModelLibrary
+        better = job.result.get("improved")
+        if not better:
+            why = ("it did not do better than the model it started from" if better is False else
+                   "it could not be compared with the model it started from"
+                   + (f" ({job.result.get('evaluation_error') or job.result.get('baseline_error')})"
+                      if job.result.get("evaluation_error") or job.result.get("baseline_error") else ""))
+            ls.auto_log("kept", training_run=run_id, model=r, reason=why, model_in_use=p.get("previous_model"))
+            return
+        lib = ModelLibrary(self.data_root, Path(p["models_root"]) if p.get("models_root") else None)
+        name = f"{m.config().name} auto {run_id}"[:80]
+        n = 2
+        while lib.get(name):
+            name, n = f"{m.config().name} auto {run_id}.{n}"[:80], n + 1
+        ev = ls.evaluation(job.result["evaluation"]) if job.result.get("evaluation") else None
+        lib.save(name, r["name"], r["version"], "auto", "Trained and adopted by the automatic learning loop.",
+                 mission_id=m.id, evaluation_id=job.result.get("evaluation"),
+                 summary=(ev or {}).get("report", {}).get("overall") if ev else None)
+        m.update_config("auto", f"model set to {name} (automatic round {run_id}, better than the model before)",
+                        vehicle_model=name)
+        ls.auto_log("adopted", training_run=run_id, model=r, saved_as=name, previous_model=p.get("previous_model"))
+        job.result["adopted"] = name
+
+    def start_auto_loop(self, interval_s: float = 120.0) -> None:
+        """Check every mission in Run mode "full auto" every couple of minutes."""
+        if getattr(self, "_auto_thread", None) is not None:
+            return
+        self._auto_stop = threading.Event()
+
+        def loop():
+            while not self._auto_stop.wait(interval_s):
+                try:
+                    root = DataRoot(self.data_root)
+                    for row in root.missions():
+                        if row["state"] != "active":
+                            continue
+                        try:
+                            self.auto_learn(row["id"])
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+        self._auto_thread = threading.Thread(target=loop, name="auto-learning", daemon=True)
+        self._auto_thread.start()
 
     def _baseline(self, ls, p, refs, job, eprogress) -> dict | None:
         """The starting model's evaluation on the same test images: an earlier identical one, or a new one."""
@@ -620,6 +730,9 @@ class JobManager:
         return started
 
     def shutdown(self) -> None:
+        if getattr(self, "_auto_thread", None) is not None:
+            self._auto_stop.set()
+            self._auto_thread = None
         for mid in list(self.monitors):
             self.monitors.pop(mid).stop()
         for j in [*self.jobs.values(), *self.training.values()]:

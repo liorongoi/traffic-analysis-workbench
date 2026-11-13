@@ -490,3 +490,8 @@ button.folderpick-add { min-height: 26px; padding: 0 10px; font-size: 12.5px; }
 .counts .count-num { font-size: 28px; font-weight: 650; line-height: 1.15; font-variant-numeric: tabular-nums; color: var(--text); }
 .counts .count-chart svg { display: block; margin: 4px 0 2px; }
 .counts .count-tip { color: var(--text-2); min-height: 1.3em; }
+
+/* Run mode: two large choices, each with a line saying what it does. */
+.runmode .seg { margin-bottom: 4px; }
+.runmode .seg button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 12px; text-align: left; min-height: 52px; }
+.runmode .seg button small { color: var(--muted); font-size: 12.5px; }

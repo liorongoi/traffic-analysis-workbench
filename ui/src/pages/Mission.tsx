@@ -35,7 +35,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   const isVideo = m.config.input_type === "video";
   const tabs = [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
     ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []),
-    ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"], ["learning", "Learning"]])];
+    ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"]]), ["learning", "Learning"]];
   return (
     <div className="page">
       <div className="page-head">
@@ -58,7 +58,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
       {tab === "results" && !isVideo && <Results missionId={missionId} />}
       {tab === "night" && !isVideo && <NightReviewTab missionId={missionId} />}
       {tab === "views" && !isVideo && <Views missionId={missionId} />}
-      {tab === "learning" && !isVideo && <LearningTab missionId={missionId} job={m.job} reload={load} />}
+      {tab === "learning" && <LearningTab missionId={missionId} job={m.job} reload={load} />}
       {tab === "plates" && m.config.mode === "plate_recognition" && <PlatesTab missionId={missionId} />}
       {tab === "events" && isVideo && <EventsTab missionId={missionId} eventId={extra ? Number(extra) : null} />}
       {tab === "search" && <SearchTab missionId={missionId} runId={extra ? Number(extra) : null} />}

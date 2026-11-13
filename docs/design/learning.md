@@ -13,6 +13,29 @@ Requirements LRN-01 to LRN-04. Part 1 builds everything around training except t
 
 Unresolved night candidates in a fully reviewed image become "ignore" areas: a detection there is neither right nor wrong. Excluded regions are left out of scoring. Images whose bytes are identical are one sample, kept with the first copy.
 
+### Video (learning from recordings)
+
+| Review state of a recording | Frames used | Labels |
+|---|---|---|
+| **Approved** (Events tab; needs every event confirmed or rejected) | Each reviewed event's best frame and up to 4 more spread over its track (the frame farthest from those already taken, each time), plus an analysed frame every 5 s | Full review: every kept event's box is a label; rejected detections and unmarked road are background; boxes of tracks that never became events, and an event's interpolated position on a frame it was not matched on, are ignored |
+| **Some events reviewed** (confirmed, rejected, duplicate, merged or given another class) | The reviewed events' frames | Partial review: only the reviewed events' boxes; the rest of each frame is ignored |
+| Not reviewed | none | none |
+
+- Frames closer than 0.4 s are one; a recording gives at most 300 frames. A frame is identified by the recording's bytes and its time, so the same recording copied twice is one sample.
+- Frames are grouped like images (camera view and date block), so the frames of one recording and day never sit on both sides of a split.
+- Export writes each frame as a PNG; evaluation decodes the same frame from the recording.
+
+### Classes
+
+- The five vehicle classes and **person** are learnt (category 6, COCO class 0). A mission's own class called person, pedestrian, people, human, man or woman is learnt as person. Other own classes are found by SAM 3.1 only: their boxes are ignored, never labels or background.
+- Evaluation scores only the classes the detector looks for: for a vehicle-only detector, people are neither found nor missed.
+
+## Run mode
+
+- **Manual decisions** (default): the operator freezes dataset versions, trains, compares and chooses the model, as below.
+- **Full auto**: a loop checks every two minutes and after each review decision. Once a set number of new review decisions (20 by default: image approvals, object corrections, night candidate decisions, video event decisions and recording approvals, counted since the newest dataset version) has built up, and nothing else is processing or training, it freezes a dataset version, trains the model this mission uses (or the released YOLOX-s) for a set number of epochs (30) with the data of rounds that did not improve, and evaluates both on the same test images. The mission switches to the new model, saved by name, **only if it did better** (F1, then AP); otherwise it keeps its model. The production model of other missions never changes by itself.
+- Every step is logged with its reason (waiting, round started, adopted, kept, skipped, failed) on the Learning tab; switching back is choosing the earlier model under Saved models.
+
 ## Dataset versions
 
 - Freezing a version stores the list of images, their labels at that moment, and their split. Later corrections do not change it; a new version picks them up.
@@ -58,7 +81,5 @@ Unresolved night candidates in a fully reviewed image become "ignore" areas: a d
 
 ## Not in this version
 
-- Training. Each algorithm lists its planned adapter on the Learning tab. Train on a GPU machine with the exported dataset, bring the result back as a model pack, evaluate it here, and promote it if it is better.
 - Datasets across missions (a reuse policy is needed first).
 - Plate and colour models in the dataset and evaluation flow (plates have their own country evaluation, see `plates.md`).
-- Video.

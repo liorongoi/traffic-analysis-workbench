@@ -102,7 +102,7 @@ Machine events are never changed. Each operator action is an appended revision, 
 ## Not in this version
 
 - Night light tracking and analysis regions for video.
-- Learning from video, segments on other computers and appearance re-identification: see the phased plan.
+- Segments on other computers and appearance re-identification: see the phased plan. Learning from video: see `learning.md`.
 - Moving cameras: lines and areas drawn on a moving camera, and speed in km/h.
 - Plates in video.
 - Detecting slow camera movement (pan/zoom) as a view change.

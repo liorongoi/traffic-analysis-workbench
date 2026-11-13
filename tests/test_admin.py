@@ -66,10 +66,19 @@ def test_update_backs_up_before_migrating_and_rollback_restores_old_schema(env):
     m.con.close()
     # Make the mission look like it was written by the previous version (one migration behind).
     con = sqlite3.connect(db)
-    assert newest == 17, "update this test to undo the newest migration"
-    con.execute("ALTER TABLE track_observation DROP COLUMN found_by")
-    con.execute("ALTER TABLE video_checkpoint DROP COLUMN prev_motion")
-    con.execute("DROP TABLE video_segment")
+    assert newest == 18, "update this test to undo the newest migration"
+    con.execute("DROP TABLE recording_review")
+    con.execute("DROP TABLE auto_learning_log")
+    con.executescript("""
+        CREATE TABLE dm_old (dataset_id INTEGER NOT NULL, source_version_id INTEGER NOT NULL, sha256 TEXT NOT NULL,
+          view_key TEXT NOT NULL, block TEXT NOT NULL, split TEXT NOT NULL, review TEXT NOT NULL, condition TEXT,
+          labels TEXT NOT NULL, last_revision_id INTEGER, PRIMARY KEY(dataset_id, source_version_id));
+        INSERT INTO dm_old SELECT dataset_id, source_version_id, sha256, view_key, block, split, review, condition,
+          labels, last_revision_id FROM dataset_member;
+        DROP TABLE dataset_member;
+        ALTER TABLE dm_old RENAME TO dataset_member;
+        CREATE INDEX ix_member_split ON dataset_member(dataset_id, split);
+    """)
     con.execute("DELETE FROM schema_version WHERE version=?", (newest,))
     con.commit()
     con.close()
