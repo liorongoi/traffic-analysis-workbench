@@ -2,7 +2,8 @@
 
 Rules:
 - Two kinds are read, with nothing to set: a DJI subtitle file beside the video (the same name, ending .srt or .SRT)
-  and KLV in the video itself (MISB ST 0601, the "UAS Datalink Local Set" of military and police video).
+  and KLV in the video itself (STANAG 4609: MISB ST 0601, the "UAS Datalink Local Set" of military and police
+  video, with ST 0102 security marking and ST 0903 moving targets; decoded in ``misb``).
 - A subtitle file is telemetry only when most of its entries carry a position. Ordinary subtitles (speech, "[Music]")
   are not telemetry and are ignored.
 - KLV packets are checked (their key, their length and their checksum when they carry one); a damaged packet is
@@ -11,7 +12,9 @@ Rules:
   there is none.
 - What is read: the platform's position, height and heading, and where the camera looked (the frame centre) and
   how wide (field of view), when the source has them; and the time of day (KLV's own clock, or the DJI date), so a
-  recording whose file name carries no time still gets one.
+  recording whose file name carries no time still gets one. KLV adds the frame's four corners on the ground, the
+  sensor's angles, the height above ground, the security marking (shown, never acted on) and the moving targets the
+  aircraft's own tracker reported (pixel boxes and, when sent, ground positions).
 """
 from __future__ import annotations
 
@@ -21,9 +24,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-UAS_LS_KEY = bytes.fromhex("060E2B34020B01010E01030101000000")   # MISB ST 0601 UAS Datalink Local Set
-FIELDS = ("lat", "lon", "alt", "rel_alt", "heading", "pitch", "roll", "hfov", "vfov", "center_lat", "center_lon",
-          "center_elev", "slant_range", "focal_mm", "zoom")
+from . import misb
+
+UAS_LS_KEY = misb.UAS_LS_KEY                                     # MISB ST 0601 UAS Datalink Local Set
+FIELDS = ("lat", "lon", "alt", "rel_alt", "agl", "heading", "pitch", "roll", "hfov", "vfov", "center_lat",
+          "center_lon", "center_elev", "slant_range", "focal_mm", "zoom", "sensor_az", "sensor_el", "sensor_roll",
+          "ground_speed", "course",
+          "corner1_lat", "corner1_lon", "corner2_lat", "corner2_lon", "corner3_lat", "corner3_lon",
+          "corner4_lat", "corner4_lon")   # corners: KLV's frame corners, 1 top left, then clockwise
 
 
 @dataclass
@@ -34,6 +42,8 @@ class Telemetry:
     start_local: str | None = None                # DJI: the drone's own clock at the first sample (no zone given)
     platform: str | None = None                   # KLV platform designation / mission id, when given
     skipped: int = 0                              # packets or entries that could not be read
+    security: dict | None = None                  # KLV ST 0102 marking (classification, countries), as sent
+    targets: list[dict] = field(default_factory=list)   # KLV ST 0903: {"t", "targets": [...], "frame_width", ...}
 
     def at(self, t: float) -> dict | None:
         """Every field known at video time ``t``, interpolated between the samples around it."""
@@ -79,6 +89,8 @@ class Telemetry:
                 "alt_m": [round(min(alts), 1), round(max(alts), 1)] if alts else None,
                 "rel_alt_m": [round(min(rel), 1), round(max(rel), 1)] if rel else None,
                 "looks_at": bool(any(x.get("center_lat") is not None for x in s)),
+                "corners": bool(any(x.get("corner1_lat") is not None for x in s)),
+                "security": self.security, "target_reports": len(self.targets),
                 "fields": sorted({k for x in s for k in x if k != "t"})}
 
 
@@ -161,118 +173,43 @@ def read_srt(path: Path) -> Telemetry | None:
 
 # ------------------------------------------------------------------ KLV (MISB ST 0601)
 
-def _ber_len(buf: bytes, i: int) -> tuple[int, int]:
-    """A BER length at ``buf[i]``: (length, index after it)."""
-    b = buf[i]
-    if b < 0x80:
-        return b, i + 1
-    n = b & 0x7F
-    if n == 0 or n > 8 or i + 1 + n > len(buf):
-        raise ValueError("bad BER length")
-    return int.from_bytes(buf[i + 1:i + 1 + n], "big"), i + 1 + n
-
-
-def _ber_oid(buf: bytes, i: int) -> tuple[int, int]:
-    """A BER-OID tag at ``buf[i]``: (tag, index after it)."""
-    v = 0
-    for _ in range(4):
-        b = buf[i]
-        i += 1
-        v = (v << 7) | (b & 0x7F)
-        if b < 0x80:
-            return v, i
-    raise ValueError("bad tag")
-
-
 def checksum(packet: bytes) -> int:
     """MISB ST 0601 checksum: a 16-bit running sum of the bytes, each even byte in the high half."""
-    s = 0
-    for k, b in enumerate(packet):
-        s += b << (8 * ((k + 1) % 2))
-    return s & 0xFFFF
+    return misb.checksum(packet)
 
 
-def _scale(raw: bytes, lo: float, hi: float, signed: bool = False) -> float | None:
-    n = len(raw)
-    v = int.from_bytes(raw, "big", signed=signed)
-    if signed:
-        if v == -(1 << (8 * n - 1)):
-            return None                                   # the "error" value of signed fields
-        return v * (hi - lo) / 2 / ((1 << (8 * n - 1)) - 1)
-    return lo + v * (hi - lo) / ((1 << (8 * n)) - 1)
+# ST 0601 names (``misb``) to the short names every flight-data source shares
+_SHORT = {"sensor_latitude": "lat", "sensor_longitude": "lon", "sensor_true_altitude": "alt",
+          "altitude_agl": "agl", "platform_heading": "heading", "platform_pitch": "pitch", "platform_roll": "roll",
+          "sensor_hfov": "hfov", "sensor_vfov": "vfov", "frame_center_latitude": "center_lat",
+          "frame_center_longitude": "center_lon", "frame_center_elevation": "center_elev", "slant_range": "slant_range",
+          "sensor_relative_azimuth": "sensor_az", "sensor_relative_elevation": "sensor_el",
+          "sensor_relative_roll": "sensor_roll", "platform_ground_speed": "ground_speed",
+          "platform_course_angle": "course", "mission_id": "mission", "platform_designation": "platform"}
 
 
 def parse_0601(packet: bytes) -> dict | None:
-    """The values of one UAS Datalink Local Set packet (key included), or None when it is not one or is damaged."""
-    if not packet.startswith(UAS_LS_KEY):
+    """The values of one UAS Datalink Local Set packet (key included) under the short names, or None when it is not
+    one or is damaged. ``misb.decode_0601`` gives every item under its ST 0601 name."""
+    v = misb.decode_0601(packet)
+    if v is None:
         return None
-    try:
-        n, i = _ber_len(packet, 16)
-    except (ValueError, IndexError):
-        return None
-    end = i + n
-    if end > len(packet):
-        return None
-    out: dict = {}
-    try:
-        while i < end:
-            tag, i = _ber_oid(packet, i)
-            ln, i = _ber_len(packet, i)
-            v = packet[i:i + ln]
-            if len(v) != ln:
-                return None
-            if tag == 1:                                  # checksum, over everything up to its own value
-                if ln != 2 or checksum(packet[:i]) != int.from_bytes(v, "big"):
-                    return None
-            elif tag == 2 and ln == 8:
-                out["unix_us"] = int.from_bytes(v, "big")
-            elif tag == 3:
-                out["mission"] = v.decode("utf-8", "replace").strip()
-            elif tag == 5 and ln == 2:
-                out["heading"] = _scale(v, 0, 360)
-            elif tag == 6 and ln == 2:
-                out["pitch"] = _scale(v, -20, 20, True)
-            elif tag == 7 and ln == 2:
-                out["roll"] = _scale(v, -50, 50, True)
-            elif tag == 10:
-                out["platform"] = v.decode("utf-8", "replace").strip()
-            elif tag == 13 and ln == 4:
-                out["lat"] = _scale(v, -90, 90, True)
-            elif tag == 14 and ln == 4:
-                out["lon"] = _scale(v, -180, 180, True)
-            elif tag == 15 and ln == 2:
-                out["alt"] = _scale(v, -900, 19000)
-            elif tag == 16 and ln == 2:
-                out["hfov"] = _scale(v, 0, 180)
-            elif tag == 17 and ln == 2:
-                out["vfov"] = _scale(v, 0, 180)
-            elif tag == 21 and ln == 4:
-                out["slant_range"] = _scale(v, 0, 5_000_000)
-            elif tag == 23 and ln == 4:
-                out["center_lat"] = _scale(v, -90, 90, True)
-            elif tag == 24 and ln == 4:
-                out["center_lon"] = _scale(v, -180, 180, True)
-            elif tag == 25 and ln == 2:
-                out["center_elev"] = _scale(v, -900, 19000)
-            i += ln
-    except (ValueError, IndexError):
-        return None
-    return {k: v for k, v in out.items() if v is not None}
-
-
-def _split_klv(buf: bytes):
-    """Every UAS Local Set packet in a data stream's bytes (a PES may hold several, or a packet may be cut short)."""
-    i = 0
-    while True:
-        j = buf.find(UAS_LS_KEY, i)
-        if j < 0:
-            return
-        try:
-            n, k = _ber_len(buf, j + 16)
-        except (ValueError, IndexError):
-            return
-        yield buf[j:k + n]
-        i = k + n if k + n > j else j + 1
+    out = {short: v[name] for name, short in _SHORT.items() if v.get(name) is not None}
+    if v.get("platform_pitch_full") is not None:
+        out["pitch"] = v["platform_pitch_full"]
+    if v.get("platform_roll_full") is not None:
+        out["roll"] = v["platform_roll_full"]
+    if v.get("precision_time"):
+        t = datetime.fromisoformat(v["precision_time"].replace("Z", "+00:00"))
+        out["unix_us"] = round(t.timestamp() * 1e6)
+    for k in range(1, 5):
+        if v.get(f"corner_latitude_{k}") is not None and v.get(f"corner_longitude_{k}") is not None:
+            out[f"corner{k}_lat"], out[f"corner{k}_lon"] = v[f"corner_latitude_{k}"], v[f"corner_longitude_{k}"]
+    if v.get("security"):
+        out["security"] = v["security"]
+    if v.get("vmti"):
+        out["vmti"] = v["vmti"]
+    return out
 
 
 def read_klv(path: Path, limit_s: float | None = None) -> Telemetry | None:
@@ -296,8 +233,15 @@ def read_klv(path: Path, limit_s: float | None = None) -> Telemetry | None:
                 continue
             pts = pkt.pts if pkt.pts is not None else pkt.dts
             t = float(pts * pkt.time_base) if pts is not None and pkt.time_base else None
-            for raw in _split_klv(bytes(pkt)):
-                v = parse_0601(raw)
+            for kind, raw in misb.split(bytes(pkt)):
+                if kind == "st0601":
+                    v = parse_0601(raw)
+                elif kind == "st0903":
+                    vm = misb.decode_vmti(raw)
+                    v = None if vm is None else {"vmti": vm}
+                else:
+                    sec = misb.decode_security(raw)
+                    v = None if sec is None else {"security": sec}
                 if v is None:
                     tel.skipped += 1
                     continue
@@ -308,6 +252,12 @@ def read_klv(path: Path, limit_s: float | None = None) -> Telemetry | None:
                 if limit_s is not None and t - t0 > limit_s:
                     break
                 smp = {"t": round(max(0.0, t - t0), 3)} | {k: v[k] for k in FIELDS if k in v}
+                if v.get("security") and tel.security is None:
+                    tel.security = v["security"]
+                if v.get("vmti"):
+                    vm = v["vmti"]
+                    tel.targets.append({"t": smp["t"]} | {k: vm[k] for k in ("frame_width", "frame_height",
+                                                                              "frame_number", "targets") if k in vm})
                 if tel.start_utc is None and v.get("unix_us"):
                     start = datetime.fromtimestamp(v["unix_us"] / 1e6 - smp["t"], tz=timezone.utc)
                     tel.start_utc = start.isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -317,7 +267,7 @@ def read_klv(path: Path, limit_s: float | None = None) -> Telemetry | None:
                     tel.samples.append(smp)
     finally:
         c.close()
-    if not tel.samples:
+    if not tel.samples and not tel.targets:
         return None
     tel.samples.sort(key=lambda s: s["t"])
     return tel
@@ -351,7 +301,9 @@ def _unsigned(v: float, lo: float, hi: float, n: int) -> bytes:
 
 
 def make_0601(unix_us: int, lat: float, lon: float, alt: float, heading: float = 0.0, hfov: float | None = None,
-              center: tuple[float, float] | None = None, platform: str | None = None) -> bytes:
+              center: tuple[float, float] | None = None, platform: str | None = None,
+              corners: list[tuple[float, float]] | None = None, center_elev: float | None = None,
+              extra: list[tuple[int, bytes]] | None = None) -> bytes:
     """One UAS Datalink Local Set packet with its checksum (used by the tests to make KLV video)."""
     items = [(2, unix_us.to_bytes(8, "big"))]
     if platform:
@@ -362,6 +314,13 @@ def make_0601(unix_us: int, lat: float, lon: float, alt: float, heading: float =
         items.append((16, _unsigned(hfov, 0, 180, 2)))
     if center:
         items += [(23, _signed(center[0], -90, 90, 4)), (24, _signed(center[1], -180, 180, 4))]
+    if center_elev is not None:
+        items.append((25, _unsigned(center_elev, -900, 19000, 2)))
+    if center and corners:                                    # as offsets from the centre (tags 26 to 33)
+        for k, (clat, clon) in enumerate(corners):
+            items += [(26 + 2 * k, _signed(clat - center[0], -0.075, 0.075, 2)),
+                      (27 + 2 * k, _signed(clon - center[1], -0.075, 0.075, 2))]
+    items += extra or []                                      # e.g. (48, security set), (74, VMTI set)
     body = b"".join(bytes([t]) + _ber(len(v)) + v for t, v in items)
     body_len = len(body) + 4                                  # with the checksum item (tag, length, 2 bytes)
     head = UAS_LS_KEY + _ber(body_len) + body + bytes([1, 2])
@@ -400,9 +359,12 @@ def stored(con, version_id: int, path: Path | None = None) -> Telemetry | None:
                     "VALUES (?,?,?,?,?)",
                     (version_id, tel.source if tel else None, json.dumps(tel.summary()) if tel else None,
                      json.dumps(thin(tel.samples)) if tel else None, utcnow()))
+        if tel is not None and tel.targets:
+            summ = tel.summary() | {"vmti": thin(tel.targets)}
+            con.execute("UPDATE video_telemetry SET summary=? WHERE source_version_id=?", (json.dumps(summ), version_id))
         return tel
     if not row["source"]:
         return None
     summ = json.loads(row["summary"])
     return Telemetry(row["source"], json.loads(row["samples"]), summ.get("start_utc"), summ.get("start_local"),
-                     summ.get("platform"), summ.get("skipped", 0))
+                     summ.get("platform"), summ.get("skipped", 0), summ.get("security"), summ.get("vmti") or [])
