@@ -7,11 +7,14 @@ Rules:
   click. A recording already analysed can be ticked to analyse it again: it gets a new run item and its newest
   analysis is the one that counts, as for any re-analysis.
 - Analysing the ticked recordings runs one job over exactly those; the others stay as they are.
+- Videos that are parts of one recording can be merged (see video_groups): ticking one part analyses all of its
+  parts, in order, in the same job.
 """
 from __future__ import annotations
 
 from .ingest import cycle
 from .store import Mission
+from .video_groups import GroupError, Groups, suggest
 from .video_process import probe_version
 from .views import ViewService
 
@@ -54,7 +57,29 @@ class VideoCatalog:
                 "error": p.get("error"), "state": state or "new", "events": events,
                 "analysed": state == "done", "selected": state in NOT_ANALYSED and not p.get("error"),
             })
+        part = {v: (g["id"], k) for g in Groups(self.m).all() for k, v in enumerate(g["members"], 1)}
+        for v in out:
+            v["group_id"], v["part"] = part.get(v["id"], (None, None))
         return out
+
+    def overview(self) -> dict:
+        """The videos, the merged recordings, and runs of videos that look like parts of one recording."""
+        vids = self.items()
+        groups = Groups(self.m).all()
+        grouped = {v for g in groups for v in g["members"]}
+        return {"videos": vids, "groups": groups, "suggestions": suggest(vids, grouped)}
+
+    def merge(self, version_ids: list[int], author: str) -> dict:
+        try:
+            return Groups(self.m).create(self.items(), version_ids, author)
+        except GroupError as exc:
+            raise CatalogError(str(exc)) from None
+
+    def separate(self, group_id: int) -> None:
+        try:
+            Groups(self.m).dissolve(group_id)
+        except GroupError as exc:
+            raise CatalogError(str(exc)) from None
 
     def queue(self, version_ids: list[int]) -> list[int]:
         """Make the ticked recordings ready to analyse: a new run for those already analysed, cancelled or failed;
@@ -62,6 +87,12 @@ class VideoCatalog:
         ids = sorted({int(v) for v in version_ids})
         if not ids:
             raise CatalogError("Tick at least one video to analyse.")
+        groups = Groups(self.m)
+        for v in list(ids):                       # a part of a merged recording brings all of its parts, in order
+            g = groups.of(v)
+            if g:
+                ids = [i for i in ids if i not in g["members"]] + g["members"]
+        ids = list(dict.fromkeys(ids))
         known = {r["id"]: r for r in self.items()}
         missing = [v for v in ids if v not in known]
         if missing:

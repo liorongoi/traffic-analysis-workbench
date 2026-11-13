@@ -943,6 +943,23 @@ CREATE TABLE auto_learning_log (
   created_at TEXT NOT NULL
 );
 """,
+    19: """
+-- Videos that are parts of one recording (a camera that splits its files, or a file cut up before): analysed as one
+-- job, a target crossing from one part into the next counted once, one results tab. Dissolving keeps the row.
+CREATE TABLE recording_group (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  dissolved_at TEXT
+);
+CREATE TABLE recording_group_member (
+  group_id INTEGER NOT NULL REFERENCES recording_group(id),
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  position INTEGER NOT NULL,        -- 1, 2, ... in recording order
+  PRIMARY KEY (group_id, source_version_id)
+);
+""",
 }
 
 

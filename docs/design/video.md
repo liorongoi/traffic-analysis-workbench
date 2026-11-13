@@ -105,6 +105,13 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 - Videos not analysed yet are ticked; "Analyse N videos" runs one job over exactly the ticked ones. Ticking an analysed video analyses it again; its newest analysis is the one that counts.
 - Each analysed video has its own results tab on the Events tab (`#/m/<id>/events/rec-<video id>`), next to "All videos".
 
+## Merged recordings (parts of one recording)
+
+- A camera that splits its files, or a recording cut up before, gives several videos of one recording. The catalog suggests them: in one folder, each video starting where the one before ends (within 2 s, from the file-name start and the length), or names that differ only by a part number (`_001`, `-2`, ` (3)`, `part4`, GoPro chapters `GH01xxxx`, `GH02xxxx`). "Merge into one" confirms a suggestion; ticking videos and "Merge the N ticked videos" merges any. "Separate" undoes it; analyses stay.
+- The parts are ordered by start time, else part number, else name. Ticking one part analyses all of its parts, in order, in one job.
+- Across each cut, an event that ends within 1 s of the end of a part and one that starts within 1 s of the start of the next part, of the same family, with boxes that overlap or nearly touch, are one target: the later event "continues" the earlier one and is not counted again (`video_groups.links`). Each event continues at most one and is continued by at most one.
+- A merged recording has one results tab and one count; its events list says which file each event is in.
+
 ## New videos
 
 "New videos in the input folder" (Learning tab, Run mode card): analyse them as they arrive, with the mission's model (the saved model chosen for the mission, else the one in production use), or wait until they are ticked in the catalog. Full auto always analyses them as they arrive, so a model it adopts is used for the next videos with no step from the operator. Videos already waiting are analysed when the setting is turned on. The watch resumes after a restart.

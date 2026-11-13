@@ -85,6 +85,8 @@ class Event:
     run_item_id: int | None = None
     origin: str = "machine"            # machine | human (a target the operator added)
     fixes: list[dict] = field(default_factory=list)   # operator boxes: {"t", "box"}, by time
+    continues: int | None = None       # merged recording: the event in the part before that this one carries on
+    continues_key: str | None = None
 
     @property
     def counted(self) -> bool:
@@ -178,11 +180,53 @@ class VideoService:
             e.first_utc, e.last_utc = utc_at(st, e.first_t), utc_at(st, e.last_t)
         return events
 
-    def events(self, version_id: int | None = None, status: str | None = None, flag: str | None = None) -> list[Event]:
+    def _events_plain(self, version_id: int) -> list[Event]:
+        """One recording's events with the review applied, without joining across merged recordings."""
+        return self._apply(self._base("WHERE e.source_version_id=?", (version_id,)))
+
+    def _track_boxes(self, e: Event) -> list[tuple[float, list[float]]]:
+        rows = [(r[0], [float(v) for v in r[1:5]]) for r in self.con.execute(
+            "SELECT o.t, o.x1, o.y1, o.x2, o.y2 FROM track_observation o JOIN video_event e ON e.track_id=o.track_id "
+            "WHERE e.id=? ORDER BY o.t", (e.id,))]
+        rows = [r for r in rows if not any(abs(r[0] - f["t"]) < 1e-3 for f in e.fixes)]
+        rows += [(f["t"], list(f["box"])) for f in e.fixes]
+        return sorted(r for r in rows if e.first_t - 1e-6 <= r[0] <= e.last_t + 1e-6)
+
+    def _edge_box(self, e: Event, last: bool) -> list[float] | None:
+        b = self._track_boxes(e)
+        return (b[-1] if last else b[0])[1] if b else None
+
+    def group_versions(self, group_id: int) -> list[int]:
+        from .video_groups import GroupError, Groups
+        try:
+            return Groups(self.m).get(group_id)["members"]
+        except GroupError as exc:
+            raise VideoError(str(exc)) from None
+
+    def _join(self, evs: list[Event]) -> None:
+        """Mark the events that carry on a target from the part before, in merged recordings."""
+        from .video_groups import Groups, links
+        loaded = {e.source_version_id for e in evs}
+        by_id = {e.id: e for e in evs}
+        for g in Groups(self.m).all():
+            if not loaded & set(g["members"]):
+                continue
+            for later, earlier in links(self, g).items():
+                if later in by_id:
+                    by_id[later].continues = earlier
+                    by_id[later].continues_key = self.con.execute(
+                        "SELECT event_key FROM video_event WHERE id=?", (earlier,)).fetchone()[0]
+
+    def events(self, version_id: int | None = None, status: str | None = None, flag: str | None = None,
+               group_id: int | None = None) -> list[Event]:
         where, args = "", ()
-        if version_id is not None:
+        if group_id is not None:
+            vids = self.group_versions(group_id)
+            where, args = f"WHERE e.source_version_id IN ({','.join('?' * len(vids))})", tuple(vids)
+        elif version_id is not None:
             where, args = "WHERE e.source_version_id=?", (version_id,)
         evs = self._apply(self._base(where, args))
+        self._join(evs)
         if status:
             evs = [e for e in evs if e.status == status]
         if flag:
@@ -190,7 +234,7 @@ class VideoService:
         return evs
 
     # ---------- unique counts ----------
-    def counts(self, version_id: int | None = None, bucket_s: int = 60) -> dict:
+    def counts(self, version_id: int | None = None, bucket_s: int = 60, group_id: int | None = None) -> dict:
         """Unique targets per class, per recording and for the mission: one per track, not per frame.
 
         - machine: what the tracker found (one per confirmed track), by the machine class.
@@ -199,11 +243,13 @@ class VideoService:
         - maybe_same: of those counted, events flagged as a possible duplicate (re-entry within seconds near where
           another left) that nobody has reviewed yet. The true count lies between counted - maybe_same and counted.
         Only the newest analysis of each recording counts. ``per_bucket`` counts targets by the bucket (seconds from
-        the recording start) in which each one first appeared.
+        the recording start) in which each one first appeared. In a merged recording, an event that carries on a
+        target from the part before is not counted again (neither by the machine nor after review).
         """
         latest = {r[0]: r[1] for r in self.con.execute(
             "SELECT source_version_id, MAX(id) FROM run_item GROUP BY source_version_id")}
-        evs = [e for e in self.events(version_id) if latest.get(e.source_version_id) == e.run_item_id]
+        evs = [e for e in self.events(version_id, group_id=group_id)
+               if latest.get(e.source_version_id) == e.run_item_id and e.continues is None]
         own = self.classes()
         uncounted = sorted(set(getattr(self.m.config(), "sam3_uncounted", None) or []) & set(own))
         dur = {r[0]: r[1] for r in self.con.execute("SELECT source_version_id, duration_s FROM video_probe")}

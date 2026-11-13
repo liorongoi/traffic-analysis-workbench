@@ -1638,7 +1638,26 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         cat = _catalog(m)
         if refresh and not jobs.busy(m.id):
             cat.refresh(stability_seconds=stability_seconds)
-        return {"videos": cat.items(), "busy": jobs.busy(m.id)}
+        return cat.overview() | {"busy": jobs.busy(m.id)}
+
+    @app.post("/api/missions/{mission_id}/catalog/merge")
+    def catalog_merge(body: AnalyseBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Merge videos that are parts of one recording: one job, a target crossing a cut counted once, one tab."""
+        from ..video_catalog import CatalogError
+        try:
+            return _catalog(m).merge(body.version_ids, u.username)
+        except CatalogError as exc:
+            raise ApiError(400, "catalog", str(exc)) from None
+
+    @app.delete("/api/missions/{mission_id}/catalog/groups/{group_id}")
+    def catalog_separate(group_id: int, m: Mission = Depends(mission)):
+        """Separate a merged recording into its videos again (their analyses stay)."""
+        from ..video_catalog import CatalogError
+        try:
+            _catalog(m).separate(group_id)
+        except CatalogError as exc:
+            raise ApiError(400, "catalog", str(exc)) from None
+        return {"ok": True}
 
     @app.post("/api/missions/{mission_id}/catalog/analyse")
     def catalog_analyse(body: AnalyseBody, m: Mission = Depends(mission)):
@@ -1666,10 +1685,12 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     @app.get("/api/missions/{mission_id}/recordings")
     def recordings(m: Mission = Depends(mission)):
         from ..learning import LearningService
+        from ..video_groups import Groups
         ls = LearningService(m)
         return {"recordings": [r | {"review": ls.review_kind(r["id"]), "approved": ls.recording_approved(r["id"]),
                                     "pending": sum(1 for e in ls._events(r["id"]) if e.status == "pending")}
-                               for r in _video(m).recordings()]}
+                               for r in _video(m).recordings()],
+                "groups": Groups(m).all()}
 
     @app.put("/api/missions/{mission_id}/recordings/{version_id}/start-time")
     def recording_start_time(version_id: int, body: VideoStartBody, m: Mission = Depends(mission), u: User = Depends(user)):
@@ -1703,15 +1724,17 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
 
     @app.get("/api/missions/{mission_id}/events")
     def events(m: Mission = Depends(mission), version_id: int | None = None, status: str | None = None,
-               flag: str | None = None):
+               flag: str | None = None, group_id: int | None = None):
         svc = _video(m)
-        return {"events": [_event_dict(e) for e in svc.events(version_id, status, flag)], "classes": svc.classes()}
+        evs = _video_call(lambda: svc.events(version_id, status, flag, group_id=group_id))
+        return {"events": [_event_dict(e) for e in evs], "classes": svc.classes()}
 
     @app.get("/api/missions/{mission_id}/counts")
     def counts(m: Mission = Depends(mission), version_id: int | None = None,
-               bucket_s: int = Query(60, ge=10, le=3600)):
+               bucket_s: int = Query(60, ge=10, le=3600), group_id: int | None = None):
         """Unique targets per class (one per track), per recording and for the mission, before and after review."""
-        return _video(m).counts(version_id, bucket_s)
+        svc = _video(m)
+        return _video_call(lambda: svc.counts(version_id, bucket_s, group_id=group_id))
 
     @app.get("/api/missions/{mission_id}/events/{event_id}")
     def event_get(event_id: int, m: Mission = Depends(mission)):

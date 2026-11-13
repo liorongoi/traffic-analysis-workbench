@@ -12,6 +12,7 @@ export type VEvent = {
   flags: string[]; related: string[]; end_reason: string; status: string; duplicate_of: string | null;
   merged_into: number | null; absorbed: string[]; split_at: number[]; parts: [number, number][];
   first_utc: string | null; last_utc: string | null; revisions: number;
+  continues?: number | null; continues_key?: string | null;
 };
 type Obs = { t: number; x1: number; y1: number; x2: number; y2: number; cls: string; score: number; found_by?: string };
 
@@ -58,7 +59,8 @@ function CountsCard({ missionId, versionId, refresh }: { missionId: string; vers
   const [c, setC] = useState<Counts | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   useEffect(() => {
-    api(`/missions/${missionId}/counts${versionId ? `?version_id=${versionId}` : ""}`).then(setC).catch(() => setC(null));
+    const q = versionId.startsWith("g") ? `?group_id=${versionId.slice(1)}` : versionId ? `?version_id=${versionId}` : "";
+    api(`/missions/${missionId}/counts${q}`).then(setC).catch(() => setC(null));
   }, [missionId, versionId, refresh]);
   if (!c || !c.classes.length) return null;
   const sum = (d: Record<string, number>) => Object.values(d).reduce((a, b) => a + b, 0);
@@ -120,6 +122,7 @@ function CountsCard({ missionId, versionId, refresh }: { missionId: string; vers
 
 function EventList({ missionId, recording }: { missionId: string; recording: string }) {
   const [recs, setRecs] = useState<any[]>([]);
+  const [groups, setGroups] = useState<{ id: number; name: string; members: number[] }[]>([]);
   const [evs, setEvs] = useState<VEvent[] | null>(null);
   const [rec, setRecState] = useState(recording);
   useEffect(() => { setRecState(recording); }, [recording]);
@@ -131,10 +134,11 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
   const [precisions, setPrecisions] = useState<Record<number, string>>({});
   const [timeRevision, setTimeRevision] = useState(0);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
-  useEffect(() => { api(`/missions/${missionId}/recordings`).then((r) => setRecs(r.recordings)); }, [missionId]);
+  useEffect(() => { api(`/missions/${missionId}/recordings`).then((r) => { setRecs(r.recordings); setGroups(r.groups ?? []); }); }, [missionId]);
   useEffect(() => {
     const q = new URLSearchParams();
-    if (rec) q.set("version_id", rec);
+    if (rec.startsWith("g")) q.set("group_id", rec.slice(1));
+    else if (rec) q.set("version_id", rec);
     if (status) q.set("status", status);
     if (flag) q.set("flag", flag);
     api(`/missions/${missionId}/events?${q}`).then((r) => setEvs(r.events));
@@ -180,12 +184,22 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
       setMsg({ kind: "ok", text: `Exported: ${r.files.join(", ")}` });
     } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
   };
+  // One tab per analysed video; the parts of a merged recording share one tab.
+  const inGroup = new Set(groups.flatMap((g) => g.members));
+  const done = new Set(recs.filter((r) => r.processing_state === "done").map((r) => r.id));
+  const groupTabs = groups.filter((g) => g.members.some((id) => done.has(id)));
+  const soloTabs = recs.filter((r) => done.has(r.id) && !inGroup.has(r.id));
   return (
     <div className="grid" style={{ gap: 10 }}>
-      {recs.filter((r) => r.processing_state === "done").length > 1 && (
+      {groupTabs.length + soloTabs.length > 1 && (
         <nav className="tabs videotabs" aria-label="Videos">
           <a href={`#/m/${missionId}/events`} className={rec === "" ? "on" : ""} onClick={(e) => { e.preventDefault(); setRec(""); }}>All videos</a>
-          {recs.filter((r) => r.processing_state === "done").map((r) => (
+          {groupTabs.map((g) => (
+            <a key={`g${g.id}`} href={`#/m/${missionId}/events/rec-g${g.id}`} className={rec === `g${g.id}` ? "on" : ""}
+              title={g.members.map((id) => recs.find((r) => r.id === id)?.rel_path).join(" + ")}
+              onClick={(e) => { e.preventDefault(); setRec(`g${g.id}`); }}>{g.name}
+              <span className="n">{g.members.reduce((a, id) => a + (recs.find((r) => r.id === id)?.events ?? 0), 0)}</span></a>))}
+          {soloTabs.map((r) => (
             <a key={r.id} href={`#/m/${missionId}/events/rec-${r.id}`} className={String(r.id) === rec ? "on" : ""} title={r.rel_path}
               onClick={(e) => { e.preventDefault(); setRec(String(r.id)); }}>{r.rel_path.split("/").pop()}<span className="n">{r.events}</span></a>))}
         </nav>)}
@@ -193,7 +207,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
       <div className="card">
         <h2>Recordings</h2>
         <table className="t"><thead><tr><th>File</th><th>Start (UTC)</th><th className="num">Length</th><th>Frame rate</th><th>Processing</th><th className="num">Events</th><th>For learning</th></tr></thead>
-          <tbody>{recs.map((r) => (
+          <tbody>{recs.filter((r) => !rec || (rec.startsWith("g") ? groups.find((g) => `g${g.id}` === rec)?.members.includes(r.id) : String(r.id) === rec)).map((r) => (
             <tr key={r.id}>
               <td className="mono bidi">{r.rel_path}
                 {r.processing_state === "done" && <div><a className="play-link" href={`#/m/${missionId}/events/play-${r.id}`}>▶ Play and review</a></div>}</td>
@@ -235,7 +249,9 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
       </div>
       <div className="card row">
         <select value={rec} onChange={(e) => setRec(e.target.value)} aria-label="Recording">
-          <option value="">All recordings</option>{recs.map((r) => <option key={r.id} value={r.id}>{r.rel_path}</option>)}
+          <option value="">All recordings</option>
+          {groups.map((g) => <option key={`g${g.id}`} value={`g${g.id}`}>{g.name} (merged)</option>)}
+          {recs.map((r) => <option key={r.id} value={r.id}>{r.rel_path}</option>)}
         </select>
         <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Review status">
           <option value="">Any review status</option>{Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -245,7 +261,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
         </select>
         <span className="muted">{evs?.length ?? 0} events</span>
         <span style={{ flex: 1 }} />
-        {rec && <button className="primary" onClick={() => go(`/m/${missionId}/events/play-${rec}`)}>▶ Play and review this video</button>}
+        {rec && !rec.startsWith("g") && <button className="primary" onClick={() => go(`/m/${missionId}/events/play-${rec}`)}>▶ Play and review this video</button>}
         <button onClick={doExport}>Export events</button>
       </div>
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
@@ -264,7 +280,8 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
                 <td className="mono">{e.first_utc ?? <span className="muted">unknown</span>}</td>
                 <td>{e.cls}{e.cls !== e.machine_cls ? <span className="muted"> (machine: {e.machine_cls})</span> : ""}</td>
                 <td><span className={`badge ${e.status === "confirmed" ? "approved" : e.status === "rejected" ? "failed" : ""}`}>{STATUS_LABEL[e.status]}</span>{e.parts.length > 1 ? <span className="muted"> · {e.parts.length} parts</span> : ""}</td>
-                <td>{e.flags.map((f) => <span key={f} className="badge flag" style={{ marginRight: 4 }}>{FLAG_LABEL[f] ?? f}</span>)}</td>
+                <td>{e.continues_key && <span className="badge part" style={{ marginRight: 4 }} title="The same target, carried on from the part before; counted once">continues {e.continues_key}</span>}
+                  {e.flags.map((f) => <span key={f} className="badge flag" style={{ marginRight: 4 }}>{FLAG_LABEL[f] ?? f}</span>)}</td>
               </tr>))}</tbody>
           </table>
         </div>
