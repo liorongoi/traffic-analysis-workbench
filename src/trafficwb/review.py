@@ -471,9 +471,18 @@ class ReviewService:
 
     def position(self, version_id: int, flt: Filter | None = None, sort: str = "capture_utc", descending: bool = False) -> dict:
         """Index of total plus previous and next image for the investigation screen."""
-        ids = [r.source_version_id for r in self.results(flt, sort, descending)]
+        rows = self.results(flt, sort, descending)
+        ids = [r.source_version_id for r in rows]
+        waiting = [r.processing_state == "done" and r.review_status == "unreviewed" for r in rows]
         if version_id not in ids:
-            return {"index": None, "total": len(ids), "prev": None, "next": None}
+            return {"index": None, "total": len(ids), "prev": None, "next": None, "next_unreviewed": None,
+                    "unreviewed": sum(waiting), "around": []}
         i = ids.index(version_id)
+        # The next image still to review after this one, wrapping round to the start: where Approve moves on to.
+        after = [j for j in [*range(i + 1, len(ids)), *range(0, i)] if waiting[j]]
+        lo = max(0, min(i - 5, len(ids) - 11))
         return {"index": i + 1, "total": len(ids), "prev": ids[i - 1] if i else None,
-                "next": ids[i + 1] if i + 1 < len(ids) else None}
+                "next": ids[i + 1] if i + 1 < len(ids) else None,
+                "next_unreviewed": ids[after[0]] if after else None, "unreviewed": sum(waiting),
+                "around": [{"id": ids[j], "index": j + 1, "review_status": rows[j].review_status,
+                            "processing_state": rows[j].processing_state} for j in range(lo, min(len(ids), lo + 11))]}

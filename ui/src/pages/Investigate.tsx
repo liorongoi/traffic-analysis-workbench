@@ -79,7 +79,16 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
   const base = `/missions/${missionId}/items/${versionId}`;
   const objAct = (uid: string, body: object) => run(() => api(`${base}/objects/${uid}`, { method: "PATCH", body }));
   const candAct = (uid: string, body: object) => run(() => post(`${base}/candidates/${uid}`, body));
-  const approve = () => run(() => post(`${base}/decision/approve`));
+  // Approve moves straight on to the next image still to review, so a review is one key per image.
+  const [doneMsg, setDoneMsg] = useState<string | null>(null);
+  const approve = async () => {
+    try {
+      await post(`${base}/decision/approve`);
+      const next = item?.position.next_unreviewed;
+      if (next && next !== versionId) go(`/m/${missionId}/i/${next}`);
+      else { await load(); setDoneMsg("Every image in this list is reviewed."); }
+    } catch (e) { setErr((e as ApiError).message); }
+  };
   const markEmpty = (empty: boolean) => run(() => api(`${base}/empty`, { method: "PUT", body: { empty } }));
   const plateAct = (pid: number, body: object) => run(async () => { await post(`/missions/${missionId}/plates/${pid}/revise`, body); await loadPlates(); });
 
@@ -171,24 +180,21 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
 
   return (
     <div className="page" style={{ maxWidth: "none" }}>
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
-        <div className="row">
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+        <div className="row" style={{ gap: 14 }}>
           <a href={`#/m/${missionId}/results`}>← Results</a>
-          <button disabled={!item.position.prev} onClick={() => go(`/m/${missionId}/i/${item.position.prev}`)}>‹ Previous <kbd>K</kbd></button>
-          <span><b>{item.position.index ?? "–"}</b> of {item.position.total}</span>
-          <button disabled={!item.position.next} onClick={() => go(`/m/${missionId}/i/${item.position.next}`)}>Next <kbd>J</kbd> ›</button>
+          <h1 style={{ margin: 0, fontSize: 22 }}>Image {item.position.index ?? "–"} of {item.position.total}</h1>
+          {(item.position.unreviewed ?? 0) > 0 && <span style={{ color: "var(--lane)", fontSize: 13 }}>{item.position.unreviewed} waiting for review</span>}
         </div>
         <div className="row">
-          <button className={drawing ? "primary" : ""} onClick={() => setDrawing(!drawing)}>{drawing ? "Drawing: drag a box" : "Draw missed vehicle"} <kbd>B</kbd></button>
-          <select value={drawCls} onChange={(e) => { setDrawCls(e.target.value); e.target.blur(); }}>{CLASSES.map((c, i) => <option key={c} value={c}>{i + 1} {c}</option>)}</select>
           <button aria-pressed={!overlays} title="Show or hide the marks on the image: vehicles, candidates, plates, regions and distance bands" onClick={() => setOverlays(!overlays)}>{overlays ? "Hide" : "Show"} results <kbd>H</kbd></button>
-          <button className="primary" onClick={approve} disabled={item.processing_state !== "done"}
-            title="Approve means every vehicle inside the included regions is marked correctly. The image can then train and test models, and unmarked areas count as road with no vehicle.">Approve <kbd>A</kbd></button>
-          <button onClick={() => setHelp(true)}><kbd>?</kbd></button>
+          <button onClick={() => setHelp(true)} aria-label="Keyboard shortcuts"><kbd>?</kbd></button>
         </div>
       </div>
       {err && <div className="msg err">{err}</div>}
+      {doneMsg && <div className="msg ok" role="status">{doneMsg} <a href={`#/m/${missionId}/results`}>Back to results</a></div>}
       <div className="inv">
+        <div className="inv-main">
         <div ref={stageRef} className={`stage zoomable${canPan ? " can-pan" : ""}${spaceHeld ? " space" : ""}${panning ? " panning" : ""}`}>
           <div className="stage-layer" style={{ transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.z})` }}>
           <img src={`/api/missions/${missionId}/images/${versionId}`} alt={item.file} draggable={false} />
@@ -308,6 +314,19 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
             </button>
           </div>
           {zoomed && !panning && <div className="zoom-hint muted">{drawAny ? <>Hold <kbd>Space</kbd> and drag to move</> : <>Drag to move, scroll to zoom</>}</div>}
+        </div>
+        {(item.position.around?.length ?? 0) > 1 && (
+          <nav className="film" aria-label="Nearby images">
+            {item.position.around!.map((a) => (
+              <a key={a.id} href={`#/m/${missionId}/i/${a.id}`} className={a.id === versionId ? "cur" : ""} aria-current={a.id === versionId ? "true" : undefined}
+                title={`Image ${a.index}: ${a.processing_state !== "done" ? a.processing_state : REVIEW_LABEL[a.review_status as keyof typeof REVIEW_LABEL] ?? a.review_status}`}>
+                <img src={`/api/missions/${missionId}/thumbs/${a.id}?w=192`} alt={`Image ${a.index}`} loading="lazy" draggable={false} />
+                <i className={a.processing_state !== "done" ? "wait" : a.review_status === "unreviewed" ? "" : "done"} aria-hidden="true" />
+                <span aria-hidden="true">{a.index}</span>
+              </a>
+            ))}
+          </nav>
+        )}
         </div>
         <aside className="side">
           <div className="card">
@@ -439,12 +458,23 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
           </div>
         </aside>
       </div>
+      <div className="actionbar">
+        <button disabled={!item.position.prev} onClick={() => go(`/m/${missionId}/i/${item.position.prev}`)}>‹ Previous <kbd>K</kbd></button>
+        <button disabled={!item.position.next} onClick={() => go(`/m/${missionId}/i/${item.position.next}`)}>Next <kbd>J</kbd> ›</button>
+        <span className="sep" aria-hidden="true" />
+        <button className={drawing ? "primary" : ""} onClick={() => setDrawing(!drawing)}>{drawing ? "Drawing: drag a box" : "Draw a missed vehicle"} <kbd>B</kbd></button>
+        <select aria-label="Class for a drawn box" value={drawCls} onChange={(e) => { setDrawCls(e.target.value); e.target.blur(); }}>{CLASSES.map((c, i) => <option key={c} value={c}>{i + 1} {c}</option>)}</select>
+        <span className="grow" />
+        <span className="hint">{item.position.next_unreviewed && item.position.next_unreviewed !== versionId ? "Approve moves on to the next image to review" : "This is the last image to review"}</span>
+        <button className="primary big" onClick={approve} disabled={item.processing_state !== "done"}
+          title="Approve means every vehicle inside the included regions is marked correctly. The image can then train and test models, and unmarked areas count as road with no vehicle.">{item.position.next_unreviewed && item.position.next_unreviewed !== versionId ? "Approve and next" : "Approve"} <kbd>A</kbd></button>
+      </div>
       {help && (
         <div className="dialog-bg" onClick={() => setHelp(false)}>
           <div className="dialog" onClick={(e) => e.stopPropagation()}>
             <h2>Keyboard shortcuts</h2>
             <table className="t"><tbody>
-              {[["J / K", "Next / previous image"], ["A", "Approve this image"], ["B", "Draw a box for a missed vehicle"], ["Del", "Reject the selected object or candidate"],
+              {[["J / K", "Next / previous image"], ["A", "Approve this image and move on to the next one to review"], ["B", "Draw a box for a missed vehicle"], ["Del", "Reject the selected object or candidate"],
                 ["C", "Confirm the selected candidate as a vehicle"], ["G", "Group the chosen lights into one candidate"], ["1–" + CLASSES.length, "Set class: " + CLASSES.join(", ")],
                 ["H", "Hide or show results on the image"], ["Scroll, + / −", "Zoom in or out around the pointer"], ["0", "Fit the whole image"],
                 ["Space + drag", "Move around when zoomed in (or drag with the middle button)"], ["Esc", "Cancel drawing or selection"], ["?", "This help"]].map(([k, v]) => <tr key={k}><td><kbd>{k}</kbd></td><td>{v}</td></tr>)}
