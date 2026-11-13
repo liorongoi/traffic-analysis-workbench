@@ -56,6 +56,24 @@ pulls the position toward it and, once the car has moved 15 m, corrects the head
 
 ![Drone photos on the satellite map: checkerboard of photo and map](../georeg/visloc-overlay.jpg)
 
+### The operator's own drone clips (no map, no flight data)
+
+None of the six drone clips in the test library carries flight data (their .srt files are captions, and are
+correctly not taken as telemetry), and no orthophoto of their places was reachable, so only the frame-to-frame chain
+could be checked: every 5 s the chained homography was compared with a direct learned match of that frame to the
+first one (median distance of five ground points, at 1920x1080 or 1280x720).
+
+| Clip | Chain drift | Notes |
+|---|---|---|
+| Crossroads, static drone (720p) | 0.1–0.2 px after 25 s | |
+| Pohjantie Oulu 2025 (oblique, horizon in view) | 2.0 px after 15 s | |
+| Interchange 8 Oulu (oblique, snow) | 1.0 px after 10 s | |
+| Street traffic from above (720p, moving) | 3.3 px after 30 s | |
+| Köln West, Klettenberg exit (4K, moving) | 14 px after 27 s | trees and bridges off the road plane |
+| Autobahnkreuz Köln West (4K, edited) | 41 px after 12 s, picture lost 39 times | scene cuts: each cut needs a new fix from the map or flight data |
+
+Tracking took 5–7 ms a frame. With a map snap every few seconds this drift is removed before it grows.
+
 Not yet measured: real video with real KLV or DJI flight data (none with a matching map was reachable from here),
 thermal video, and the operator's own drone clips.
 
