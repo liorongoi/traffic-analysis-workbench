@@ -6,7 +6,7 @@ import EventsTab from "./Events";
 import PlatesTab from "./Plates";
 import LearningTab from "./Learning";
 import NightReviewTab from "./NightReview";
-import { CameraChoice, DetectorChoice, ModelChoice, ParallelChoice, SamInterval } from "./Wizard";
+import { CameraChoice, DetectorChoice, ModelChoice, ParallelChoice, SamInterval, usesSam } from "./Wizard";
 import FolderPicker from "../components/FolderPicker";
 import { Choice, NamePick } from "../components/Pick";
 
@@ -238,17 +238,17 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
     <div className="card">
       <h2>Detector</h2>
       <DetectorChoice value={value} onChange={setValue} sam={sam ?? undefined} disabled={busy} legend={false} video={video} />
-      {video && value !== "standard" && <SamInterval value={every} onChange={setEvery} both={value === "both"} disabled={busy} />}
+      {video && usesSam(value) && <SamInterval value={every} onChange={setEvery} both={value === "both"} disabled={busy} />}
       {video && <CameraChoice value={camera} onChange={setCamera} disabled={busy} />}
       {video && <ParallelChoice value={workers} onChange={setWorkers} disabled={busy} />}
-      {value !== "sam3" && <ModelChoice saved={saved} value={m.config.vehicle_model ?? null} onChange={setModel} disabled={busy} />}
+      {value !== "sam3" && <ModelChoice saved={saved} value={m.config.vehicle_model ?? null} onChange={setModel} disabled={busy} rfdetr={value === "rfdetr"} />}
       {changed && <p className="muted">{video ? "Recordings" : "Images"} already processed keep their detections; the change applies to the next run. Each detection records the model that made it.</p>}
       {busy && <p className="muted">The detector can be changed when processing has finished.</p>}
       {changed && <div className="row"><button className="primary" disabled={busy || saving} onClick={saveIt}>{saving ? "Saving…" : "Use this detector"}</button>
         <button onClick={() => { setValue(m.config.detector ?? "standard"); setEvery(m.config.sam3_interval_s ?? 1); setCamera(m.config.camera ?? "fixed"); setWorkers(m.config.video_workers ?? 1); }}>Cancel</button></div>}
       {err && <div className="msg err" role="alert">{err}</div>}
       {!changed && sam?.vehicle_prompts && (
-        <SamWords m={m} defaults={sam.vehicle_prompts} busy={busy} reload={reload} samOnly={m.config.detector === "sam3"} standardOnly={(m.config.detector ?? "standard") === "standard"} standardKnows={sam.standard_knows ?? []} />
+        <SamWords m={m} defaults={sam.vehicle_prompts} busy={busy} reload={reload} samOnly={m.config.detector === "sam3"} standardOnly={!usesSam(m.config.detector ?? "standard")} standardKnows={sam.standard_knows ?? []} />
       )}
     </div>
   );

@@ -34,7 +34,7 @@ EXPORT_FORMATS = {"xlsx", "csv"}
 # Detector of a mission (still images and video alike): YOLOX-s (or the model promoted on the learning page), or
 # SAM 3.1, which finds objects by name: slower, and stronger on unusual views; or both, merged. In video SAM 3.1 runs
 # every sam3_interval_s seconds of the recording and the tracker carries what it found between those frames.
-DETECTORS = {"standard", "sam3", "both"}
+DETECTORS = {"standard", "rfdetr", "sam3", "both"}   # rfdetr: RF-DETR (detectors.py)
 CAMERAS = {"fixed", "moving"}
 RUN_MODES = {"manual", "auto"}
 

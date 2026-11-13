@@ -9,6 +9,7 @@ written as one .zip file. Copy the .zip to any installation and import it there:
 Then evaluate it on the learning page and promote it if it is better. Nothing here changes a model in use.
 
     trafficwb-train run --dataset <exported dataset folder> --out <folder>
+    trafficwb-train run --arch rf-detr --dataset <folder> --out <folder>    RF-DETR instead (rfdetr_train.py)
     trafficwb-train device              which accelerator would be used
 
 Starting weights: --init coco (the released YOLOX-s weights; the installers ship them next to their own Python,
@@ -533,21 +534,30 @@ def main(argv=None) -> int:
     r = sub.add_parser("run", help="train and write a model pack")
     r.add_argument("--dataset", required=True, help="folder exported from the learning page")
     r.add_argument("--out", required=True, help="where to write the model pack and its .zip")
-    r.add_argument("--init", default="coco", help="coco (released YOLOX-s weights), a .pth file, or an earlier trained pack")
+    r.add_argument("--arch", default="yolox", choices=["yolox", "rf-detr"],
+                   help="yolox (YOLOX-s, default) or rf-detr (RF-DETR, see rfdetr_train.py)")
+    r.add_argument("--size", default="small", choices=["nano", "small", "medium"], help="RF-DETR only: model size")
+    r.add_argument("--init", default="coco", help="coco (released weights), a .pth file, or an earlier trained pack")
     r.add_argument("--epochs", type=int, default=40)
     r.add_argument("--batch", type=int, help="images per step (default 16 on NVIDIA, 8 otherwise)")
     r.add_argument("--lr", type=float, help="learning rate (default 0.01 x batch / 64)")
     r.add_argument("--device", default="auto", choices=["auto", "cuda", "mps", "cpu"])
     r.add_argument("--workers", type=int, help="image loading processes (default up to 4)")
-    r.add_argument("--name", default="yolox-s-tuned", help="model name")
+    r.add_argument("--name", help="model name (default yolox-s-tuned, or rf-detr-<size>-tuned)")
     r.add_argument("--version", help="model version (default: date and time)")
     r.add_argument("--seed", type=int, default=0)
     sub.add_parser("device", help="show which accelerator training would use")
     args = ap.parse_args(argv)
     try:
-        if args.cmd == "run":
+        if args.cmd == "run" and args.arch == "rf-detr":
+            from . import rfdetr_train
+            rfdetr_train.train(Path(args.dataset), Path(args.out), init=args.init, epochs=args.epochs, batch=args.batch,
+                               lr=args.lr, device=args.device, workers=args.workers, name=args.name,
+                               version=args.version, seed=args.seed, size=args.size)
+        elif args.cmd == "run":
             train(Path(args.dataset), Path(args.out), init=args.init, epochs=args.epochs, batch=args.batch, lr=args.lr,
-                  device=args.device, workers=args.workers, name=args.name, version=args.version, seed=args.seed)
+                  device=args.device, workers=args.workers, name=args.name or "yolox-s-tuned", version=args.version,
+                  seed=args.seed)
         elif args.cmd == "device":
             print(describe_device(pick_device()))
         else:

@@ -20,7 +20,7 @@ PY="$PKG/runtime/python/bin/python3"
 "$PY" -c 'import torch, onnxruntime; assert torch.version.cuda, "PyTorch without CUDA"; print("torch", torch.__version__, "CUDA", torch.version.cuda, "onnxruntime", onnxruntime.__version__)'
 test -f "$ROOT/training_weights/yolox_s.pth" || { echo "The training starting weights are missing: run scripts/fetch_models.py first." >&2; exit 1; }
 mkdir -p "$PKG/runtime/python/share/lanepulse"
-cp "$ROOT/training_weights/yolox_s.pth" "$PKG/runtime/python/share/lanepulse/"
+cp "$ROOT"/training_weights/*.pth "$PKG/runtime/python/share/lanepulse/"   # YOLOX-s, and RF-DETR when fetched
 test -f "$("$PY" -c 'import trafficwb.web, pathlib; print(pathlib.Path(trafficwb.web.__file__).parent / "static" / "index.html")')" \
   || { echo "The web screens are missing: run scripts/build_ui.py first." >&2; exit 1; }
 mkdir -p "$PKG/models"

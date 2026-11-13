@@ -10,7 +10,7 @@ import { NamePick } from "../components/Pick";
 // setup stays one link away for anything else.
 
 type Ref = { countries: Record<string, string>; modes: Record<string, string[]>; zones: string[];
-  sam3?: { installed: boolean; reason: string | null } };
+  sam3?: { installed: boolean; reason: string | null }; rfdetr?: { installed: boolean; reason: string | null } };
 type Guess = { source_dir: string; name: string; input_type: string; images: number; videos: number; readable: number; more: boolean;
   pattern: string | null; first_utc: string | null; last_utc: string | null; unreadable: { file: string; reason: string }[];
   iana_zone: string; country: string; zone_from: string | null; output_dir: string; output_exists: boolean };
@@ -79,6 +79,7 @@ export default function QuickStart() {
   const files = g ? g.images + g.videos : 0;
   const video = g?.input_type === "video";
   const samOk = !!ref?.sam3?.installed;
+  const rfOk = !!ref?.rfdetr?.installed;
 
   const create = async () => {
     if (!g) return;
@@ -165,10 +166,11 @@ export default function QuickStart() {
             <div>
               <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>Detector</div>
               <div className="seg" role="radiogroup" aria-label="Detector">
-                {([["standard", "Standard", "Fastest, works on any computer"], ["sam3", "SAM 3.1", samOk ? "Finds things by name" : "Not installed here"],
+                {([["standard", "Standard", "Fastest, works on any computer"], ["rfdetr", "RF-DETR", rfOk ? "Finds more, a little slower" : "Not installed here"],
+                  ["sam3", "SAM 3.1", samOk ? "Finds things by name" : "Not installed here"],
                   ["both", "Both", samOk ? "Finds the most, slowest" : "Needs SAM 3.1"]] as const).map(([k, l, d]) => (
                   <button key={k} type="button" role="radio" aria-checked={detector === k} className={detector === k ? "on" : ""}
-                    disabled={!g || (k !== "standard" && !samOk)} onClick={() => setDetector(k)}><b>{l}</b><small>{d}</small></button>
+                    disabled={!g || (k === "rfdetr" ? !rfOk : k !== "standard" && !samOk)} onClick={() => setDetector(k)}><b>{l}</b><small>{d}</small></button>
                 ))}
               </div>
             </div>

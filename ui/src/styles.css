@@ -435,6 +435,19 @@ button.chip.on::before { content: ""; width: 6px; height: 6px; border-radius: 50
 .choice input { margin-top: 3px; }
 .choice b { font-weight: 600; }
 .choice small { grid-column: 2; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+/* Benchmark grades beside each detector (Wizard.tsx GradeLine, GradesTable). */
+.choice .grades { grid-column: 2; display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.grade { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-2); padding: 1px 7px;
+  border: 1px solid var(--line); border-radius: 999px; white-space: nowrap; }
+.grade b { font-weight: 700; }
+.grade.g-A b { color: var(--ok); }
+.grade.g-B b { color: #9fe07a; }
+.grade.g-C b { color: var(--warn); }
+.grade.g-D b, .grade.g-F b { color: var(--bad); }
+.grades-table { margin-top: 10px; }
+.grades-table summary { cursor: pointer; color: var(--text-2); font-size: 12.5px; }
+.grades-table table { margin-top: 8px; }
+.grades-table td .grade, .grades-table td .grade b { margin-left: 2px; }
 
 .thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
 .thumbs img { height: 90px; border-radius: var(--radius-sm); border: 1px solid var(--line); display: block; }

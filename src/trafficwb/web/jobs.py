@@ -172,6 +172,25 @@ class JobManager:
                 self._detector = self.detector_factory()
             return self._detector
 
+    def rfdetr(self):
+        """RF-DETR for missions that chose it without a saved model of their own (detectors.rfdetr_pack), loaded once."""
+        from .. import models
+        from ..detect import make_detector
+        from ..detectors import rfdetr_pack
+        try:
+            pack = rfdetr_pack(self.data_root)
+        except models.ModelPackError as exc:
+            raise RuntimeError(str(exc)) from None
+        key = (pack.name, pack.version, pack.sha256)
+        with self._lock:
+            hit = self._saved.get(key)
+        if hit:
+            return hit
+        det = self.model_loader(pack.name, pack.version) if self.model_loader else make_detector(pack)
+        with self._lock:
+            self._saved[key] = (det, pack.card)
+        return det, pack.card
+
     def sam_engine(self):
         if self.sam_factory:
             return self.sam_factory()
@@ -182,6 +201,8 @@ class JobManager:
         """The standard detector of a mission: the saved model it chose, else the model in production use."""
         name = getattr(m.config(), "vehicle_model", None)
         if not name:
+            if getattr(m.config(), "detector", "standard") == "rfdetr":
+                return self.rfdetr()
             return self.detector()
         from ..learning import LearningError, ModelLibrary
         lib = ModelLibrary(self.data_root)
@@ -529,7 +550,10 @@ class JobManager:
         job.result["training_run"] = run_id
         try:
             job.control.stage = "loading PyTorch"
-            from .. import train as tr
+            if p.get("arch") == "rf-detr":         # RF-DETR: its own training loop, the same arguments and pack
+                from .. import rfdetr_train as tr
+            else:
+                from .. import train as tr
             work = Path(tempfile.mkdtemp(prefix="lanepulse-train-", dir=p.get("work_dir")))
             job.control.stage = "copying the dataset images"
             ds_dir = ls.export_combined(refs, out_dir=work)
@@ -564,7 +588,7 @@ class JobManager:
             workers = min(4, os.cpu_count() or 1) if sys.platform.startswith("linux") and p.get("device") != "cpu" else 0
             z = tr.train(ds_dir, work / "out", init=p.get("init") or "coco", epochs=int(p["epochs"]), device=p.get("device") or "auto",
                          workers=workers, log=log, progress=progress, control=job.control, on_epoch=on_epoch, download=False,
-                         mp_context="spawn")
+                         mp_context="spawn", **({"size": p.get("size") or "small"} if p.get("arch") == "rf-detr" else {}))
             job.control.stage = "adding the new model"
             r = import_pack(z, p.get("models_root") or models.models_root())
             job.result["model"] = {"name": r["name"], "version": r["version"]}

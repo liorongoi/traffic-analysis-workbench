@@ -35,8 +35,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--output", required=True)
     c.add_argument("--formats", default="xlsx,csv")
     c.add_argument("--author", default="operator")
-    c.add_argument("--detector", default="standard", choices=["standard", "sam3"],
-                   help="vehicle detector for still images: standard (YOLOX-s) or sam3 (SAM 3.1)")
+    c.add_argument("--detector", default="standard", choices=["standard", "rfdetr", "sam3"],
+                   help="vehicle detector for still images: standard (YOLOX-s), rfdetr (RF-DETR) or sam3 (SAM 3.1)")
     s = sub.add_parser("scan")
     s.add_argument("--data", required=True)
     s.add_argument("--mission", required=True)
@@ -99,6 +99,9 @@ def main(argv: list[str] | None = None) -> int:
         m = root.open_mission(a.mission)
         chosen = m.config().detector if m.input_type == "images" else "standard"
         model = a.model or (chosen if chosen in ("sam3", "both") else "yolox-s")
+        if not a.model and chosen == "rfdetr":
+            from .detectors import rfdetr_pack
+            model = rfdetr_pack(a.data).name
         card = None
         if model in ("sam3", "sam3.1"):
             from .sam3 import Sam3Detector, engine
