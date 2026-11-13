@@ -47,8 +47,8 @@ from .yolox_torch import YOLOX, ExportWrapper, load_checkpoint, yolox_loss
 
 SIZE = 640
 PAD = 114
-# Dataset categories (1 bicycle, 2 car, 3 motorcycle, 4 bus, 5 truck) to the model's COCO class index.
-CAT_TO_COCO = {1: 1, 2: 2, 3: 3, 4: 5, 5: 7}
+# Dataset categories (1 bicycle, 2 car, 3 motorcycle, 4 bus, 5 truck, 6 person) to the model's COCO class index.
+CAT_TO_COCO = {1: 1, 2: 2, 3: 3, 4: 5, 5: 7, 6: 0}
 COCO_WEIGHTS = {
     "url": "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.pth",
     "sha256": "f55ded7181e1b0c13285c56e7790b8f0e8f8db590fe4edb37f0b7f345c913a30",

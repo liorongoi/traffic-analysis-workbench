@@ -124,10 +124,30 @@ def _unpack(b: bytes | None):
     return np.frombuffer(b[8:], np.uint8).reshape(int(h), int(w)).copy()
 
 
+def probe_version(con, views, version_id: int) -> dict:
+    """The recording's probe (size, length, frame rate, start time), probed once and kept in video_probe."""
+    row = con.execute("SELECT * FROM video_probe WHERE source_version_id=?", (version_id,)).fetchone()
+    if row:
+        return dict(row)
+    v = con.execute("SELECT capture_utc, capture_precision FROM source_version WHERE id=?", (version_id,)).fetchone()
+    p = probe(views._path(version_id))
+    con.execute(
+        "INSERT INTO video_probe(source_version_id,container,codec,width,height,duration_s,nominal_fps,frame_count,"
+        "variable_frame_rate,creation_time,start_utc,start_precision,start_source,error,probed_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (version_id, p.container, p.codec, p.width, p.height, p.duration_s, p.nominal_fps, p.frame_count,
+         None if p.variable_frame_rate is None else int(p.variable_frame_rate), p.creation_time,
+         v["capture_utc"], v["capture_precision"] if v["capture_utc"] else None,
+         "filename" if v["capture_utc"] else "none", p.error, utcnow()))
+    return dict(con.execute("SELECT * FROM video_probe WHERE source_version_id=?", (version_id,)).fetchone())
+
+
 class VideoProcessor:
     def __init__(self, mission: Mission, detector, card: dict | None = None, settings: VideoSettings | None = None,
-                 control: RunControl | None = None, plate_models: Callable[[], tuple] | None = None):
+                 control: RunControl | None = None, plate_models: Callable[[], tuple] | None = None,
+                 only: set[int] | None = None):
         self.m = mission
+        self.only = set(only) if only else None    # analyse only these recordings (the catalog's ticked ones)
         self.plate_models = plate_models   # loaded only when a plate recognition mission needs it
         self.con = mission.con
         self.detector = detector
@@ -152,10 +172,6 @@ class VideoProcessor:
             from dataclasses import replace
             self.s = replace(self.s, tracker=replace(self.s.tracker, jump_per_s=3.0))
 
-    def pending_runs(self) -> list[int]:
-        return [r[0] for r in self.con.execute(
-            "SELECT id FROM run WHERE state IN ('queued','running') OR id IN "
-            "(SELECT run_id FROM run_item WHERE processing_state IN ('queued','running')) ORDER BY id")]
 
     def process_all(self, progress: Callable[[int, int], None] | None = None) -> list[VideoReport]:
         reps = [self.process_run(r, progress) for r in self.pending_runs()]
@@ -185,20 +201,19 @@ class VideoProcessor:
 
     # ---------- probe ----------
     def probe_version(self, version_id: int) -> dict:
-        row = self.con.execute("SELECT * FROM video_probe WHERE source_version_id=?", (version_id,)).fetchone()
-        if row:
-            return dict(row)
-        v = self.con.execute("SELECT capture_utc, capture_precision FROM source_version WHERE id=?", (version_id,)).fetchone()
-        p = probe(self.views._path(version_id))
-        self.con.execute(
-            "INSERT INTO video_probe(source_version_id,container,codec,width,height,duration_s,nominal_fps,frame_count,"
-            "variable_frame_rate,creation_time,start_utc,start_precision,start_source,error,probed_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (version_id, p.container, p.codec, p.width, p.height, p.duration_s, p.nominal_fps, p.frame_count,
-             None if p.variable_frame_rate is None else int(p.variable_frame_rate), p.creation_time,
-             v["capture_utc"], v["capture_precision"] if v["capture_utc"] else None,
-             "filename" if v["capture_utc"] else "none", p.error, utcnow()))
-        return dict(self.con.execute("SELECT * FROM video_probe WHERE source_version_id=?", (version_id,)).fetchone())
+        return probe_version(self.con, self.views, version_id)
+
+    def pending_runs(self) -> list[int]:
+        runs = [r[0] for r in self.con.execute(
+            "SELECT id FROM run WHERE state IN ('queued','running') OR id IN "
+            "(SELECT run_id FROM run_item WHERE processing_state IN ('queued','running')) ORDER BY id")]
+        if self.only is None:
+            return runs
+        q = ",".join("?" * len(self.only)) or "NULL"
+        sel = {r[0] for r in self.con.execute(
+            f"SELECT DISTINCT run_id FROM run_item WHERE processing_state IN ('queued','running') AND "
+            f"source_version_id IN ({q})", tuple(self.only))}
+        return [r for r in runs if r in sel]
 
     # ---------- run ----------
     def process_run(self, run_id: int, progress: Callable[[int, int], None] | None = None) -> VideoReport:
@@ -226,6 +241,8 @@ class VideoProcessor:
             "SELECT i.*, f.rel_path FROM run_item i JOIN source_version v ON v.id=i.source_version_id "
             "JOIN source_file f ON f.id=v.source_file_id WHERE i.run_id=? AND i.processing_state IN ('queued','running') "
             "ORDER BY i.id", (run_id,)).fetchall()
+        if self.only is not None:
+            items = [it for it in items if it["source_version_id"] in self.only]
         total = len(items)
         self.control.stage = "analysing video"
         for n, it in enumerate(items, 1):

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, post } from "../api";
 import { go } from "../router";
+import Player from "./Player";
 
 // Video events: one row per continuous appearance of a vehicle. Times are seconds from the start of the recording,
 // read from the frames' presentation timestamps. Absolute UTC is shown only when the file name gave the start.
@@ -11,6 +12,7 @@ export type VEvent = {
   flags: string[]; related: string[]; end_reason: string; status: string; duplicate_of: string | null;
   merged_into: number | null; absorbed: string[]; split_at: number[]; parts: [number, number][];
   first_utc: string | null; last_utc: string | null; revisions: number;
+  continues?: number | null; continues_key?: string | null;
 };
 type Obs = { t: number; x1: number; y1: number; x2: number; y2: number; cls: string; score: number; found_by?: string };
 
@@ -19,6 +21,10 @@ export const fmtT = (t: number | null | undefined) => {
   const ms = Math.round(t * 1000);
   const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(ms % 1000).padStart(3, "0")}`;
+};
+
+const REVIEW_TEXT: Record<string, string> = {
+  full: "Approved: full labels", partial: "Some events reviewed", none: "Not reviewed",
 };
 
 const FLAG_LABEL: Record<string, string> = {
@@ -31,8 +37,13 @@ const STATUS_LABEL: Record<string, string> = {
 };
 const CLASSES = ["car", "bus", "truck", "motorcycle", "bicycle"];
 
-export default function EventsTab({ missionId, eventId }: { missionId: string; eventId: number | null }) {
-  return eventId ? <EventDetail missionId={missionId} eventId={eventId} /> : <EventList missionId={missionId} />;
+export default function EventsTab({ missionId, extra }: { missionId: string; extra: string | null }) {
+  // "#/m/<id>/events/<event id>" opens one event; "#/m/<id>/events/rec-<video id>" opens that video's tab.
+  const eventId = extra && /^\d+$/.test(extra) ? Number(extra) : null;
+  const recording = extra?.startsWith("rec-") ? extra.slice(4) : "";
+  // "#/m/<id>/events/play-<video id>" plays that video with its boxes, to review and edit there.
+  if (extra?.startsWith("play-")) return <Player missionId={missionId} versionId={Number(extra.slice(5))} />;
+  return eventId ? <EventDetail missionId={missionId} eventId={eventId} /> : <EventList missionId={missionId} recording={recording} />;
 }
 
 type Counts = {
@@ -48,7 +59,8 @@ function CountsCard({ missionId, versionId, refresh }: { missionId: string; vers
   const [c, setC] = useState<Counts | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   useEffect(() => {
-    api(`/missions/${missionId}/counts${versionId ? `?version_id=${versionId}` : ""}`).then(setC).catch(() => setC(null));
+    const q = versionId.startsWith("g") ? `?group_id=${versionId.slice(1)}` : versionId ? `?version_id=${versionId}` : "";
+    api(`/missions/${missionId}/counts${q}`).then(setC).catch(() => setC(null));
   }, [missionId, versionId, refresh]);
   if (!c || !c.classes.length) return null;
   const sum = (d: Record<string, number>) => Object.values(d).reduce((a, b) => a + b, 0);
@@ -108,20 +120,25 @@ function CountsCard({ missionId, versionId, refresh }: { missionId: string; vers
   );
 }
 
-function EventList({ missionId }: { missionId: string }) {
+function EventList({ missionId, recording }: { missionId: string; recording: string }) {
   const [recs, setRecs] = useState<any[]>([]);
+  const [groups, setGroups] = useState<{ id: number; name: string; members: number[] }[]>([]);
   const [evs, setEvs] = useState<VEvent[] | null>(null);
-  const [rec, setRec] = useState("");
+  const [rec, setRecState] = useState(recording);
+  useEffect(() => { setRecState(recording); }, [recording]);
+  // One tab per analysed video; the tab is part of the address, so it can be linked and survives a reload.
+  const setRec = (v: string) => { setRecState(v); go(`/m/${missionId}/events${v ? `/rec-${v}` : ""}`); };
   const [status, setStatus] = useState("");
   const [flag, setFlag] = useState("");
   const [startTimes, setStartTimes] = useState<Record<number, string>>({});
   const [precisions, setPrecisions] = useState<Record<number, string>>({});
   const [timeRevision, setTimeRevision] = useState(0);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
-  useEffect(() => { api(`/missions/${missionId}/recordings`).then((r) => setRecs(r.recordings)); }, [missionId]);
+  useEffect(() => { api(`/missions/${missionId}/recordings`).then((r) => { setRecs(r.recordings); setGroups(r.groups ?? []); }); }, [missionId]);
   useEffect(() => {
     const q = new URLSearchParams();
-    if (rec) q.set("version_id", rec);
+    if (rec.startsWith("g")) q.set("group_id", rec.slice(1));
+    else if (rec) q.set("version_id", rec);
     if (status) q.set("status", status);
     if (flag) q.set("flag", flag);
     api(`/missions/${missionId}/events?${q}`).then((r) => setEvs(r.events));
@@ -149,6 +166,17 @@ function EventList({ missionId }: { missionId: string }) {
       setMsg({ kind: "ok", text: "Manual UTC start cleared; the filename time is in use when available." });
     } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
   };
+  const review = async (r: any, action: "approve" | "confirm_rest_and_approve" | "reopen") => {
+    setMsg(null);
+    try {
+      await post(`/missions/${missionId}/recordings/${r.id}/review`, { action });
+      const updated = await api(`/missions/${missionId}/recordings`);
+      setRecs(updated.recordings); setTimeRevision((x) => x + 1);
+      setMsg({ kind: "ok", text: action !== "reopen"
+        ? "Recording approved for learning: its frames teach every reviewed target, and the empty road and rejected detections as background."
+        : "Recording reopened: only its reviewed events teach, the rest of each frame is ignored." });
+    } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
+  };
   const doExport = async () => {
     setMsg(null);
     try {
@@ -156,15 +184,33 @@ function EventList({ missionId }: { missionId: string }) {
       setMsg({ kind: "ok", text: `Exported: ${r.files.join(", ")}` });
     } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
   };
+  // One tab per analysed video; the parts of a merged recording share one tab.
+  const inGroup = new Set(groups.flatMap((g) => g.members));
+  const done = new Set(recs.filter((r) => r.processing_state === "done").map((r) => r.id));
+  const groupTabs = groups.filter((g) => g.members.some((id) => done.has(id)));
+  const soloTabs = recs.filter((r) => done.has(r.id) && !inGroup.has(r.id));
   return (
     <div className="grid" style={{ gap: 10 }}>
+      {groupTabs.length + soloTabs.length > 1 && (
+        <nav className="tabs videotabs" aria-label="Videos">
+          <a href={`#/m/${missionId}/events`} className={rec === "" ? "on" : ""} onClick={(e) => { e.preventDefault(); setRec(""); }}>All videos</a>
+          {groupTabs.map((g) => (
+            <a key={`g${g.id}`} href={`#/m/${missionId}/events/rec-g${g.id}`} className={rec === `g${g.id}` ? "on" : ""}
+              title={g.members.map((id) => recs.find((r) => r.id === id)?.rel_path).join(" + ")}
+              onClick={(e) => { e.preventDefault(); setRec(`g${g.id}`); }}>{g.name}
+              <span className="n">{g.members.reduce((a, id) => a + (recs.find((r) => r.id === id)?.events ?? 0), 0)}</span></a>))}
+          {soloTabs.map((r) => (
+            <a key={r.id} href={`#/m/${missionId}/events/rec-${r.id}`} className={String(r.id) === rec ? "on" : ""} title={r.rel_path}
+              onClick={(e) => { e.preventDefault(); setRec(String(r.id)); }}>{r.rel_path.split("/").pop()}<span className="n">{r.events}</span></a>))}
+        </nav>)}
       <CountsCard missionId={missionId} versionId={rec} refresh={timeRevision} />
       <div className="card">
         <h2>Recordings</h2>
-        <table className="t"><thead><tr><th>File</th><th>Start (UTC)</th><th className="num">Length</th><th>Frame rate</th><th>Processing</th><th className="num">Events</th></tr></thead>
-          <tbody>{recs.map((r) => (
+        <table className="t"><thead><tr><th>File</th><th>Start (UTC)</th><th className="num">Length</th><th>Frame rate</th><th>Processing</th><th className="num">Events</th><th>For learning</th></tr></thead>
+          <tbody>{recs.filter((r) => !rec || (rec.startsWith("g") ? groups.find((g) => `g${g.id}` === rec)?.members.includes(r.id) : String(r.id) === rec)).map((r) => (
             <tr key={r.id}>
-              <td className="mono bidi">{r.rel_path}</td>
+              <td className="mono bidi">{r.rel_path}
+                {r.processing_state === "done" && <div><a className="play-link" href={`#/m/${missionId}/events/play-${r.id}`}>▶ Play and review</a></div>}</td>
               <td>
                 <div className="mono">{r.start_utc ?? <span className="muted" title="No confirmed UTC start">unknown</span>}</div>
                 <div className="muted">{r.start_source === "manual" ? `operator confirmed by ${r.start_revision_author} · ${r.start_revision_created_at}` : r.start_source === "filename" ? "from filename" : "no UTC start"}</div>
@@ -188,11 +234,24 @@ function EventList({ missionId }: { missionId: string }) {
               <td>{r.nominal_fps ? `${Number(r.nominal_fps).toFixed(2)} fps` : ""}{r.variable_frame_rate ? " (variable)" : ""}</td>
               <td>{r.error ? <span className="badge failed" title={r.error}>cannot decode</span> : r.processing_state ?? ""}</td>
               <td className="num">{r.events}</td>
+              <td>
+                <div>{REVIEW_TEXT[r.review] ?? ""}</div>
+                {r.processing_state === "done" && (r.approved
+                  ? <button onClick={() => review(r, "reopen")}>Reopen</button>
+                  : <button onClick={() => review(r, r.pending ? "confirm_rest_and_approve" : "approve")}
+                      title="Say that every target in this recording is an event and every event is right; events not decided yet are confirmed">
+                      {r.pending ? `Confirm ${r.pending} left and approve` : "Approve recording"}</button>)}
+              </td>
             </tr>))}</tbody></table>
+        <p className="muted" style={{ marginBottom: 0 }}>Reviewed events teach the vehicle detector on the Learning tab. Approving a
+          recording also says that nothing was missed, so the empty road and the rejected detections in its frames are learnt
+          as background, as approving a still image does.</p>
       </div>
       <div className="card row">
         <select value={rec} onChange={(e) => setRec(e.target.value)} aria-label="Recording">
-          <option value="">All recordings</option>{recs.map((r) => <option key={r.id} value={r.id}>{r.rel_path}</option>)}
+          <option value="">All recordings</option>
+          {groups.map((g) => <option key={`g${g.id}`} value={`g${g.id}`}>{g.name} (merged)</option>)}
+          {recs.map((r) => <option key={r.id} value={r.id}>{r.rel_path}</option>)}
         </select>
         <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Review status">
           <option value="">Any review status</option>{Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -202,6 +261,7 @@ function EventList({ missionId }: { missionId: string }) {
         </select>
         <span className="muted">{evs?.length ?? 0} events</span>
         <span style={{ flex: 1 }} />
+        {rec && !rec.startsWith("g") && <button className="primary" onClick={() => go(`/m/${missionId}/events/play-${rec}`)}>▶ Play and review this video</button>}
         <button onClick={doExport}>Export events</button>
       </div>
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
@@ -220,7 +280,8 @@ function EventList({ missionId }: { missionId: string }) {
                 <td className="mono">{e.first_utc ?? <span className="muted">unknown</span>}</td>
                 <td>{e.cls}{e.cls !== e.machine_cls ? <span className="muted"> (machine: {e.machine_cls})</span> : ""}</td>
                 <td><span className={`badge ${e.status === "confirmed" ? "approved" : e.status === "rejected" ? "failed" : ""}`}>{STATUS_LABEL[e.status]}</span>{e.parts.length > 1 ? <span className="muted"> · {e.parts.length} parts</span> : ""}</td>
-                <td>{e.flags.map((f) => <span key={f} className="badge flag" style={{ marginRight: 4 }}>{FLAG_LABEL[f] ?? f}</span>)}</td>
+                <td>{e.continues_key && <span className="badge part" style={{ marginRight: 4 }} title="The same target, carried on from the part before; counted once">continues {e.continues_key}</span>}
+                  {e.flags.map((f) => <span key={f} className="badge flag" style={{ marginRight: 4 }}>{FLAG_LABEL[f] ?? f}</span>)}</td>
               </tr>))}</tbody>
           </table>
         </div>
