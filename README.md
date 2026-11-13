@@ -67,5 +67,6 @@ trafficwb-mission export --data D:\twb-data --mission <id>
 - `docs/design/plates.md`: plate reading rules; `docs/decisions/plate-models.md`: which plate models and why
 - `docs/design/learning.md`: training data eligibility, dataset versions, evaluation and promotion
 - `docs/design/deployment.md`: offline bundle, install, update, rollback, backups and GPU choice
+- `docs/benchmarks/README.md`: detection, tracking and counting measured on public datasets (COCO, VisDrone, HIT-UAV thermal, MOT17), next to published results; `scripts/benchmark.py` repeats them
 - `docs/traceability.md`: requirement → code → test status
 - `docs/delivery/`: per-phase delivery reports (what was built, what was actually tested)
