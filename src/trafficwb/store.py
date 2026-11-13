@@ -1018,6 +1018,15 @@ CREATE TABLE video_zone (                  -- counting lines and areas drawn on 
   deleted_by TEXT
 );
 """,
+    22: """
+CREATE TABLE video_telemetry (             -- where an airborne camera was and looked (video_meta), read when asked
+  source_version_id INTEGER PRIMARY KEY REFERENCES source_version(id),
+  source TEXT,                             -- dji-srt | klv-0601; NULL: the recording has none
+  summary TEXT,                            -- JSON (video_meta.Telemetry.summary)
+  samples TEXT,                            -- JSON [{"t", "lat", ...}], at most 5 a second
+  read_at TEXT NOT NULL
+);
+""",
 }
 
 

@@ -22,7 +22,8 @@ from typing import Any
 from .timeparse import MalformedName, parse_capture_time
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
-VIDEO_EXT = {".mp4", ".mkv", ".avi", ".mov", ".ts", ".m4v", ".wmv", ".asf", ".dav", ".h264", ".h265"}
+VIDEO_EXT = {".mp4", ".mkv", ".avi", ".mov", ".ts", ".m4v", ".wmv", ".asf", ".dav", ".h264", ".h265", ".webm", ".ogv",
+             ".mpg", ".mpeg", ".m2ts", ".mts"}
 
 
 @dataclass
