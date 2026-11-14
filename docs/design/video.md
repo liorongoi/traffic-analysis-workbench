@@ -145,7 +145,7 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 - Measuring the camera (player, "Measure" or M): drag a line between two points on the road whose distance is known and pick it from a list (a car's length, a lane's width, a bus's length, 1 to 100 m). Speeds become km/h and sizes metres, for that video and the other videos from the same folder without a measure of their own. One scale for the whole picture is approximate: the line should be at the depth where targets pass. Without a measure, speed is in pixels per second and the speed filter offers the slowest, middle and fastest third.
 - Colour is read once per target, in the background, on the frame shown as its picture, by the still-image colour reader (9 colours; observed, uncertain with the competing colours, or not observable, for example in infrared). A person's top is 15-50 % of the box height and the lower body 50-90 %.
 - "Most in view at once": per family (vehicles, people), the most counted targets in view at the same moment and when. The crowd alert (5 to 100 people, or off) lists the periods with that many people in view, with links to play them.
-- Not yet: hats, bags and other worn items (they need a model of their own), ground speed from a moving or airborne camera (phase 7), lines and areas in video (phase 6b).
+- Not yet: ground speed from a moving or airborne camera (phase 7), lines and areas in video (phase 6b).
 
 ## Lines, areas and paths
 

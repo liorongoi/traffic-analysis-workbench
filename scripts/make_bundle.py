@@ -120,7 +120,7 @@ def main(argv=None) -> int:
             print("The training starting weights are missing: run scripts/fetch_models.py first.", file=sys.stderr)
             return 1
         (tmp / "training").mkdir()
-        for f in sorted((ROOT / "training_weights").glob("*.pth")):    # YOLOX-s, and RF-DETR when fetched
+        for f in sorted((ROOT / "training_weights").glob("*.pth")):    # every fetched size of every detector
             shutil.copy2(f, tmp / "training" / f.name)
     runtime_version = None
     if a.python_runtime and not a.app_only:

@@ -95,6 +95,11 @@ class DetectorBody(BaseModel):
     video_workers: int | None = None       # video: segments analysed side by side; None leaves it as it is
 
 
+class SizeBody(BaseModel):
+    family: str
+    size: str | None = None                # None: automatic (by this computer's hardware)
+
+
 class RunModeBody(BaseModel):
     run_mode: str                          # manual | auto
     auto_min_reviews: int | None = Field(None, ge=1, le=100000)
@@ -429,7 +434,7 @@ class TrainBody(BaseModel):
     datasets: list[DatasetRef] | None = None   # several dataset versions, from this mission or others
     epochs: int = Field(20, ge=1, le=300)
     start_from: str | None = None     # "coco" (the released weights) or "<name>/<version>" of a trained model
-    arch: str = "yolox"               # what to train from the released weights: "yolox" (YOLOX-s) or "rf-detr"
+    arch: str = "yolox"               # what to train from the released weights: yolox, rf-detr, d-fine or rt-detr
     size: str | None = None           # RF-DETR only: nano, small or medium (default small)
 
 
@@ -577,7 +582,9 @@ def default_detector_factory(data_root: Path | str | None = None):
         prod = ModelRegistry(data_root).production("vehicle_detection")
         if prod:
             pack = models.find(prod["name"], prod["version"])
-    pack = pack or models.find("yolox-s")
+    if pack is None:                                   # the YOLOX size that suits this computer (hardware.py)
+        from ..hardware import yolox_pack
+        pack = yolox_pack(data_root)
     return make_detector(pack), pack.card
 
 
@@ -1714,9 +1721,14 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         ls = _learn(m)
         reg = ModelRegistry(data_root)
         prod = reg.production("vehicle_detection")
-        default = [x for x in models.installed("vehicle_detection") if x["name"] == "yolox-s"]
-        in_use = ({"name": prod["name"], "version": prod["version"]} if prod else
-                  ({"name": "yolox-s", "version": default[-1]["version"]} if default else None))
+        in_use = {"name": prod["name"], "version": prod["version"]} if prod else None
+        if in_use is None:
+            from ..hardware import yolox_pack
+            try:
+                d = yolox_pack(data_root)
+                in_use = {"name": d.name, "version": d.version}
+            except models.ModelPackError:
+                pass
         from .. import training_env
         tj = jobs.training_busy()
         from ..learning import ModelLibrary
@@ -1867,19 +1879,30 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         if env["state"] != "ready":
             raise ApiError(400, "no_training", env.get("reason") or "Training is not available here.")
         start = body.start_from or "coco"
-        arch = "rf-detr" if body.arch in ("rf-detr", "rfdetr") else "yolox"
-        if body.arch not in ("yolox", "rf-detr", "rfdetr"):
-            raise ApiError(400, "invalid", "The model to train is YOLOX-s (yolox) or RF-DETR (rf-detr).")
-        size = body.size or "small"
+        detr = env.get("detr") or {}
+        arch = "rf-detr" if body.arch in ("rf-detr", "rfdetr") else body.arch
+        if arch not in ("yolox", "rf-detr", *detr):
+            raise ApiError(400, "invalid", "The model to train is YOLOX (yolox), RF-DETR (rf-detr), D-FINE (d-fine) or "
+                           "RT-DETRv2 (rt-detr).")
+        # the size this computer suits (training_env.recommended), unless the operator chose one
+        rec = (env.get("recommended") or {}).get("sizes") or {}
+        size = body.size or rec.get(arch) or (detr[arch]["default"] if arch in detr else
+                                              {"yolox": "s", "rf-detr": "small"}[arch])
         if arch == "rf-detr" and not env.get("rfdetr"):
             raise ApiError(400, "no_training", env.get("rfdetr_reason") or "RF-DETR cannot be trained here.")
+        if arch in detr and not detr[arch]["ok"]:
+            raise ApiError(400, "no_training", detr[arch]["reason"] or f"{detr[arch]['title']} cannot be trained here.")
         if start == "coco":
-            if arch == "yolox" and not env.get("coco_weights"):
-                raise ApiError(400, "no_weights", "The YOLOX-s starting weights are not installed here. Install the current "
-                               "LanePulse version, or start from a model trained earlier.")
+            if arch == "yolox" and size not in (env.get("yolox_weights") or (["s"] if env.get("coco_weights") else [])):
+                raise ApiError(400, "no_weights", f"The YOLOX-{size} starting weights are not installed here. Install the "
+                               "current LanePulse version, or start from a model trained earlier.")
             if arch == "rf-detr" and size not in (env.get("rfdetr_weights") or []):
                 raise ApiError(400, "no_weights", f"The RF-DETR {size} starting weights are not installed here. Install the "
                                "current LanePulse version, or start from an RF-DETR model trained earlier.")
+            if arch in detr and size not in detr[arch]["weights"]:
+                raise ApiError(400, "no_weights", f"The {detr[arch]['title']} {size} starting weights are not installed "
+                               f"here. Install the current LanePulse version, or start from a {detr[arch]['title']} "
+                               "model trained earlier.")
             init = "coco"
         else:
             name, _, version = start.partition("/")
@@ -1891,10 +1914,14 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                 raise ApiError(400, "model", f"{name} {pack.version} cannot be trained further (no PyTorch weights). "
                                "Start from the released weights instead.")
             init = str(pack.path)
-            arch = "rf-detr" if is_rfdetr(pack.card) else "yolox"   # training continues the model's own kind
-            size = pack.card.get("size") or size
+            # training continues the model's own kind
+            arch = "rf-detr" if is_rfdetr(pack.card) else (pack.card.get("architecture")
+                                                           if pack.card.get("architecture") in detr else "yolox")
+            size = pack.card.get("size") or ("s" if arch == "yolox" else size)
             if arch == "rf-detr" and not env.get("rfdetr"):
                 raise ApiError(400, "no_training", env.get("rfdetr_reason") or "RF-DETR cannot be trained here.")
+            if arch in detr and not detr[arch]["ok"]:
+                raise ApiError(400, "no_training", detr[arch]["reason"] or f"{detr[arch]['title']} cannot be trained here.")
         other = jobs.training_busy()
         if other:
             raise ApiError(409, "training_busy", "A model is already training on this computer"
@@ -1904,10 +1931,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             work.mkdir(parents=True, exist_ok=True)
         except OSError:
             work = None
-        if arch == "rf-detr" and start == "coco":
-            # The released RF-DETR of that size, when installed, is what the new model is compared with afterwards.
+        if start == "coco":
+            # The released model of that kind and size, when installed, is what the new model is compared with afterwards.
             try:
-                rel = models.find(f"rf-detr-{size}")
+                rel = models.find(f"{arch}-{size}")
                 start = f"{rel.name}/{rel.version}"
             except models.ModelPackError:
                 pass
@@ -2014,6 +2041,34 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         prod = _learn_call(lambda: ModelRegistry(data_root).rollback(body.task, u.username, body.note))
         jobs.reset_detector()
         return {"production": prod}
+
+    # ---------- detector sizes for this computer ----------
+    def _hardware() -> dict:
+        from .. import hardware, training_env
+        env = training_env.status()
+        tr = None
+        if env.get("state") == "ready":
+            tr = {"yolox": env.get("yolox_weights") or [], "rf-detr": env.get("rfdetr_weights") or [],
+                  **{a: v.get("weights") or [] for a, v in (env.get("detr") or {}).items()}}
+        out = hardware.summary(data_root, trainable=tr)
+        out["training"] = env.get("state")
+        return out
+
+    @app.get("/api/hardware")
+    def hardware_get(_u: User = Depends(user)):
+        """What this computer has, and per detector the size it runs and trains (chosen from that, or by the operator)."""
+        return _hardware()
+
+    @app.put("/api/hardware/sizes")
+    def hardware_size(body: SizeBody, u: User = Depends(user)):
+        from .. import hardware
+        _admin_only(u)
+        try:
+            hardware.set_choice(data_root, body.family, body.size)
+        except ValueError as exc:
+            raise ApiError(400, "invalid", str(exc)) from None
+        jobs.reset_detector()                         # the next job loads the newly chosen size
+        return _hardware()
 
     # ---------- video ----------
     def _video(m: Mission):
