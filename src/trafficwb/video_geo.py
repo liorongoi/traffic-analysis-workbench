@@ -357,7 +357,7 @@ def footprint_of(m, svc, version_id: int, t: float, dtm_path: str | None = None,
     near, far = ll(parts["near"]), ll(parts["far"])
     a = np.array(near + far)
     return {"how": how, "registered": ok, "note": note, "near": near, "far": far, "top_edge": far[:2],
-            "top_row": round(parts["top_row"], 1),
+            "top_row": round(parts["top_row"], 1), "cut": parts["top_row"] > 0, "frame_w": w, "frame_h": h,
             "bounds": [float(a[:, 0].max()), float(a[:, 1].min()), float(a[:, 0].min()), float(a[:, 1].max())]}
 
 
