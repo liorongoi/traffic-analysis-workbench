@@ -88,6 +88,7 @@ hr { border: 0; border-top: 1px solid var(--line); }
 .top .brand:hover { text-decoration: none; }
 .brand-wordmark { display: flex; align-items: baseline; gap: 10px; line-height: 1; }
 .brand-wordmark strong { font-family: var(--display); font-size: 18px; font-weight: 700; letter-spacing: .03em; }
+.build-version { color: var(--muted); font: 500 12px/1 "IBM Plex Mono", monospace; padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 4px; white-space: nowrap; }
 .brand-wordmark small { padding-left: 10px; border-left: 1px solid var(--line-strong); color: var(--muted); font-size: 12.5px; font-weight: 500; }
 .top-nav { display: flex; align-items: stretch; align-self: stretch; gap: 2px; }
 .top-nav a { display: flex; align-items: center; padding: 0 14px; color: var(--text-2); font-weight: 600; position: relative; }
@@ -734,7 +735,8 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
 .mapsrc-tabs { margin-bottom: 2px; }
 .mapsrc-tabs button { flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 12px; min-height: 46px; text-align: start; }
 .mapsrc-tabs button small { color: var(--muted); font-size: 12px; font-weight: 500; }
-.mapsrc label.small, .serverform label.small { display: grid; gap: 4px; }
+.mapsrc label.small, .serverform label.small, .platform label.small { display: grid; gap: 4px; }
+.platform .grow { flex: 1 1 220px; }
 .serverform .grow { flex: 1 1 200px; }
 .serverform { background: transparent; }
 .maplayers label { cursor: pointer; }

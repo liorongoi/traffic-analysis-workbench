@@ -79,15 +79,12 @@ def test_a_camera_on_the_map_through_the_api(tmp_path):
     fp = c.get(f"/api/missions/{m.id}/recordings/{vid}/footprint", params={"t": 1}, headers=h).json()["footprint"]
     assert fp["registered"] and fp["how"] == "points" and len(fp["near"]) == len(fp["far"]) == 4
     assert fp["bounds"][0] > fp["bounds"][2] and fp["bounds"][3] > fp["bounds"][1]
+    # a fixed camera's coverage: the outline of the ground it sees, with its area and reach
+    assert len(fp["coverage"]) > 10 and fp["coverage_area_m2"] > 0 and fp["coverage_range_m"] > 0
     png = c.get(f"/api/missions/{m.id}/recordings/{vid}/frame-on-map", params={"t": 1}, headers=h)
     assert png.status_code == 200 and png.headers["content-type"] == "image/png"
     lay = cv2.imdecode(np.frombuffer(png.content, np.uint8), cv2.IMREAD_UNCHANGED)
     assert lay.shape[2] == 4 and 0 < (lay[..., 3] > 0).mean() < 1
-    # the ground the camera covers, with its moving vehicles taken out (a fixed camera: the median of many frames)
-    png = c.get(f"/api/missions/{m.id}/recordings/{vid}/frame-on-map", params={"t": 1, "empty": 1}, headers=h)
-    assert png.status_code == 200
-    road = cv2.imdecode(np.frombuffer(png.content, np.uint8), cv2.IMREAD_UNCHANGED)
-    assert road.shape == lay.shape and ((road[..., 3] > 0) == (lay[..., 3] > 0)).mean() > 0.99
     # ground heights: a terrain file gives each point its height, and a slope bigger than a few metres is named
     from trafficwb.terrain import write_geotiff
     dem = np.tile(np.linspace(0, 40, 200, dtype=np.float32), (200, 1))   # 40 m from west to east
@@ -127,3 +124,15 @@ def test_sky_is_found_by_its_look_and_ground_is_not():
     assert m[:55].mean() > 0.97 and m[60:95, 345:].mean() > 0.97 and m[110:].mean() < 0.01
     assert m[65:95, 305:335].mean() < 0.05                                    # the tree stays
     assert sky_mask(rng.integers(40, 160, (360, 640, 3), dtype=np.uint8)).sum() == 0   # no sky: none found
+
+
+def test_coverage_stops_where_the_picture_shows_sky():
+    from trafficwb.georeg import pose_homography
+    from trafficwb.video_geo import coverage
+    G = pose_homography(640, 360, 60, 0, 0, 10, 0, -10)                     # a camera close to level: far ground
+    plain = coverage(G, 640, 360, 90.0, None)
+    sky = np.full(641, 120)                                                  # the picture shows sky down to row 120
+    cut = coverage(G, 640, 360, 90.0, sky)
+    assert not plain["sky_cut"] and cut["sky_cut"]
+    assert cut["range_m"] < plain["range_m"] and cut["area_m2"] < plain["area_m2"]
+    assert coverage(G, 640, 360, 90.0, np.full(641, 359)) is None           # all sky: no coverage

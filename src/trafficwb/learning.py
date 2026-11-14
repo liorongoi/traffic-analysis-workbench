@@ -52,7 +52,8 @@ class LearningError(ValueError):
 
 # LRN-02: every algorithm declares its learning adapter. "planned" means designed, not implemented.
 ADAPTERS = [
-    {"algorithm": "Vehicle detector", "adapter": "fine-tune on this computer from the learning page (NVIDIA or Apple GPU, or the CPU)",
+    {"algorithm": "Vehicle detector", "adapter": "fine-tune YOLOX-s, RF-DETR, D-FINE or RT-DETRv2 on this computer from the "
+                                                 "learning page (NVIDIA or Apple GPU, or the CPU)",
      "status": "available"},
     {"algorithm": "Vehicle detector thresholds", "adapter": "thresholds per view", "status": "planned"},
     {"algorithm": "Colour reader", "adapter": "small classifier trained on corrected colours", "status": "planned"},

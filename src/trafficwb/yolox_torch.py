@@ -19,7 +19,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-SIZES = {"s": (0.33, 0.50), "m": (0.67, 0.75), "l": (1.0, 1.0), "tiny": (0.33, 0.375), "nano": (0.33, 0.25)}
+SIZES = {"s": (0.33, 0.50), "m": (0.67, 0.75), "l": (1.0, 1.0), "x": (1.33, 1.25), "tiny": (0.33, 0.375),
+         "nano": (0.33, 0.25)}
 
 
 class BaseConv(nn.Module):

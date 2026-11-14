@@ -90,18 +90,18 @@ def test_train_export_import_and_continue(tmp_path):
     ds = _dataset(tmp_path)
     z = tr.train(ds, tmp_path / "out", init="none", epochs=2, batch=2, workers=0, device="cpu", size="nano",
                  version="t1", log=lambda *_: None)
-    assert z.name == "yolox-s-tuned-t1.zip"
+    assert z.name == "yolox-nano-tuned-t1.zip"
     with zipfile.ZipFile(z) as f:
-        assert sorted(f.namelist()) == [f"yolox-s-tuned/t1/{n}" for n in ("LICENSE", "model.json", "model.onnx", "model.pt")]
-    card = json.loads((tmp_path / "out/yolox-s-tuned/t1/model.json").read_text())
+        assert sorted(f.namelist()) == [f"yolox-nano-tuned/t1/{n}" for n in ("LICENSE", "model.json", "model.onnx", "model.pt")]
+    card = json.loads((tmp_path / "out/yolox-nano-tuned/t1/model.json").read_text())
     assert card["task"] == "vehicle_detection" and card["classes"] == "coco80" and card["input_size"] == 640
     assert card["training"]["dataset"]["name"] == "tiny" and card["training"]["export_check_max_difference"] < 1e-2
 
     root = tmp_path / "models"
     r = import_pack(z, root)
-    assert not r["already"] and (root / "yolox-s-tuned/t1/model.onnx").is_file()
+    assert not r["already"] and (root / "yolox-nano-tuned/t1/model.onnx").is_file()
     assert import_pack(z, root)["already"]
-    pack = models.find("yolox-s-tuned", "t1", root)
+    pack = models.find("yolox-nano-tuned", "t1", root)
 
     from trafficwb.detect import YoloxDetector                               # the app runs it unchanged
     dets = YoloxDetector(pack).detect(np.full((360, 640, 3), 150, np.uint8))
@@ -110,9 +110,16 @@ def test_train_export_import_and_continue(tmp_path):
     # continue training from the imported pack
     z2 = tr.train(ds, tmp_path / "out", init=str(z), epochs=1, batch=2, workers=0, device="cpu", size="nano",
                   version="t2", log=lambda *_: None)
-    card2 = json.loads((tmp_path / "out/yolox-s-tuned/t2/model.json").read_text())
-    assert card2["training"]["init"] == {"name": "yolox-s-tuned", "version": "t1", "sha256": card["sha256"]}
+    card2 = json.loads((tmp_path / "out/yolox-nano-tuned/t2/model.json").read_text())
+    assert card2["training"]["init"] == {"name": "yolox-nano-tuned", "version": "t1", "sha256": card["sha256"]}
     assert z2.is_file()
+    assert card["architecture"] == "yolox" and card["size"] == "nano" and card2["size"] == "nano"
+    # a trained pack goes on at its own size: no size given takes it from the card; another size is refused
+    z3 = tr.train(ds, tmp_path / "out", init=str(z), epochs=1, batch=2, workers=0, device="cpu", version="t3",
+                  log=lambda *_: None)
+    assert z3.name == "yolox-nano-tuned-t3.zip"
+    with pytest.raises(tr.TrainError, match="is a YOLOX-nano"):
+        tr.train(ds, tmp_path / "out", init=str(z), epochs=1, device="cpu", size="s", log=lambda *_: None)
 
 
 def test_import_refuses_damaged_or_conflicting_packs(tmp_path):
@@ -127,7 +134,7 @@ def test_import_refuses_damaged_or_conflicting_packs(tmp_path):
     root = tmp_path / "models"
     with pytest.raises(ModelPackError, match="damaged"):
         import_pack(bad, root)
-    assert not (root / "yolox-s-tuned").exists()
+    assert not (root / "yolox-nano-tuned").exists()
     import_pack(z, root)
     other = tmp_path / "out2"
     z2 = tr.train(ds, other, init="none", epochs=1, batch=2, workers=0, device="cpu", size="nano", version="t1",
@@ -236,7 +243,7 @@ def test_training_can_be_stopped(tmp_path):
     with pytest.raises(tr.TrainCancelled):
         tr.train(ds, tmp_path / "out", init="none", epochs=3, batch=2, workers=0, device="cpu", size="nano",
                  version="t1", log=lambda *_: None, progress=progress, control=ctl)
-    assert steps == [1] and not (tmp_path / "out" / "yolox-s-tuned-t1.zip").exists()
+    assert steps == [1] and not (tmp_path / "out" / "yolox-nano-tuned-t1.zip").exists()
 
 
 def test_no_download_when_offline(tmp_path, monkeypatch):
@@ -244,3 +251,27 @@ def test_no_download_when_offline(tmp_path, monkeypatch):
     monkeypatch.setattr(tr, "shipped_weights_dirs", lambda: [tmp_path])
     with pytest.raises(tr.TrainError, match="not installed"):
         tr.coco_weights(download=False)
+    with pytest.raises(tr.TrainError, match="YOLOX-m starting weights are not installed"):
+        tr.coco_weights(download=False, size="m")
+    with pytest.raises(tr.TrainError, match="size must be one of"):
+        tr.coco_weights(download=False, size="nano")              # nano's released weights are not trained here
+
+
+def test_every_released_size_starts_training(tmp_path, monkeypatch):
+    """The shipped yolox_<size>.pth of tiny, m, l and x hold only {"model": ...}; each fits its size."""
+    monkeypatch.setattr(tr, "shipped_weights_dirs", lambda: [tmp_path])
+    torch.manual_seed(0)
+    torch.save({"model": YOLOX("tiny", 80).state_dict()}, tmp_path / "yolox_tiny.pth")
+    assert tr.find_coco_weights("tiny") == tmp_path / "yolox_tiny.pth" and tr.find_coco_weights("m") is None
+    m = YOLOX("tiny", 80)
+    src = tr.load_init(m, "coco", tmp_path, download=False, size="tiny")
+    assert src["name"] == "yolox-tiny" and src["sha256"] == tr.YOLOX_WEIGHTS["tiny"]
+    with pytest.raises(tr.TrainError, match="do not fit YOLOX-s"):
+        torch.save({"model": YOLOX("tiny", 80).state_dict()}, tmp_path / "yolox_m.pth")
+        tr.load_init(YOLOX("s", 80), str(tmp_path / "yolox_m.pth"), tmp_path, download=False, size="s")
+    full = tmp_path / "full.pth"
+    torch.save({"model": YOLOX("tiny", 80).state_dict(), "optimizer": {"x": torch.zeros(3)}, "start_epoch": 300}, full)
+    slim = tr.slim_checkpoint(full, tmp_path / "slim.pth")
+    assert set(torch.load(slim, weights_only=True)) == {"model"}
+    from trafficwb.yolox_torch import SIZES
+    assert SIZES["x"] == (1.33, 1.25)

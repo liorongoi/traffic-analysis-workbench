@@ -25,7 +25,7 @@ jobs:
         run: python scripts/build_ui.py
       - run: python -m pip install -e ".[dev,probe,cpu]"
       - name: Fetch model pack (stands in for the staging machine; the SAM 3.1 tests use a small stand-in)
-        run: python scripts/fetch_models.py --no-sam3
+        run: python scripts/fetch_models.py --no-sam3 --minimal
       - run: python -m pytest -v
       - name: Hardware probe report (runner hardware, not the target workstation)
         run: python -m trafficwb.probe
@@ -70,7 +70,7 @@ jobs:
         run: |
           python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           python -m pip install "rfdetr[train]>=1.12.1,<1.13" "onnx>=1.16"
-      - run: python scripts/fetch_models.py --require-rfdetr
+      - run: python scripts/fetch_models.py --require-rfdetr --minimal
       - run: python scripts/make_bundle.py --platform win_amd64 --python 3.12 --ort ${{ matrix.ort }} --out dist
       - name: Install offline and check
         shell: pwsh

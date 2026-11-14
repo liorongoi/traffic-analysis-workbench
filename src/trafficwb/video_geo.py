@@ -261,8 +261,12 @@ def placement(m, svc, version_id: int, t: float, dtm_path: str | None = None, ma
     with a map, the frame is then matched to the map, which lines it up (registered: green, ``how`` "map-match");
     when the match fails it stays where the flight data put it (not registered: red). A terrain file gives the
     ground's height under the camera for flight data that only knows the height above sea level."""
+    from .video_georeg import track_path
+    tp = track_path(m, version_id)
     key = (m.id, version_id, round(t, 1), dtm_path, map_path, tuple(corners or ()),
-           m.con.execute("SELECT MAX(id) FROM camera_geo").fetchone()[0])
+           m.con.execute("SELECT MAX(id) FROM camera_geo").fetchone()[0],
+           m.con.execute("SELECT MAX(id) FROM video_platform WHERE source_version_id=?", (version_id,)).fetchone()[0],
+           tp.stat().st_mtime if tp.is_file() else None)
     with _placed_lock:
         if key in _placed:
             return _placed[key]
@@ -285,48 +289,65 @@ def _placement(m, svc, version_id, t, dtm_path, map_path, corners):
         good = rms is not None and rms <= GOOD_RMS_M
         return (np.array(g["fit"]["homography"]), LocalFrame(*g["fit"]["origin"]), w, h,
                 "points" if good else "points-poor", good, None)
+    from .video_georeg import load_track, platform_get, sample_at, track_sample
     from .video_meta import stored
     try:
         path = svc.path(version_id)
     except Exception:  # noqa: BLE001 - the file has gone: what was read before is still used
         path = None
+    if map_path:                                       # prepared ahead with this map: use it as it is
+        tr = load_track(m, version_id, map_path)
+        x = track_sample(tr, t) if tr else None
+        if x is not None:
+            if x["how"] == "sky":
+                return None, LocalFrame(*tr["origin"]), w, h, "sky", False, SKY_NOTE
+            if x["G"] is None:
+                return None
+            return (np.array(x["G"]).reshape(3, 3), LocalFrame(*tr["origin"]), w, h, x["how"], x["registered"],
+                    "Prepared ahead." if x["registered"] else "Prepared ahead: the map match did not work here.")
     tel = stored(m.con, version_id, path)
-    s = tel.at(t) if tel is not None else None
-    if not s or s.get("lat") is None:
+    s, ground = sample_at(m.con, tel, platform_get(m.con, version_id), t, dtm_path)
+    if s is None:
         return None
     frame = LocalFrame(float(s["lat"]), float(s["lon"]))
-    ground = None
-    if dtm_path:
-        from .terrain import TerrainError, load_terrain
-        try:
-            v = load_terrain(dtm_path).height_at(s["lat"], s["lon"])
-            ground = float(v) if np.isfinite(v) else None
-        except TerrainError:
-            ground = None
+    sea = None
+    if ground is None and s.get("alt") is not None and s.get("rel_alt") is None and s.get("agl") is None:
+        ground, sea = 0.0, "The height is above sea level and there is no terrain: the ground is taken at sea level."
     G = pose_from_telemetry(s, w, h, frame, None, ground)
     if G is None:
+        if s.get("sensor_el") is None and s.get("pitch") is not None and s["pitch"] > -5:
+            return None, frame, w, h, "sky", False, SKY_NOTE       # the gimbal is level: the flight data says so
         return None
+    from .georeg import sees_sky
+    img = None
+    if path is not None:
+        from .video import frame_at
+        f = frame_at(path, t)
+        if f is not None:
+            img = f.image if f.image.shape[:2] == (h, w) else cv2.resize(f.image, (w, h), interpolation=cv2.INTER_AREA)
+    if sees_sky(G, img, w, h):
+        return None, frame, w, h, "sky", False, SKY_NOTE
     if not map_path or path is None:
-        return G, frame, w, h, "flight-data", False, None
+        return G, frame, w, h, "flight-data", False, sea
     # line the frame up with the map: draw the map as the flight data says the camera sees it, and match
     from .georeg import snap_to_map
-    from .video import frame_at
     try:
         gm = load_map(map_path, corners)
     except GeoError:
-        return G, frame, w, h, "flight-data", False, None
-    f = frame_at(path, t)
-    if f is None:
-        return G, frame, w, h, "flight-data", False, None
-    img = f.image if f.image.shape[:2] == (h, w) else cv2.resize(f.image, (w, h), interpolation=cv2.INTER_AREA)
+        return G, frame, w, h, "flight-data", False, sea
+    if img is None:
+        return G, frame, w, h, "flight-data", False, sea
     T = np.eye(3)
     e, n = gm.frame.to_en(frame.lat0, frame.lon0)
     T[0, 2], T[1, 2] = float(e), float(n)
     snap = snap_to_map(img, T @ G, gm, _matcher())
     if snap.G is None:
-        return G, frame, w, h, "flight-data", False, f"The map match did not work here ({snap.reason})."
+        return G, frame, w, h, "flight-data", False, \
+            " ".join(x for x in (f"The map match did not work here ({snap.reason}).", sea) if x)
     return snap.G, gm.frame, w, h, "map-match", True, f"Lined up with the map: moved {snap.shift_m:.1f} m."
 
+
+SKY_NOTE = "The camera sees the sky here, so it is near level: geo-registration waits until it sees only ground."
 
 _m = None
 
@@ -347,6 +368,8 @@ def footprint_of(m, svc, version_id: int, t: float, dtm_path: str | None = None,
     if p is None:
         return None
     G, frame, w, h, how, ok, note = p
+    if G is None:                                      # the camera sees the sky: nothing placed on purpose
+        return {"how": how, "registered": False, "note": note, "near": None, "far": None, "bounds": None}
     # the outline is everything the camera sees on the ground, out to the horizon (or VIEW_RANGE_M); the frame laid
     # on the map stops sooner, where a pixel covers more than IMAGE_PX_M of ground
     view = ground_parts(G, w, h, VIEW_RANGE_M, max_px_m=None)
@@ -364,49 +387,69 @@ def footprint_of(m, svc, version_id: int, t: float, dtm_path: str | None = None,
 
     near, far = ll(view["near"]), ll(view["far"])
     hz = horizon_row(G, w, h)
-    return {"how": how, "registered": ok, "note": note, "near": near, "far": far, "top_edge": far[:2],
-            "horizon": hz > 0, "beyond": bool(view["top_row"] > hz + 0.021 * h) if hz > 0 else False,
-            "frame_w": w, "frame_h": h, "view_bounds": box(near + far),
-            "bounds": box(ll(image["far"]) + ll(image["near"]))}
+    out = {"how": how, "registered": ok, "note": note, "near": near, "far": far, "top_edge": far[:2],
+           "horizon": hz > 0, "beyond": bool(view["top_row"] > hz + 0.021 * h) if hz > 0 else False,
+           "frame_w": w, "frame_h": h, "view_bounds": box(near + far),
+           "bounds": box(ll(image["far"]) + ll(image["near"]))}
+    if how in ("points", "points-poor"):                 # a fixed camera: the ground it covers, sky left out
+        cov = coverage(G, w, h, view["top_row"], _sky_rows(m, svc, version_id, t, w, h))
+        if cov is not None:
+            out |= {"coverage": ll(cov["outline"]), "coverage_area_m2": cov["area_m2"],
+                    "coverage_range_m": cov["range_m"], "sky_cut": cov["sky_cut"],
+                    "view_bounds": box(ll(cov["outline"]))}
+    return out
 
 
-VIEW_RANGE_M = 5000.0
-IMAGE_RANGE_M = 2500.0
-IMAGE_PX_M = 3.0
+COVERAGE_COLUMNS = 48               # the far edge of a fixed camera's coverage, sampled across the frame
 
 
-EMPTY_FRAMES = 31                   # frames across the recording whose median is the empty road
-_empty: dict = {}
-_empty_lock = threading.Lock()
-
-
-def empty_road(path: Path, duration_s: float, w: int, h: int) -> np.ndarray | None:
-    """The road with its moving vehicles taken out: the per-pixel median of ``EMPTY_FRAMES`` frames spread over the
-    recording (a vehicle covers any one spot in only a few of them). Only for a camera that does not move. A vehicle
-    that stands still the whole time stays. Kept in memory while the file is unchanged."""
-    from .video import frame_at
-    key = (str(path), Path(path).stat().st_mtime, w, h)
-    with _empty_lock:
-        if key in _empty:
-            return _empty[key]
-    n = EMPTY_FRAMES if duration_s > 2 else 5
-    stack = []
-    for k in range(n):
-        f = frame_at(path, max(0.0, duration_s) * (k + 0.5) / n)
-        if f is None:
-            continue
-        img = f.image if f.image.shape[:2] == (h, w) else cv2.resize(f.image, (w, h), interpolation=cv2.INTER_AREA)
-        stack.append(img)
-    if len(stack) < 3:
+def coverage(G: np.ndarray, w: int, h: int, top_row: float, sky_rows: np.ndarray | None) -> dict | None:
+    """A fixed camera's coverage on the ground (metres): the outline of every frame pixel that shows ground. Its far
+    edge follows, column by column, the lower of the computed horizon (or the range limit, ``top_row``) and the sky
+    the picture shows (``sky_rows``: per column, the lowest sky row, -1 where none). None when no ground shows."""
+    xs = np.linspace(0, w, COVERAGE_COLUMNS + 1)
+    tops = np.full(xs.shape, float(top_row))
+    cut = False
+    if sky_rows is not None and len(sky_rows):
+        cols = np.clip(np.round(xs / w * (len(sky_rows) - 1)).astype(int), 0, len(sky_rows) - 1)
+        sky = sky_rows[cols].astype(float) + 0.01 * h                  # a little below the sky: haze at its edge
+        cut = bool((sky > tops).any())
+        tops = np.maximum(tops, sky)
+    tops = np.minimum(tops, h - 1.0)
+    if (tops >= h - 1.0).all():
         return None
-    a = np.stack(stack)
-    out = np.empty_like(stack[0])
-    for y in range(0, h, 64):                                  # in strips: a median of a 4K stack at once is gigabytes
-        out[y:y + 64] = np.median(a[:, y:y + 64], axis=0).astype(np.uint8)
-    with _empty_lock:
-        if len(_empty) >= 4:
-            _empty.clear()
-        _empty[key] = out
+    outline = apply_h(G, np.r_[np.c_[xs, tops], [[w, h], [0, h]]])
+    e, n = outline[:, 0], outline[:, 1]
+    area = 0.5 * abs(float(np.dot(e, np.roll(n, -1)) - np.dot(n, np.roll(e, -1))))
+    base = apply_h(G, [[w / 2, h]])[0]
+    rng_m = float(np.hypot(e - base[0], n - base[1]).max())
+    return {"outline": outline, "area_m2": round(area), "range_m": round(rng_m, 1), "sky_cut": cut}
+
+
+_skies: dict = {}
+_skies_lock = threading.Lock()
+
+
+def _sky_rows(m, svc, version_id: int, t: float, w: int, h: int) -> np.ndarray | None:
+    """Per frame column, the lowest row of sky in the frame at ``t`` (-1 where none), or None without a frame."""
+    from .video import frame_at
+    key = (m.id, version_id, round(t, 1), w, h)
+    with _skies_lock:
+        if key in _skies:
+            return _skies[key]
+    try:
+        f = frame_at(svc.path(version_id), t)
+    except Exception:  # noqa: BLE001 - the file has gone: the computed horizon alone
+        f = None
+    out = None
+    if f is not None:
+        img = f.image if f.image.shape[:2] == (h, w) else cv2.resize(f.image, (w, h), interpolation=cv2.INTER_AREA)
+        sky = sky_mask(img)
+        out = np.where(sky.any(axis=0), h - 1 - np.argmax(sky[::-1], axis=0), -1)
+    with _skies_lock:
+        if len(_skies) > 64:
+            _skies.clear()
+        _skies[key] = out
     return out
 
 
@@ -438,26 +481,25 @@ def sky_mask(img: np.ndarray) -> np.ndarray:
     return cv2.resize(keep.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
 
 
+
+VIEW_RANGE_M = 5000.0
+IMAGE_RANGE_M = 2500.0
+IMAGE_PX_M = 3.0
+
+
 def frame_overlay(m, svc, version_id: int, t: float, dtm_path: str | None = None, map_path: str | None = None,
-                  corners: list | None = None, side: int = 1600, empty: bool = False) -> bytes:
-    """The frame at ``t`` laid on the ground over its footprint's box, as a PNG with transparency (no black).
-    ``empty``: the road from above without its moving vehicles (``empty_road``), for a camera placed by points (a
-    fixed camera); a moving camera's frame is shown as it is."""
+                  corners: list | None = None, side: int = 1600) -> bytes:
+    """The frame at ``t`` laid on the ground over its footprint's box, as a PNG with transparency (no black)."""
     from .video import frame_at
     p = placement(m, svc, version_id, t, dtm_path, map_path, corners)
     fp = footprint_of(m, svc, version_id, t, dtm_path, map_path, corners)
     if p is None or fp is None or fp["bounds"] is None:
         raise GeoError("This frame is not on the map.")
     G, frame, w, h = p[:4]
-    img = None
-    if empty and p[4] in ("points", "points-poor"):
-        r = m.con.execute("SELECT duration_s FROM video_probe WHERE source_version_id=?", (version_id,)).fetchone()
-        img = empty_road(svc.path(version_id), float(r[0] or 0.0) if r else 0.0, w, h)
-    if img is None:
-        f = frame_at(svc.path(version_id), t)
-        if f is None:
-            raise GeoError("No frame at that time.")
-        img = f.image
+    f = frame_at(svc.path(version_id), t)
+    if f is None:
+        raise GeoError("No frame at that time.")
+    img = f.image
     if img.shape[:2] != (h, w):
         img = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
     top, left, bottom, right = fp["bounds"]
@@ -466,13 +508,5 @@ def frame_overlay(m, svc, version_id: int, t: float, dtm_path: str | None = None
     k = max(wm, hm) / side
     size = (max(8, round(wm / k)), max(8, round(hm / k)))
     lay = frame_on_ground(img, G, frame, (top, left, bottom, right), size, IMAGE_RANGE_M, IMAGE_PX_M)
-    if p[4] in ("points", "points-poor"):
-        # a fixed camera shows only ground on the map: sky the picture shows below the computed horizon (a camera
-        # close to level, a loose fit, hills) is left out too, found by its look
-        sky = sky_mask(img)
-        if sky.any():
-            s3 = cv2.merge([np.where(sky, 255, 128).astype(np.uint8)] * 3)    # never dark: no bar is cut from it
-            warped = frame_on_ground(s3, G, frame, (top, left, bottom, right), size, IMAGE_RANGE_M, IMAGE_PX_M)
-            lay[..., 3][warped[..., 0] > 190] = 0
     ok, buf = cv2.imencode(".png", lay)
     return buf.tobytes()
