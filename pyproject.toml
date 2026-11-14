@@ -21,6 +21,7 @@ dependencies = [
     "psutil>=5.9",          # non-blocking process/system resource figures in the progress UI
     "openvino>=2025.3",     # runs SAM 3.1 (open-vocabulary detection and segmentation) on the CPU
     "tokenizers>=0.20",     # SAM 3.1's text prompts (CLIP tokenizer)
+    "tifffile>=2023.1",     # map coordinates of GeoTIFF orthophotos (geo-registration); OpenCV reads the pixels
 ]
 
 [project.optional-dependencies]
@@ -48,6 +49,7 @@ trafficwb-speedcheck = "trafficwb.speedcheck:main"
 trafficwb-models = "trafficwb.model_import:main"
 trafficwb-train = "trafficwb.train:main"
 trafficwb-worker = "trafficwb.workers:main"
+trafficwb-georeg = "trafficwb.georeg:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

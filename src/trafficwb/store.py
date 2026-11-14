@@ -1061,6 +1061,19 @@ CREATE TABLE marked_target (
 );
 CREATE INDEX ix_marked_target ON marked_target(source_version_id);
 """,
+    25: """
+CREATE TABLE camera_geo (                  -- a fixed camera on the map (video_geo), kept by folder; newest row wins
+  id INTEGER PRIMARY KEY,
+  folder TEXT NOT NULL,
+  points TEXT NOT NULL,                    -- JSON [[x, y, lat, lon], ...]: frame pixel and map position
+  map_path TEXT,                           -- the map file picked, on this computer
+  map_corners TEXT,                        -- JSON [top, left, bottom, right] for a map that is not a GeoTIFF
+  fit TEXT NOT NULL,                       -- JSON (video_geo.CameraGeo.check)
+  cleared INTEGER NOT NULL DEFAULT 0,
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+""",
 }
 
 
