@@ -410,6 +410,34 @@ def empty_road(path: Path, duration_s: float, w: int, h: int) -> np.ndarray | No
     return out
 
 
+def sky_mask(img: np.ndarray) -> np.ndarray:
+    """True on the sky of a picture: smooth, bright areas that reach down from its top edge (clouds and haze too),
+    not buildings or trees, which have texture. A picture whose top is not sky gives none."""
+    h, w = img.shape[:2]
+    s = min(1.0, 480 / w)
+    small = cv2.resize(img, (max(8, round(w * s)), max(8, round(h * s))), interpolation=cv2.INTER_AREA)
+    g = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    grad = cv2.GaussianBlur(np.hypot(cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1)), (0, 0), 2)
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    bright = hsv[..., 2] >= 110
+    bluish = (hsv[..., 0] >= 85) & (hsv[..., 0] <= 135) & (hsv[..., 2] >= 70)
+    cand = ((grad < 12) & (bright | bluish)).astype(np.uint8)
+    cand = cv2.morphologyEx(cand, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(cand, connectivity=4)
+    sh, sw = cand.shape
+    keep = np.zeros(sh * sw, bool).reshape(sh, sw)
+    for k in set(lab[0].tolist()) - {0}:                      # touching the top edge, and wide: sky
+        if stats[k, cv2.CC_STAT_WIDTH] >= 0.3 * sw and stats[k, cv2.CC_STAT_AREA] >= 0.03 * sh * sw:
+            keep |= lab == k
+    if not keep.any():
+        return np.zeros((h, w), bool)
+    # gaps inside the sky (birds, wires, a sign against it) and everything above its lower edge in each column
+    rows = np.where(keep.any(axis=0), sh - 1 - np.argmax(keep[::-1], axis=0), -1)
+    cols = np.arange(sh)[:, None] <= rows[None, :]
+    keep = cv2.dilate((keep | (cols & (cand > 0))).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    return cv2.resize(keep.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
+
+
 def frame_overlay(m, svc, version_id: int, t: float, dtm_path: str | None = None, map_path: str | None = None,
                   corners: list | None = None, side: int = 1600, empty: bool = False) -> bytes:
     """The frame at ``t`` laid on the ground over its footprint's box, as a PNG with transparency (no black).
@@ -438,5 +466,13 @@ def frame_overlay(m, svc, version_id: int, t: float, dtm_path: str | None = None
     k = max(wm, hm) / side
     size = (max(8, round(wm / k)), max(8, round(hm / k)))
     lay = frame_on_ground(img, G, frame, (top, left, bottom, right), size, IMAGE_RANGE_M, IMAGE_PX_M)
+    if p[4] in ("points", "points-poor"):
+        # a fixed camera shows only ground on the map: sky the picture shows below the computed horizon (a camera
+        # close to level, a loose fit, hills) is left out too, found by its look
+        sky = sky_mask(img)
+        if sky.any():
+            s3 = cv2.merge([np.where(sky, 255, 128).astype(np.uint8)] * 3)    # never dark: no bar is cut from it
+            warped = frame_on_ground(s3, G, frame, (top, left, bottom, right), size, IMAGE_RANGE_M, IMAGE_PX_M)
+            lay[..., 3][warped[..., 0] > 190] = 0
     ok, buf = cv2.imencode(".png", lay)
     return buf.tobytes()

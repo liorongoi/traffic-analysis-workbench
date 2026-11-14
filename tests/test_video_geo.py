@@ -114,3 +114,16 @@ def test_a_projected_geotiff_is_refused(tmp_path):
         (34735, "H", 12, (1, 1, 0, 2, 1024, 0, 1, 1, 3072, 0, 1, 32636))])
     with pytest.raises(GeoError, match="projected"):
         load_map(str(p))
+
+
+def test_sky_is_found_by_its_look_and_ground_is_not():
+    from trafficwb.video_geo import sky_mask
+    rng = np.random.default_rng(1)
+    img = rng.integers(40, 160, (360, 640, 3), dtype=np.uint8)                 # textured ground
+    img[:100] = (235, 200, 160)                                                # a smooth blue sky (BGR) ...
+    img[60:100, 300:340] = rng.integers(40, 160, (40, 40, 3), dtype=np.uint8)  # ... with a tree against it
+    img[200:260, 100:400] = (150, 150, 150)                                    # a smooth grey roof below: not sky
+    m = sky_mask(img)
+    assert m[:55].mean() > 0.97 and m[60:95, 345:].mean() > 0.97 and m[110:].mean() < 0.01
+    assert m[65:95, 305:335].mean() < 0.05                                    # the tree stays
+    assert sky_mask(rng.integers(40, 160, (360, 640, 3), dtype=np.uint8)).sum() == 0   # no sky: none found
