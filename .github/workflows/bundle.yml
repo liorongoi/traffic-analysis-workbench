@@ -7,6 +7,10 @@ on:
   push:
     branches: [main, "claude/**", "codex/**"]
   workflow_dispatch:
+# A newer push to the same branch cancels the build still running for an older one (main always runs to the end).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 # actions: read lets each job fetch the previous build from main, to test updating over it.
 permissions:
   contents: read
@@ -318,10 +322,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           runs="$(gh run list -R "${{ github.repository }}" --workflow bundle.yml --branch main --status success -L 200 --json databaseId -q '.[].databaseId')"
-          out="[]"
+          # One build of each earlier version (the newest), at most 8 versions: each update check takes a Windows
+          # runner for up to an hour, and repeats of a version found nothing the first one did not.
+          out="[]"; seen=" "; n=0
           for r in $runs; do
+            [ "$n" -ge 8 ] && break
             name="$(gh api "repos/${{ github.repository }}/actions/runs/$r/artifacts" --jq '[.artifacts[] | select((.name | test("-Setup-")) and (.expired | not))][0].name // empty')"
-            if [ -n "$name" ]; then out="$(echo "$out" | jq -c --arg r "$r" --arg n "$name" '. + [{run: $r, name: $n}]')"; fi
+            if [ -n "$name" ] && [ "${seen#* $name }" = "$seen" ]; then
+              seen="$seen$name "; n=$((n + 1)); out="$(echo "$out" | jq -c --arg r "$r" --arg n "$name" '. + [{run: $r, name: $n}]')"
+            fi
           done
           echo "$out" | jq .
           echo "runs=$out" >> "$GITHUB_OUTPUT"
