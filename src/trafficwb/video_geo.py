@@ -299,6 +299,8 @@ def _placement(m, svc, version_id, t, dtm_path, map_path, corners):
         tr = load_track(m, version_id, map_path)
         x = track_sample(tr, t) if tr else None
         if x is not None:
+            if x["how"] == "sky":
+                return None, LocalFrame(*tr["origin"]), w, h, "sky", False, SKY_NOTE
             if x["G"] is None:
                 return None
             return (np.array(x["G"]).reshape(3, 3), LocalFrame(*tr["origin"]), w, h, x["how"], x["registered"],
@@ -313,20 +315,28 @@ def _placement(m, svc, version_id, t, dtm_path, map_path, corners):
         ground, sea = 0.0, "The height is above sea level and there is no terrain: the ground is taken at sea level."
     G = pose_from_telemetry(s, w, h, frame, None, ground)
     if G is None:
+        if s.get("sensor_el") is None and s.get("pitch") is not None and s["pitch"] > -5:
+            return None, frame, w, h, "sky", False, SKY_NOTE       # the gimbal is level: the flight data says so
         return None
+    from .georeg import sees_sky
+    img = None
+    if path is not None:
+        from .video import frame_at
+        f = frame_at(path, t)
+        if f is not None:
+            img = f.image if f.image.shape[:2] == (h, w) else cv2.resize(f.image, (w, h), interpolation=cv2.INTER_AREA)
+    if sees_sky(G, img, w, h):
+        return None, frame, w, h, "sky", False, SKY_NOTE
     if not map_path or path is None:
         return G, frame, w, h, "flight-data", False, sea
     # line the frame up with the map: draw the map as the flight data says the camera sees it, and match
     from .georeg import snap_to_map
-    from .video import frame_at
     try:
         gm = load_map(map_path, corners)
     except GeoError:
         return G, frame, w, h, "flight-data", False, sea
-    f = frame_at(path, t)
-    if f is None:
+    if img is None:
         return G, frame, w, h, "flight-data", False, sea
-    img = f.image if f.image.shape[:2] == (h, w) else cv2.resize(f.image, (w, h), interpolation=cv2.INTER_AREA)
     T = np.eye(3)
     e, n = gm.frame.to_en(frame.lat0, frame.lon0)
     T[0, 2], T[1, 2] = float(e), float(n)
@@ -336,6 +346,8 @@ def _placement(m, svc, version_id, t, dtm_path, map_path, corners):
             " ".join(x for x in (f"The map match did not work here ({snap.reason}).", sea) if x)
     return snap.G, gm.frame, w, h, "map-match", True, f"Lined up with the map: moved {snap.shift_m:.1f} m."
 
+
+SKY_NOTE = "The camera sees the sky here, so it is near level: geo-registration waits until it sees only ground."
 
 _m = None
 
@@ -356,6 +368,8 @@ def footprint_of(m, svc, version_id: int, t: float, dtm_path: str | None = None,
     if p is None:
         return None
     G, frame, w, h, how, ok, note = p
+    if G is None:                                      # the camera sees the sky: nothing placed on purpose
+        return {"how": how, "registered": False, "note": note, "near": None, "far": None, "bounds": None}
     # the outline is everything the camera sees on the ground, out to the horizon (or VIEW_RANGE_M); the frame laid
     # on the map stops sooner, where a pixel covers more than IMAGE_PX_M of ground
     view = ground_parts(G, w, h, VIEW_RANGE_M, max_px_m=None)

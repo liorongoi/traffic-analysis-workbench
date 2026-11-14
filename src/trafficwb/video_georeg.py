@@ -13,7 +13,9 @@ Rules:
   (``evidence/georeg/<recording>.json``). Playing it back is then instant, frame by frame, at the video's own pace.
   A result belongs to the map it was made with; another map needs another preparation.
 - Every prepared moment says how it was placed: lined up with the map (registered, green) or flight data only
-  (red), or lost (no outline).
+  (red), the camera seeing the sky (no outline: geo-registration pauses), or lost (no outline).
+- Drones and aircraft: when the picture shows sky the camera is near level, so geo-registration stops there and
+  starts again once the camera sees only ground (``georeg.sees_sky``).
 """
 from __future__ import annotations
 
@@ -180,7 +182,7 @@ def start(open_mission, mission_id: str, version_id: int, map_path: str, corners
 def prepare(m, version_id: int, map_path: str, corners: list | None, dtm_path: str | None,
             fps: float = PREPARE_FPS, progress=None) -> dict:
     """Register every ``1/fps`` seconds of the recording to the map and keep the result."""
-    from .georeg import DroneRegistrar, Matcher, is_registered, locate
+    from .georeg import DroneRegistrar, Matcher, is_registered, locate, sky_in_picture
     from .video import frames
     from .video_geo import load_map
     from .video_meta import stored
@@ -212,6 +214,11 @@ def prepare(m, version_id: int, map_path: str, corners: list | None, dtm_path: s
         reg.ground_alt = ground
         if not started:
             G0 = None
+            if sky_in_picture(img):
+                out.append({"t": round(t, 3), "G": None, "how": "sky", "registered": False})
+                if progress:
+                    progress(len(out), total)
+                continue
             if s is None and region is not None and t - last_try >= RELOCATE_S:
                 last_try = t
                 agl, hf = (typed or {}).get("agl"), (typed or {}).get("hfov")
@@ -229,8 +236,10 @@ def prepare(m, version_id: int, map_path: str, corners: list | None, dtm_path: s
                 reg.G_key = None
         else:
             fix = reg.step(img, t, s)
+            if fix.source == "sky":
+                started = False                        # find the ground again, as at the start
         ok = is_registered(fix, reg.trust_flight_data_s)
-        how = "lost" if fix.G is None else ("map-match" if ok else "flight-data")
+        how = "sky" if fix.source == "sky" else "lost" if fix.G is None else ("map-match" if ok else "flight-data")
         out.append({"t": round(t, 3), "G": None if fix.G is None else [round(float(v), 9) for v in fix.G.ravel()],
                     "how": how, "registered": ok})
         if progress:
@@ -239,7 +248,7 @@ def prepare(m, version_id: int, map_path: str, corners: list | None, dtm_path: s
     res = {"map_path": map_path, "corners": corners, "dtm_path": dtm_path, "origin": [gm.frame.lat0, gm.frame.lon0],
            "width": w, "height": h, "fps": fps, "made_at": utcnow(), "seconds": round(time.time() - t0, 1),
            "matcher": matcher.kind, "summary": {k: sum(x["how"] == k for x in out) for k in
-                                                ("map-match", "flight-data", "lost")},
+                                                ("map-match", "flight-data", "sky", "lost")},
            "samples": out}
     p = track_path(m, version_id)
     p.parent.mkdir(parents=True, exist_ok=True)

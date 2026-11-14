@@ -24,7 +24,7 @@ type Outline = { t: number; how: string; registered: boolean; near: LatLon[] | n
 type Track = { fps: number; made_at: string; seconds: number; matcher: string; summary: Record<string, number>; outlines: Outline[] };
 const pct = (n: number, tr: Track) => `${Math.round(100 * n / Math.max(1, tr.outlines.length))}%`;
 type DtmInfo = { name: string; min_m: number | null; max_m: number | null; m_per_sample: number; top: number; left: number; bottom: number; right: number };
-export type Footprint = { how: "points" | "points-poor" | "flight-data" | "map-match"; registered: boolean; note?: string | null;
+export type Footprint = { how: "points" | "points-poor" | "flight-data" | "map-match" | "sky"; registered: boolean; note?: string | null;
   near: LatLon[] | null; far: LatLon[] | null; bounds: [number, number, number, number] | null;
   view_bounds?: [number, number, number, number]; horizon?: boolean; beyond?: boolean; frame_w?: number; frame_h?: number };
 type MPath = { event_id: number; key: string; cls: string; first_t: number; last_t: number; path: [number, number, number][]; length_m: number };
@@ -104,6 +104,7 @@ export default function GeoPlace({ missionId, versionId }: { missionId: string; 
     if (!o?.length) return null;
     let best = o[0];
     for (const x of o) if (Math.abs(x.t - tt) < Math.abs(best.t - tt)) best = x;
+    if (best.how === "sky") return { how: "sky", registered: false, near: null, far: null, bounds: null, note: SKY_NOTE };
     if (!best.near) return null;
     const a = [...best.near, ...best.far!];
     return { how: best.how as Footprint["how"], registered: best.registered, near: best.near, far: best.far, horizon: false,
@@ -224,7 +225,8 @@ export default function GeoPlace({ missionId, versionId }: { missionId: string; 
           {prep.job?.state === "running" && <span className="small">{prep.job.done}{prep.job.total ? ` of ${prep.job.total}` : ""} moments</span>}
           {prep.job?.state === "failed" && <span className="msg err small">{prep.job.error}</span>}
           {prep.track && <span className="muted small">Lined up with the map: {pct(prep.track.summary["map-match"], prep.track)} ·
-            flight data only: {pct(prep.track.summary["flight-data"], prep.track)} · not placed: {pct(prep.track.summary.lost, prep.track)} ·
+            flight data only: {pct(prep.track.summary["flight-data"], prep.track)} ·
+            {(prep.track.summary.sky ?? 0) > 0 && <> sees the sky (paused): {pct(prep.track.summary.sky, prep.track)} · </>}not placed: {pct(prep.track.summary.lost, prep.track)} ·
             prepared in {prep.track.seconds} s</span>}
         </div>
         {prep.job?.state === "running" && prep.job.total && <div className="progress"><div style={{ width: `${Math.min(100, 100 * prep.job.done / prep.job.total)}%` }} /></div>}
@@ -422,7 +424,8 @@ function MapPanel({ src, info, pts, fit, paths, onPick, waiting, fp, frameSrc, s
   );
 }
 
-const GREEN = "#3fe08a", RED = "#ff4d5e", TOP = "#ffd23f";
+const GREEN = "#3fe08a", RED = "#ff4d5e", TOP = "#ffd23f", SKY = "#5aa9ff";
+const SKY_NOTE = "The camera sees the sky here, so it is near level: geo-registration waits until it sees only ground.";
 const fpColour = (fp: Footprint) => (fp.registered ? GREEN : RED);
 const fpTitle = (fp: Footprint) => fp.how === "points" ? "Registered: placed by the points on the map"
   : fp.how === "map-match" ? "Registered: lined up with the map by matching"
@@ -431,6 +434,7 @@ const fpTitle = (fp: Footprint) => fp.how === "points" ? "Registered: placed by 
 function FootprintKey({ fp, aligning }: { fp: Footprint | null; aligning: boolean }) {
   if (aligning) return <span className="muted">Lining the frame up with the map…</span>;
   if (!fp) return <span className="muted">Not on the map yet: pick four points, or a recording with flight data.</span>;
+  if (fp.how === "sky") return <span><span style={{ color: SKY }}>■</span> <span className="muted">{fp.note || SKY_NOTE}</span></span>;
   return <span className="row" style={{ gap: 10, flexWrap: "wrap" }}>
     <span><span style={{ color: fpColour(fp) }}>▭</span> Outline: {fpTitle(fp)}</span>
     <span><span style={{ color: TOP }}>━</span> {fp.horizon ? (fp.beyond ? "far edge of the view, toward the horizon" : "the horizon: above it the camera sees sky") : "top edge of the image"}</span>
@@ -497,15 +501,16 @@ function PlayPanel({ src, t, onTime, onEnd }: { src: string; t: number; onTime: 
   return <video ref={v} src={src} muted playsInline onEnded={onEnd} style={{ width: "100%", background: "#000", display: "block" }} />;
 }
 
-/** The prepared video along time: green where lined up with the map, red on flight data only, grey where not placed. */
+/** The prepared video along time: green where lined up with the map, red on flight data only, blue where the camera
+ * sees the sky (paused), grey where not placed. */
 function Timeline({ track, t, duration, onSeek }: { track: Track; t: number; duration: number; onSeek: (t: number) => void }) {
   const W = 1000;
   const step = 1 / track.fps;
   return <svg viewBox={`0 0 ${W} 14`} preserveAspectRatio="none" style={{ width: "100%", height: 14, cursor: "pointer", display: "block", marginTop: 4 }}
     onClick={(e) => { const b = (e.currentTarget as SVGSVGElement).getBoundingClientRect(); onSeek((e.clientX - b.left) / b.width * duration); }}
-    role="img" aria-label="Prepared moments: green lined up with the map, red flight data only, grey not placed">
+    role="img" aria-label="Prepared moments: green lined up with the map, red flight data only, blue the camera sees the sky, grey not placed">
     {track.outlines.map((o, i) => <rect key={i} x={o.t / duration * W} width={step / duration * W + 0.5} y={2} height={10}
-      fill={o.how === "map-match" ? GREEN : o.how === "flight-data" ? RED : "#556070"} />)}
+      fill={o.how === "map-match" ? GREEN : o.how === "flight-data" ? RED : o.how === "sky" ? SKY : "#556070"} />)}
     <rect x={t / duration * W - 1.5} width={3} y={0} height={14} fill="#fff" />
   </svg>;
 }

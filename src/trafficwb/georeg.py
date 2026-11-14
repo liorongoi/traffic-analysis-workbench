@@ -224,6 +224,34 @@ def horizon_row(G: np.ndarray, w: int, h: int) -> float:
     return float(min(h, top))
 
 
+def sky_in_picture(frame: np.ndarray) -> bool:
+    """True when the top of the picture looks like sky: smooth, brighter than the bottom, and blue or grey-white.
+
+    For drones and aircraft: seeing the sky means the camera is near level, and there is no ground up there to line
+    up with the map. Kept strict, so plain ground (a field, a roof, the sea from above) is not taken for sky."""
+    if frame is None or frame.ndim != 3:
+        return False
+    h, w = frame.shape[:2]
+    small = cv2.resize(frame, (160, max(16, int(160 * h / max(w, 1)))), interpolation=cv2.INTER_AREA)
+    sh = small.shape[0]
+    top, bottom = small[: max(2, sh // 5)], small[sh - max(2, sh // 3):]
+    gray = cv2.cvtColor(top, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    grad = np.hypot(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3))
+    smooth = grad < 24
+    if smooth.mean() < 0.75:
+        return False
+    tb = top.reshape(-1, 3)[smooth.ravel()].astype(np.float32).mean(axis=0)
+    bright_top = float(tb.mean())
+    bright_bottom = float(cv2.cvtColor(bottom, cv2.COLOR_BGR2GRAY).mean())
+    blueish = tb[0] >= tb[2] - 4                                      # BGR: blue at least as strong as red
+    return bool(bright_top > 90 and bright_top > bright_bottom + 12 and blueish)
+
+
+def sees_sky(G: np.ndarray | None, frame: np.ndarray | None, w: int, h: int) -> bool:
+    """The camera sees the sky: the placement puts the horizon inside the frame, or the picture shows sky."""
+    return (G is not None and horizon_row(G, w, h) > 0) or (frame is not None and sky_in_picture(frame))
+
+
 def footprint(G: np.ndarray, w: int, h: int) -> np.ndarray | None:
     """The four frame corners on the ground (metres), or None when the top of the frame is above the horizon."""
     if horizon_row(G, w, h) > 0:
@@ -654,7 +682,7 @@ class FlowTracker:
 @dataclass
 class FrameFix:
     G: np.ndarray | None              # frame pixels to metres, or None when the frame is lost
-    source: str                       # "flight-data" | "map" | "chain" | "lost"
+    source: str                       # "flight-data" | "map" | "chain" | "lost" | "sky"
     since_map_s: float | None         # seconds since the last match to the map
     track_ms: float = 0.0
 
@@ -673,6 +701,7 @@ class DroneRegistrar:
     hfov_deg: float | None = None
     ground_alt: float | None = None
     trust_flight_data_s: float = 5.0        # with no map match for this long, go back to the flight data
+    stop_at_sky: bool = True                # the camera sees the sky (near level): pause until it sees only ground
     log: list = field(default_factory=list)
 
     def __post_init__(self):
@@ -692,8 +721,19 @@ class DroneRegistrar:
         h, w = frame.shape[:2]
         return pose_from_telemetry(sample, w, h, self.gmap.frame, self.hfov_deg, self.ground_alt)
 
+    def _sky(self, frame, G) -> bool:
+        h, w = frame.shape[:2]
+        return self.stop_at_sky and sees_sky(G, frame, w, h)
+
+    def _pause(self, t) -> FrameFix:
+        """The camera sees the sky: drop the chain, and start again from the flight data once it sees only ground."""
+        self.G_key, self.pending, self.reset_t = None, None, t
+        return FrameFix(None, "sky", None)
+
     def start(self, frame, G: np.ndarray | None = None, sample: dict | None = None, t: float = 0.0) -> FrameFix:
         G = G if G is not None else self._prior(frame, sample)
+        if self._sky(frame, G):
+            return self._pause(t)
         self.tracker.start(frame)
         self.G_key, self.t = G, t
         src = "flight-data" if G is not None else "lost"
@@ -752,6 +792,10 @@ class DroneRegistrar:
             if rekey:
                 self.tracker.start(frame)
                 self.G_key = G
+        if self._sky(frame, G):
+            fix = self._pause(t)
+            fix.track_ms = (time.perf_counter() - t0) * 1000
+            return fix
         if t - self.last_snap_t >= self.snap_every_s and self.pending is None:
             self._snap(frame, G, t, wait=not self.async_snap)
             if not self.async_snap and self.last_map_t == t:
