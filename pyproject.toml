@@ -57,7 +57,7 @@ trafficwb-georeg = "trafficwb.georeg:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"trafficwb" = ["detector_grades.json"]
+"trafficwb" = ["detector_grades.json", "scene_prompts.json"]
 "trafficwb.web" = ["static/*", "static/assets/*"]
 
 [tool.pytest.ini_options]

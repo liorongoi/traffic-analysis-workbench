@@ -22,6 +22,7 @@ const MODE_TEXT: Record<string, string> = {
   object_search: "Object search: find vehicles that match a description",
   plate_recognition: "Plate recognition: read licence plates",
   unique_targets: "Unique vehicles: each vehicle counted once",
+  indoor_outdoor: "Sort into indoor and outdoor: two groups of images",
 };
 const modeText = (m: string) => MODE_TEXT[m] ?? m.replace(/_/g, " ");
 
@@ -85,19 +86,20 @@ export default function QuickStart() {
     catch (e) { setErr([(e as ApiError).message]); }
   };
 
-  const create = async () => {
+  // mode: this mission only, in place of the mode in Settings (sorting a bundle into indoor and outdoor).
+  const create = async (mode?: string) => {
     if (!g) return;
     setBusy(true); setErr([]);
     try {
       if (!g.output_exists) await post("/quick-start/output", { path: g.output_dir });
       const body = { ...st, name: name.trim() || g.name, input_type: g.input_type, country: g.country, iana_zone: g.iana_zone,
-        source_dir: g.source_dir, include_subdirs: true, output_dir: g.output_dir };
+        source_dir: g.source_dir, include_subdirs: true, output_dir: g.output_dir, ...(mode ? { mode } : {}) };
       const check = await post("/missions/validate", body);
       if (check.errors.length) { setErr(check.errors); return; }
       const r = await post("/missions", body);
       await post(`/missions/${r.id}/job`);
       if (st.processing === "continuous") await api(`/missions/${r.id}/monitoring`, { method: "PUT", body: { enabled: true } }).catch(() => undefined);
-      go(`/m/${r.id}`);
+      go(body.mode === "indoor_outdoor" ? `/m/${r.id}/sort` : `/m/${r.id}`);
     } catch (e) {
       setErr([(e as ApiError).message]);
     } finally { setBusy(false); }
@@ -151,7 +153,9 @@ export default function QuickStart() {
           <div className="newm-go">
             <a href="#/new/full" className="muted">Different choices for this mission only</a>
             <span className="grow" />
-            <button className="primary big" disabled={!ready || busy} onClick={create}>{busy ? "Starting…" : "Start"}</button>
+            {!video && <button className="big" disabled={!g || reading || files === 0 || busy} onClick={() => create("indoor_outdoor")}
+              title="Split these images into indoor and outdoor instead; file names need no capture time">Sort into indoor and outdoor</button>}
+            <button className="primary big" disabled={!ready || busy} onClick={() => create()}>{busy ? "Starting…" : "Start"}</button>
           </div>
         </div>
       )}

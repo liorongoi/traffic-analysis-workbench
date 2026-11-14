@@ -126,7 +126,7 @@ class Ingestor:
             self.m.notify("warning", "malformed_names",
                           f"{len(res.malformed)} recording(s) have names without a start time. They are analysed, "
                           "but their events have no absolute UTC.", examples=res.malformed[:10])
-        elif res.malformed:
+        elif res.malformed and self.m.config().mode != "indoor_outdoor":   # sorting needs no capture time
             self.m.notify("warning", "malformed_names",
                           f"{len(res.malformed)} file(s) have names without a valid capture time and were not queued.",
                           examples=res.malformed[:10])
@@ -283,7 +283,9 @@ def cycle(mission: Mission, now: datetime | None = None, stability_seconds: int 
         return res, None  # wait until the snapshot is complete
     # Queue every eligible current version not yet in any run, not just this scan's finds,
     # so files ingested by an interrupted or deferred cycle are never left behind.
-    parse_ok = "v.parse_status IN ('ok','malformed')" if mission.input_type == "video" else "v.parse_status='ok'"
+    # Video, and sorting indoor from outdoor, do not need a capture time in the name.
+    no_time_needed = mission.input_type == "video" or cfg.mode == "indoor_outdoor"
+    parse_ok = "v.parse_status IN ('ok','malformed')" if no_time_needed else "v.parse_status='ok'"
     todo = [r[0] for r in mission.con.execute(
         f"SELECT v.id FROM source_version v WHERE v.superseded_by IS NULL AND {parse_ok} "
         "AND v.integrity IN ('ok','unverified') AND NOT EXISTS "
