@@ -56,6 +56,8 @@ export type ResultRow = {
   review_status: string;
   condition: string | null;
   flags: string[];
+  run_id: number | null;
+  detector: string | null;   // the detector of the run the shown vehicles come from
 };
 
 export type Box = [number, number, number, number];
@@ -71,6 +73,7 @@ export type Obj = {
   score: number | null;
   correction: string;
   counted: boolean;
+  found_by?: string | null;  // the model that found a machine box
 };
 
 export type Candidate = {
@@ -137,6 +140,9 @@ export type Item = {
   lights: Light[];
   bands: NightBands | null;
   regions: Region[];
+  /** Finished runs of this image, newest (the one shown) first. */
+  runs?: { run_id: number; detector: { key: string; label: string }; model: string | null; detections: number;
+    by_class: Record<string, number>; at: string | null }[];
   position: { index: number | null; total: number; prev: number | null; next: number | null;
     next_unreviewed?: number | null; unreviewed?: number;
     around?: { id: number; index: number; review_status: string; processing_state: string }[] };
