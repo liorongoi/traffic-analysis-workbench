@@ -3,6 +3,7 @@ import { useRoute } from "./router";
 import { api } from "./api";
 import Logo from "./Logo";
 import JumpBar from "./components/JumpBar";
+import PasswordButton from "./components/PasswordButton";
 import Missions from "./pages/Missions";
 import Wizard from "./pages/Wizard";
 import QuickStart from "./pages/QuickStart";
@@ -47,6 +48,7 @@ export default function App() {
           <Status />
           <Clock />
           <Version />
+          <PasswordButton />
         </div>
       </header>
       <main id="main-content">{body}</main>

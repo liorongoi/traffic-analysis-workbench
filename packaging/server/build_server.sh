@@ -41,10 +41,11 @@ ORT="$("$PY" -c 'import onnxruntime as o; print(o.__version__)')"
 printf '{"version": "%s", "python": "3.12", "onnxruntime": "%s", "cuda_major": "%s", "min_driver": "%s"}\n' \
   "$VER" "$ORT" "$CUDA_MAJOR" "$MIN_DRIVER" > "$PKG/server.json"
 cp "$ROOT/packaging/server/install-server.sh" "$ROOT/packaging/server/uninstall-server.sh" "$ROOT/packaging/server/system.sh" \
-   "$ROOT/packaging/server/lanepulse" "$ROOT/scripts/offline_smoke.py" "$PKG/"
+   "$ROOT/packaging/server/lanepulse" "$ROOT/packaging/server/run-server.sh" "$ROOT/packaging/server/user-service.sh" \
+   "$ROOT/scripts/offline_smoke.py" "$PKG/"
 cp "$ROOT/packaging/server/INSTALL-SERVER.txt" "$PKG/INSTALL.txt"
 cp "$ROOT/packaging/training/TRAINING.txt" "$PKG/TRAINING.txt"
-chmod +x "$PKG/install-server.sh" "$PKG/uninstall-server.sh" "$PKG/lanepulse"
+chmod +x "$PKG/install-server.sh" "$PKG/uninstall-server.sh" "$PKG/lanepulse" "$PKG/run-server.sh"
 (cd "$PKG" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
 tar -C "$OUT" -czf "$OUT/$NAME.tar.gz" "$NAME"
 echo "Built $OUT/$NAME.tar.gz ($(du -h "$OUT/$NAME.tar.gz" | cut -f1)); CUDA $CUDA_MAJOR, driver $MIN_DRIVER or later"

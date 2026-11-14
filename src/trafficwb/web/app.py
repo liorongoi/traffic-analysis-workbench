@@ -6,8 +6,6 @@ Mutating requests need the X-TWB header, which blocks cross-site form posts.
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import os
 import secrets
@@ -655,29 +653,16 @@ class AccessBody(BaseModel):
     key: str
 
 
-def access_key_for(data_root: Path | str, new: bool = False) -> str:
-    """The network access key, kept in <data>/access-key (readable by the server's account only), made when missing."""
-    p = Path(data_root) / "access-key"
-    if not new:
-        try:
-            k = p.read_text(encoding="utf-8").strip()
-            if k:
-                return k
-        except FileNotFoundError:
-            pass
-    p.parent.mkdir(parents=True, exist_ok=True)
-    k = "-".join(secrets.token_hex(3) for _ in range(5))          # e.g. 3f9a1c-07be42-…: easy to read out and type
-    tmp = p.with_name("access-key.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(k + "\n")
-    os.replace(tmp, p)
-    return k
+class PasswordBody(BaseModel):
+    current: str
+    new: str
 
 
-def _access_token(key: str) -> str:
-    """What the browser keeps in its cookie: derived from the key, so the cookie is not the key itself."""
-    return hashlib.sha256(("lanepulse-access:" + key).encode()).hexdigest()
+def access_key_for(data_root: Path | str, new: bool = False) -> str | None:
+    """The password made at install (None once someone chose their own); new: replace it with a generated one."""
+    from ..access import AccessStore
+    st = AccessStore(data_root)
+    return st.reset_generated() if new else st.generated()
 
 
 def _host_allowlist(listening: dict) -> Callable[[str], bool] | None:
@@ -782,26 +767,29 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                                  "Open it by its IP address, or add the name to TWB_ALLOWED_HOSTS."}, status_code=421)
         return await call_next(request)
 
-    access_key = access_key_for(data_root) if listening.get("lan") else None
-    access_token = _access_token(access_key) if access_key else None
+    from ..access import AccessStore
+    access = AccessStore(data_root) if listening.get("lan") else None
+    if access is not None:
+        access.token()                                     # makes the password file at the first start
     OPEN_PATHS = ("/api/health", "/api/access")
 
     def has_access(request: Request) -> bool:
-        if access_token is None:
+        if access is None:
             return True
-        if hmac.compare_digest(request.cookies.get(ACCESS_COOKIE, ""), access_token):
+        if access.token_ok(request.cookies.get(ACCESS_COOKIE, "")):
             return True
         auth = request.headers.get("authorization", "")
-        return auth.lower().startswith("bearer ") and hmac.compare_digest(auth[7:].strip(), access_key)
+        return auth.lower().startswith("bearer ") and access.check(auth[7:])
 
     @app.middleware("http")
     async def _access(request: Request, call_next):
-        # On the network the API needs the access key (made at install, `trafficwb-web key`). Workers keep their own
-        # pairing codes on /api/worker/; the screens themselves are not data and load without it, to ask for the key.
+        # On the network the API needs the password (made at install, changed in the app or with `lanepulse
+        # password`). Workers keep their own pairing codes on /api/worker/; the screens themselves are not data and
+        # load without it, to ask for it.
         path = request.url.path
-        if access_token is not None and path.startswith("/api/") and path not in OPEN_PATHS \
+        if access is not None and path.startswith("/api/") and path not in OPEN_PATHS \
                 and not path.startswith("/api/worker/") and not has_access(request):
-            return JSONResponse({"error": "need_key", "message": "Enter the LanePulse access key."}, status_code=401)
+            return JSONResponse({"error": "need_key", "message": "Enter the LanePulse password."}, status_code=401)
         return await call_next(request)
 
     @app.middleware("http")
@@ -837,22 +825,42 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def flt(b: FilterBody | None) -> Filter:
         return Filter(**b.model_dump()) if b else Filter()
 
+    def _signed_in(body: dict, request: Request) -> JSONResponse:
+        r = JSONResponse(body)
+        r.set_cookie(ACCESS_COOKIE, access.token(), max_age=400 * 86400, httponly=True, samesite="strict",
+                     secure=request.url.scheme == "https")
+        return r
+
     @app.get("/api/access")
     def access_state(request: Request):
-        return {"required": access_token is not None, "ok": has_access(request)}
+        ok = has_access(request)
+        return {"required": access is not None, "ok": ok,
+                "generated": bool(access is not None and ok and access.generated())}
 
     @app.post("/api/access")
     def access_enter(body: AccessBody, request: Request):
-        if access_token is None:
+        if access is None:
             return {"required": False, "ok": True}
-        if not hmac.compare_digest(body.key.strip(), access_key):
-            time.sleep(1)                                  # slows guessing; the key is long and random anyway
-            raise ApiError(403, "wrong_key", "That is not the access key. Ask whoever installed the server, "
-                                             "or run: sudo lanepulse key")
-        r = JSONResponse({"required": True, "ok": True})
-        r.set_cookie(ACCESS_COOKIE, access_token, max_age=400 * 86400, httponly=True, samesite="strict",
-                     secure=request.url.scheme == "https")
-        return r
+        if not access.check(body.key):
+            time.sleep(1)                                  # slows guessing
+            raise ApiError(403, "wrong_key", "That is not the password. If it is forgotten, set a new one on the "
+                                             "server: sudo lanepulse password")
+        return _signed_in({"required": True, "ok": True, "generated": bool(access.generated())}, request)
+
+    @app.post("/api/access/password")
+    def access_change(body: PasswordBody, request: Request):
+        """Choose a new password, knowing the current one. Other browsers must then enter the new one."""
+        if access is None:
+            raise ApiError(409, "no_password", "This LanePulse is used on this computer only and has no password.")
+        if not access.check(body.current):
+            time.sleep(1)
+            raise ApiError(403, "wrong_key", "The current password is not right. If it is forgotten, set a new one "
+                                             "on the server: sudo lanepulse password")
+        try:
+            access.set(body.new)
+        except ValueError as exc:
+            raise ApiError(400, "weak_password", str(exc)) from None
+        return _signed_in({"required": True, "ok": True, "generated": False}, request)
 
     # A neutral health probe keeps installers and supervisors independent of any user or session API.
     @app.get("/api/health")
@@ -3026,13 +3034,14 @@ def main(argv=None) -> int:
     s.add_argument("--lan", action="store_true", help="accept connections from other computers on the network")
     s.add_argument("--backup-dir", help="folder for the nightly database backup, ideally on another drive")
     s.add_argument("--backup-at", default="02:00", help="local time of the nightly backup (HH:MM)")
-    k = sub.add_parser("key", help="show the access key the browser asks for on the network (--lan)")
-    k.add_argument("--data", required=True)
-    k.add_argument("--new", action="store_true", help="make a new key (browsers must enter it again)")
+    sub.add_parser("password", add_help=False, help="set the password the browser asks for on the network (--lan)")
+    if argv is None:
+        import sys
+        argv = sys.argv[1:]
+    if argv[:1] == ["password"]:
+        from ..access import main as password_main
+        return password_main(argv[1:])
     args = ap.parse_args(argv)
-    if args.cmd == "key":
-        print(access_key_for(args.data, new=args.new))
-        return 0
     if args.cmd == "serve":
         host = "0.0.0.0" if args.lan else "127.0.0.1"
         uvicorn.run(create_app(args.data, backup_dir=args.backup_dir, backup_at=args.backup_at,

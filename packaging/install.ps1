@@ -42,6 +42,13 @@ Write-Host "Windows $os, 64-bit: $([Environment]::Is64BitOperatingSystem)"
 
 # Room for the new version (its Python environment, with PyTorch when training is included) next to the previous one.
 $needGB = if ($Info.app_only) { 1 } elseif ($Info.training) { 8 } else { 4 }
+# Plus the models and training starting weights it copies in (every detector size: several GB).
+$carried = 0
+foreach ($d in "models", "training") {
+  $p = Join-Path $Bundle $d
+  if (Test-Path $p) { $carried += (Get-ChildItem $p -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum }
+}
+$needGB += [math]::Ceiling($carried / 1GB)
 $root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Target))
 try {
   $freeGB = [math]::Floor((New-Object IO.DriveInfo $root).AvailableFreeSpace / 1GB)

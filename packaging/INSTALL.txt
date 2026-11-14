@@ -5,6 +5,9 @@ This folder contains everything the workstation needs. Nothing is downloaded dur
 
 Easiest: the setup wizard (Windows)
 - Run the single LanePulse-Setup-<version>.exe and choose the install, data and backup folders.
+- Optional, afterwards: LanePulse-Detectors-<version>.exe adds the largest detector sizes (YOLOX l and x, RF-DETR
+  medium, D-FINE large and xlarge, RT-DETRv2 r34, r50 and r101) and their training starting weights. Without it
+  LanePulse uses the nearest size installed. It can be removed on its own from Windows' installed apps list.
   No administrator rights are needed, nothing is downloaded, and no account or sign-in is needed. LanePulse brings
   its own Python (in <install folder>\python-<version>) and PyTorch for training; it never uses or changes another
   Python on the computer.

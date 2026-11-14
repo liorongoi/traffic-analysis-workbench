@@ -4,29 +4,50 @@ LanePulse server for Ubuntu and Red Hat (x86_64, NVIDIA GPU)
 The full guide, with every step from a new server to daily use, is the PDF "LanePulse server installation guide".
 This is the short version.
 
-Needs: Ubuntu Server 22.04 or 24.04, or Red Hat Enterprise Linux 8 or 9 (also Rocky Linux and AlmaLinux), an NVIDIA GPU with its driver (see server.json for the oldest driver
-version), and sudo rights. Nothing is downloaded during install. LanePulse brings its own Python and never uses or
-changes the system Python.
+Needs: Ubuntu Server 22.04 or 24.04, or Red Hat Enterprise Linux 8 or 9 (also Rocky Linux and AlmaLinux), an NVIDIA
+GPU with its driver (see server.json for the oldest driver version), and an ordinary user account. No root and no
+sudo are needed. Nothing is downloaded during install. LanePulse brings its own Python and never uses or changes
+the system Python.
 
-Install or update
+Install or update (no root: type these as yourself)
     tar -xzf lanepulse-server-<version>-linux-x86_64.tar.gz
     cd lanepulse-server-<version>-linux-x86_64
-    sudo ./install-server.sh
-  Options: --data DIR (default /srv/lanepulse/data), --backups DIR, --models DIR, --port N (default 8765),
+    ./install-server.sh
+  It checks every file, installs into ~/lanepulse (program, data, backups and models), runs a small offline check,
+  backs up the data (on an update), then starts LanePulse. It starts by itself whenever the server boots, and again
+  if it stops (systemd for your user, or cron where that is not allowed). The lanepulse command is set up for you.
+  Options: --data DIR (default ~/lanepulse/data), --backups DIR, --models DIR, --port N (default 8765),
            --allow-from CIDR (default: this server's local network; "any" for every address).
-  It checks every file, installs into /opt/lanepulse, runs a small offline check, backs up the data (on an
-  update), then starts the lanepulse service, which also starts whenever the server boots.
-  Red Hat: keep SELinux enforcing and firewalld on. The installer labels LanePulse's files for SELinux and opens
-  the port in firewalld (ufw on Ubuntu). The NVIDIA driver steps for Red Hat are in the PDF guide, section 18.
+  What still needs the server's administrator (once, and only if missing): the NVIDIA driver, and opening port 8765
+  in the firewall when other computers cannot reach it (the installer prints the exact command to ask for).
+
+  As a system service instead (an administrator, optional): sudo ./install-server.sh installs into /opt/lanepulse,
+  with data in /srv/lanepulse, its own service account, and the firewall opened. Commands that change it then need
+  sudo (sudo lanepulse restart, ...). Red Hat: keep SELinux enforcing and firewalld on; the installer labels
+  LanePulse's files for SELinux and opens the port in firewalld (ufw on Ubuntu). The NVIDIA driver steps for Red Hat
+  are in the PDF guide, section 18.
+
+Ports to open (only if a firewall on the server blocks other computers; ask the server's administrator, once)
+  TCP 8765   the web screens: browsers open http://<server address>:8765. The only one you need.
+             (If you installed with --port N, open N instead.)
+  UDP 8766   optional: lets other LanePulse computers that help with long videos find this server by themselves.
+             Not needed when you type the server's address into them.
+  Open them to your own network only, never to the whole internet. The commands for the administrator:
+    Red Hat:  sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.168.1.0/24" port port="8765" protocol="tcp" accept'
+              sudo firewall-cmd --reload
+    Ubuntu:   sudo ufw allow from 192.168.1.0/24 to any port 8765 proto tcp
+  Put your own network in place of 192.168.1.0/24; the installer prints the exact line for this server at the end.
+  For UDP 8766, the same lines with 8766 and udp. If the server has no firewall turned on, nothing needs opening.
 
 Open it from other computers:  http://<server address>:8765
-  The browser asks once for the access key, which the installer prints at the end. Show it again with
-  sudo lanepulse key; make a new one (every browser must enter it again) with sudo lanepulse key --new.
+  The browser asks once for the password, which the installer prints at the end. Choose your own in LanePulse:
+  the key icon at the top right (it needs the current one). Forgotten? On the server: lanepulse password
+  sets a new one (it asks twice). lanepulse password --show prints the one from install until you change it.
   Open it by the server's IP address, or by its own name; to use another DNS name, add it to
-  TWB_ALLOWED_HOSTS="name1,name2" in /etc/lanepulse/lanepulse.conf. Keep the firewall on: sudo lanepulse firewall
+  TWB_ALLOWED_HOSTS="name1,name2" in ~/lanepulse/lanepulse.conf (system service: /etc/lanepulse/lanepulse.conf).
 
 Training:   on a mission's Learning tab, "Train a new vehicle detector here". It runs on the GPU; PyTorch is
             included, so nothing needs setting up or downloading.
 Daily use:  lanepulse help    (status, logs, restart, import-model, backup, speed-check, rollback, train)
-Settings:   /etc/lanepulse/lanepulse.conf, then sudo lanepulse restart
-Remove:     sudo /opt/lanepulse/uninstall-server.sh   (data, backups and models are kept)
+Settings:   ~/lanepulse/lanepulse.conf, then lanepulse restart
+Remove:     lanepulse uninstall   (data, backups and models are kept)
