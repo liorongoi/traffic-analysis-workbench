@@ -111,3 +111,17 @@ def test_the_setting_through_the_api(tmp_path):
     assert c.get(f"/api/missions/{m.id}", headers=h).json()["config"]["track_min_frames"] == 8
     assert c.put(url, json={"detector": "standard", "track_min_frames": 40}, headers=h).status_code == 400
     assert c.put(url, json={"detector": "standard", "track_min_frames": 0}, headers=h).json()["track_min_frames"] is None
+
+
+def test_one_box_per_target_on_a_frame():
+    from trafficwb.tracker import fuse
+    van, half, side = [100, 50, 300, 250], [150, 52, 290, 120], [240, 120, 300, 250]
+    other_car, person = [400, 100, 500, 180], [120, 60, 160, 200]
+    d = [(van, "car", 0.9), (half, "car", 0.4), (side, "truck", 0.35), (other_car, "car", 0.8), (person, "person", 0.9)]
+    kept = fuse(d, 0.7)
+    assert [k[0] for k in kept] == [van, other_car, person]           # a person is never fused into a car
+    assert kept[0][0] is van                                          # the very box given
+    # a weak box over two cars gives way to the sure car inside it
+    assert [k[0] for k in fuse([([0, 0, 200, 100], "car", 0.3), ([0, 10, 90, 100], "car", 0.9)], 0.7)] == [[0, 10, 90, 100]]
+    # a car and a truck on one van: the surer stays
+    assert [k[1] for k in fuse([([0, 0, 100, 100], "truck", 0.5), ([2, 2, 100, 98], "car", 0.8)], 0.7)] == ["car"]

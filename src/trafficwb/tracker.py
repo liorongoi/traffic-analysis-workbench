@@ -82,6 +82,10 @@ class TrackerParams:
     # target. 0 turns it off.
     still_hold_s: float = 6.0
     still_speed: float = 0.25
+    # One box per target: on each frame, of two boxes of the same family where one lies this much inside the other
+    # (half a van, its side, the top of a car), only the bigger one is kept; two of about the same place and size
+    # (IoU 0.6 or more, a "car" and a "truck" on one van) keep only the surer. 0 turns it off.
+    fuse_ioa: float = 0.7
 
 
 def appearance(img, box) -> list[float] | None:
@@ -119,6 +123,32 @@ def iou(a, b) -> float:
     if inter <= 0:
         return 0.0
     return inter / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter)
+
+
+def fuse(dets: list, min_ioa: float, min_iou: float = 0.6, much_surer: float = 0.3) -> list:
+    """One box per target on a frame, within a family. A box mostly inside a bigger one (half a van, its side) is
+    left out; but when the inner one is much surer, it is the bigger one that goes (a weak box over two cars). Of two
+    in about the same place and size only the surer is kept. The boxes kept are the very ones given (callers key on
+    them)."""
+    area = lambda b: (b[2] - b[0]) * (b[3] - b[1])
+    out = set(range(len(dets)))
+    for j in sorted(range(len(dets)), key=lambda j: -area(dets[j][0])):     # bigger first
+        if j not in out:
+            continue
+        bj, cj, sj = dets[j]
+        for k in list(out):
+            if k == j or family(dets[k][1]) != family(cj):
+                continue
+            bk, _, sk = dets[k]
+            if area(bk) > area(bj) or (area(bk) == area(bj) and k < j):
+                continue                                # k is the smaller one here
+            if iou(bj, bk) >= min_iou:
+                out.discard(k if sk <= sj else j)
+            elif ioa(bk, bj) >= min_ioa:
+                out.discard(j if sk >= sj + much_surer else k)
+            if j not in out:
+                break
+    return [dets[j] for j in sorted(out)]
 
 
 @dataclass
@@ -182,6 +212,7 @@ class Tracker:
         params = dict(s["params"])
         params.setdefault("algo", "iou")          # checkpoints written before the Kalman tracker resume as they began
         params.setdefault("still_hold_s", 0.0)    # and those written before stop-and-go holding, without it
+        params.setdefault("fuse_ioa", 0.0)        # or before one box per target
         tr = cls(s["w"], s["h"], TrackerParams(**params))
         tr.counter = s["counter"]
         tr.tracks = [Track(**t) for t in s["tracks"]]
@@ -223,6 +254,8 @@ class Tracker:
         Returns (matched observations as (track, box, cls, score), closed tracks, newly created tracks).
         """
         byte = self.p.algo == "byte"
+        if self.p.fuse_ioa > 0:
+            dets = fuse(dets, self.p.fuse_ioa)
         if byte:
             for tr in self.tracks:            # every track advances to this frame, as in ByteTrack
                 if tr.mean is not None:

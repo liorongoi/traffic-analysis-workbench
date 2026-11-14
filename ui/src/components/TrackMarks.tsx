@@ -67,7 +67,7 @@ function stops(b: number[][]): { x: number; y: number; t0: number; t1: number }[
   return out;
 }
 
-/** Tails: drawn under the boxes. ``px`` is video pixels per screen pixel. */
+/** Tails, as dots fading with age: drawn under the boxes. ``px`` is video pixels per screen pixel. */
 export function Tails({ events, now, len, sel, px, lookOf, boxAt }: {
   events: Ev[]; now: number; len: TailLen; sel: number | null; px: number;
   lookOf: (e: any) => Look; boxAt: (e: any, t: number) => number[] | null;
@@ -80,23 +80,18 @@ export function Tails({ events, now, len, sel, px, lookOf, boxAt }: {
       if (!cur) return null;
       const past = e.boxes.filter((b) => b[0] < now - 0.02 && b[0] >= now - span);
       if (!past.length) return null;
-      const pts = [...smooth(past.map(foot)), [(cur[0] + cur[2]) / 2, cur[3]]];
-      const ts = [...past.map((b) => b[0]), now];
+      const pts = smooth(past.map(foot));
+      const ts = past.map((b) => b[0]);
       const on = e.id === sel, col = lookOf(e).stroke;
-      const w = (on ? 2.5 : 1.5) * px;
-      // four pieces, older ones fainter (one fading line per target keeps a busy scene readable)
+      // one dot per analysed frame, smaller and fainter the older it is
       const age = Math.min(span, now - ts[0]) || 1;
-      const pieces: { q: number; pts: number[][] }[] = [];
-      for (let i = 0; i + 1 < pts.length; i++) {
-        const q = 3 - Math.min(3, Math.floor(((now - ts[i + 1]) / age) * 4));
-        const last = pieces[pieces.length - 1];
-        if (last && last.q === q) last.pts.push(pts[i + 1]); else pieces.push({ q, pts: [pts[i], pts[i + 1]] });
-      }
       const st = stops(past).filter((s) => s.t1 >= now - span);
-      return <g key={e.id}>
-        {pieces.map(({ q, pts: p }, k) => <polyline key={k} points={p.map((v) => v.join(",")).join(" ")} fill="none"
-          stroke={col} strokeOpacity={(on ? [0.35, 0.55, 0.75, 0.95] : [0.2, 0.35, 0.55, 0.8])[q]} strokeWidth={w}
-          strokeLinejoin="round" strokeLinecap="round" />)}
+      return <g key={e.id} fill={col}>
+        {pts.map(([x, y], i) => {
+          const k = Math.max(0, 1 - (now - ts[i]) / age);          // 1 newest, 0 oldest
+          return <circle key={i} cx={x} cy={y} r={((on ? 1.4 : 1) + (on ? 1.6 : 1.3) * k) * px}
+            fillOpacity={(on ? 0.3 : 0.15) + (on ? 0.65 : 0.65) * k} />;
+        })}
         {st.map((s, i) => <g key={i}>
           <circle cx={s.x} cy={s.y} r={(on ? 4 : 3) * px} fill="none" stroke={col} strokeWidth={1.2 * px} strokeOpacity={on ? 0.95 : 0.6} />
           {on && <text x={s.x + 6 * px} y={s.y + 3.5 * px} fontSize={10 * px} fill={col} paintOrder="stroke" stroke="#000"
