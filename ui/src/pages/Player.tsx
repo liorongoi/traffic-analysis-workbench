@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, post } from "../api";
 import { fmtT } from "./Events";
 import { NamePick } from "../components/Pick";
+import BirdsEye, { type GroundView } from "../components/BirdsEye";
 
 // The player: a recording plays with every event's box drawn on it, and is reviewed and edited where it plays, as a
 // still image is. Click a box (or a bar on the timeline) to pick its event; drag on the paused picture to redraw the
@@ -37,6 +38,8 @@ const LOOK: Record<string, { stroke: string; dash: string }> = {
 };
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const SHOW = { all: "Every box", review: "Boxes not reviewed yet", none: "No boxes" } as const;
+const VIEWS = { camera: "Camera view", bev: "Bird's-eye view", both: "Both side by side" } as const;
+type ViewMode = keyof typeof VIEWS;
 
 /** The event's box at time t: its box on the nearest analysed frame (within a sixth of a second), else the two
  *  around t blended (an analysed gap of up to 2 s; any gap between the boxes you drew for a target you added). */
@@ -52,6 +55,8 @@ function boxAt(e: PEvent, t: number): number[] | null {
   const w = (t - before[0]) / (after[0] - before[0]);
   return [1, 2, 3, 4].map((k) => before[k] + w * (after[k] - before[k]));
 }
+
+const lookOf = (e: PEvent) => LOOK[e.status === "rejected" ? "rejected" : e.origin === "human" || e.fixes.length ? "human" : e.status] ?? LOOK.pending;
 
 /** Timeline lanes: each event a bar from its first to its last second, packed so bars do not overlap. */
 function lanes(evs: PEvent[]): PEvent[][] {
@@ -91,7 +96,18 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   const [zoneName, setZoneName] = useState("");
   const [zpts, setZpts] = useState<number[][]>([]);
   const video = useRef<HTMLVideoElement>(null);
+  const still = useRef<HTMLImageElement>(null);
   const svg = useRef<SVGSVGElement>(null);
+  // The road from above: needs the camera on the map (points) or flight data; undefined while asking, null when not.
+  const [gv, setGv] = useState<GroundView | null | undefined>(undefined);
+  const [viewMode, setViewModeRaw] = useState<ViewMode>(() => {
+    try { const v = localStorage.getItem("twb.player.view"); return v && v in VIEWS ? v as ViewMode : "camera"; } catch { return "camera"; }
+  });
+  const setViewMode = (v: ViewMode) => { setViewModeRaw(v); try { localStorage.setItem("twb.player.view", v); } catch { /* not kept */ } };
+  useEffect(() => {
+    setGv(undefined);
+    api(`/missions/${missionId}/recordings/${versionId}/ground-view`).then((r) => setGv(r.view)).catch(() => setGv(null));
+  }, [missionId, versionId]);
   // Teaching a new target: draw it once, the app follows it both ways; correct, set where it is in view, confirm.
   const [marking, setMarking] = useState(false);
   const [markCls, setMarkCls] = useState("");
@@ -284,6 +300,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
       else if (k === "m") { setMeasuring((v) => !v); setLine(null); setAdding(false); setSel(null); pause(); }
       else if (k === "a") approve();
       else if (k === "h") setShow((s) => (s === "none" ? "all" : "none"));
+      else if (k === "v") { const ks = Object.keys(VIEWS) as ViewMode[]; setViewMode(ks[(ks.indexOf(viewMode) + 1) % ks.length]); }
       else if (k === "l") startZone(zoning === "line" ? "" : "line");
       else if (k === "enter" && zoning === "area" && zpts.length >= 3) saveZone(zpts);
       else if (k === "escape") { setDrag(null); setAdding(false); setMarking(false); setSelMark(null); setMeasuring(false); setLine(null); setZoning(""); setZpts([]); setSel(null); setHelp(false); }
@@ -320,12 +337,13 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
       </div>
       <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1fr) 340px", gap: 10 }}>
         <div className="card" style={{ padding: 8 }}>
-          <div className="stage" style={{ position: "relative", background: "#000", aspectRatio: `${W} / ${H}`, maxHeight: "56vh" }}>
+          <div className={`views ${viewMode === "both" && gv ? "both" : ""}`} style={{ position: "relative" }}>
+          <div className={`stage ${viewMode === "bev" && gv ? "offstage" : ""}`} style={{ position: "relative", background: "#000", aspectRatio: `${W} / ${H}`, maxHeight: "56vh" }}>
             {!fallback && <video ref={video} src={`/api/missions/${missionId}/videos/${versionId}`} preload="auto"
               style={{ width: "100%", height: "100%", display: "block", objectFit: "contain" }}
               onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)}
               onError={() => setFallback(true)} />}
-            {fallback && <img alt={`Frame at ${fmtT(now)}`} src={`/api/missions/${missionId}/videos/${versionId}/frame?t=${now.toFixed(2)}&w=1920`}
+            {fallback && <img ref={still} alt={`Frame at ${fmtT(now)}`} src={`/api/missions/${missionId}/videos/${versionId}/frame?t=${now.toFixed(2)}&w=1920`}
               style={{ width: "100%", height: "100%", display: "block", objectFit: "contain" }} />}
             <svg ref={svg} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%", cursor: drawing ? "crosshair" : "default" }}
@@ -333,7 +351,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               {shown.map((e) => {
                 const b = boxAt(e, now);
                 if (!b) return null;
-                const look = LOOK[e.status === "rejected" ? "rejected" : e.origin === "human" || e.fixes.length ? "human" : e.status] ?? LOOK.pending;
+                const look = lookOf(e);
                 const on = e.id === sel;
                 return (
                   <g key={e.id} onPointerDown={(ev) => { if (!adding && !measuring && !zoning && e.id !== sel) { ev.stopPropagation(); pick(e); pause(); } }}
@@ -393,6 +411,14 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
                 height={Math.abs(drag.y1 - drag.y0)} fill="none" stroke="var(--human)" strokeWidth={sw} strokeDasharray={`${4 * sw} ${2 * sw}`} />}
             </svg>
           </div>
+          {viewMode !== "camera" && gv && <BirdsEye view={gv} now={now} source={() => (fallback ? still.current : video.current)}
+            events={shown} sel={sel} onPick={(id) => { const e = evs.find((x) => x.id === id); if (e) { pick(e); pause(); } }}
+            lookOf={lookOf} boxAt={boxAt} aspect={`${W} / ${H}`} />}
+          {viewMode !== "camera" && gv === null && <div className="msg" style={viewMode === "both" ? undefined : { order: -1 }}>
+            The bird's-eye view needs to know where the road is: put this camera on the map first (pick four or more points
+            on the frame and on the map), or use a recording with flight data.{" "}
+            <a href={`#/m/${missionId}/map/${versionId}`}>Put it on the map</a></div>}
+          </div>
           <div className="row" style={{ marginTop: 6 }}>
             <button className="primary" onClick={toggle} style={{ minWidth: 76 }} title="Space">{playing ? "Pause" : "Play"}</button>
             <button onClick={() => { pause(); seek(now - frame); }} title="Previous frame (←)">◀ frame</button>
@@ -400,6 +426,10 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             <span className="mono">{fmtT(now)} / {fmtT(dur)}</span>
             <select aria-label="Speed" value={speed} onChange={(e) => setSpeed(Number(e.target.value))}>
               {SPEEDS.map((s) => <option key={s} value={s}>{s}×</option>)}
+            </select>
+            <select aria-label="View" value={viewMode} onChange={(e) => setViewMode(e.target.value as ViewMode)}
+              title="The camera's picture, the road from above, or both (V)">
+              {Object.entries(VIEWS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
             <select aria-label="Boxes shown" value={show} onChange={(e) => setShow(e.target.value as keyof typeof SHOW)}>
               {Object.entries(SHOW).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -453,7 +483,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             Space play or pause · ← → one frame (Shift: one second) · J / K next or previous event to review · C confirm ·
             X or Delete reject · 1–{classes.length} class ({classes.map((c, i) => `${i + 1} ${c}`).join(", ")}) ·
             B missed target · T teach a new target · M measure the camera · L counting line · drag on the paused picture to redraw the picked event's box · A approve for learning ·
-            H hide boxes · Esc let go</div>}
+            H hide boxes · V camera view, bird's-eye view or both · Esc let go</div>}
         </div>
         <div className="grid" style={{ gap: 10, alignContent: "start" }}>
           <div className="card grid" style={{ gap: 8 }}>

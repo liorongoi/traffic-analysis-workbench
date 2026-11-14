@@ -83,6 +83,14 @@ def test_a_camera_on_the_map_through_the_api(tmp_path):
     assert png.status_code == 200 and png.headers["content-type"] == "image/png"
     lay = cv2.imdecode(np.frombuffer(png.content, np.uint8), cv2.IMREAD_UNCHANGED)
     assert lay.shape[2] == 4 and 0 < (lay[..., 3] > 0).mean() < 1
+    # the road from above (the player's bird's-eye view): one ground homography for a fixed camera, the points' own
+    gv = c.get(f"/api/missions/{m.id}/recordings/{vid}/ground-view", headers=h).json()["view"]
+    assert gv["fixed"] and gv["registered"] and gv["how"] == "points" and len(gv["samples"]) == 1
+    s0 = gv["samples"][0]
+    assert (gv["frame_w"], gv["frame_h"]) == (320, 180) and 0 <= s0["top_row"] < 180
+    Gv = np.array(s0["G"]).reshape(3, 3)
+    assert np.allclose(apply_h(Gv, px), apply_h(np.array(g["fit"]["homography"]), px), atol=1e-3)
+    assert len(s0["near"]) == len(s0["far"]) == 4
     # ground heights: a terrain file gives each point its height, and a slope bigger than a few metres is named
     from trafficwb.terrain import write_geotiff
     dem = np.tile(np.linspace(0, 40, 200, dtype=np.float32), (200, 1))   # 40 m from west to east
@@ -95,6 +103,7 @@ def test_a_camera_on_the_map_through_the_api(tmp_path):
     assert c.delete(url, headers=h).json()["geo"] is None
     # no points and no flight data: not on the map
     assert c.get(f"/api/missions/{m.id}/recordings/{vid}/footprint", headers=h).json()["footprint"] is None
+    assert c.get(f"/api/missions/{m.id}/recordings/{vid}/ground-view", headers=h).json()["view"] is None
     assert c.get(url, headers=h).json()["geo"] is None and c.get(
         f"/api/missions/{m.id}/recordings/{vid}/map-paths", headers=h).json()["paths"] == []
 
@@ -109,3 +118,28 @@ def test_a_projected_geotiff_is_refused(tmp_path):
         (34735, "H", 12, (1, 1, 0, 2, 1024, 0, 1, 1, 3072, 0, 1, 32636))])
     with pytest.raises(GeoError, match="projected"):
         load_map(str(p))
+
+
+def test_the_road_from_above_follows_a_drone_by_its_flight_data(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from trafficwb.georeg import LocalFrame, apply_h
+    from trafficwb.web.app import create_app
+    from test_video_meta import DJI_NEW
+    m = mission(tmp_path, {"DRONE_20240501T143000Z.mp4": (2.0, painted_cars, False)})
+    (Path(m.config().source_dir) / "DRONE_20240501T143000Z.SRT").write_text(DJI_NEW)
+    run(m)
+    vid = m.con.execute("SELECT id FROM source_version").fetchone()[0]
+    c = TestClient(create_app(tmp_path / "data", start_monitoring=False))
+    gv = c.get(f"/api/missions/{m.id}/recordings/{vid}/ground-view", headers={"X-TWB": "1"}).json()["view"]
+    assert gv is not None and not gv["fixed"] and not gv["registered"] and gv["how"] == "flight-data"
+    ts = [s["t"] for s in gv["samples"]]
+    assert ts[0] == 0.0 and ts == sorted(ts) and len(ts) >= 3 and gv["step_s"] == 0.5
+    # one origin for the whole recording: the frame's centre moves with the drone (about 111 m north, 94 m east in 1 s)
+    f = LocalFrame(*gv["origin"])
+    w, h = gv["frame_w"], gv["frame_h"]
+    c0 = apply_h(np.array(gv["samples"][0]["G"]).reshape(3, 3), [[w / 2, h / 2]])[0]
+    s1 = next(s for s in gv["samples"] if s["t"] == 1.0)
+    c1 = apply_h(np.array(s1["G"]).reshape(3, 3), [[w / 2, h / 2]])[0]
+    want = f.to_en(32.082234, 34.782234)
+    assert np.hypot(*(c1 - c0)) > 100 and np.hypot(c1[0] - float(want[0]), c1[1] - float(want[1])) < 30

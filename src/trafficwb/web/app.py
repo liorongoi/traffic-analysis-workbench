@@ -2352,6 +2352,14 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         cs = [float(v) for v in corners.split(",")] if corners else None
         return {"footprint": _geo_call(lambda: footprint_of(m, svc, version_id, t, dtm, map, cs))}
 
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/ground-view")
+    def geo_ground_view(version_id: int, m: Mission = Depends(mission)):
+        """What the player's bird's-eye view needs: the ground homography (once, or every half second with flight
+        data), the first frame row drawn and the footprint. ``view`` is null when the recording is not on the ground."""
+        from ..video_geo import ground_view
+        svc = _video(m)
+        return {"view": _geo_call(lambda: _video_call(lambda: ground_view(m, svc, version_id)))}
+
     @app.get("/api/missions/{mission_id}/recordings/{version_id}/frame-on-map")
     def geo_frame_on_map(version_id: int, t: float = Query(0, ge=0), dtm: str | None = None, map: str | None = None,
                          corners: str | None = None, m: Mission = Depends(mission)):

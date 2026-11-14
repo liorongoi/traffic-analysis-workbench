@@ -398,3 +398,67 @@ def frame_overlay(m, svc, version_id: int, t: float, dtm_path: str | None = None
     lay = frame_on_ground(img, G, frame, (top, left, bottom, right), size, IMAGE_RANGE_M, IMAGE_PX_M)
     ok, buf = cv2.imencode(".png", lay)
     return buf.tobytes()
+
+
+# ------------------------------------------------------------------ the road from above (the player's bird's-eye view)
+
+BEV_RANGE_M = 300.0                 # ground farther than this from the bottom of the frame is not drawn from above
+BEV_PX_M = 0.8                      # nor rows where one frame pixel covers more ground than this (a smear)
+BEV_STEP_S = 0.5                    # flight data: one ground homography every half second
+
+
+def ground_view(m, svc, version_id: int) -> dict | None:
+    """What the player needs to show the road from above: the ground homography (frame pixels to metres east and
+    north of one origin for the whole recording), the first frame row drawn and the footprint, once for a camera placed
+    by points on the map, or every ``BEV_STEP_S`` for a recording with flight data (the camera moves). None when the
+    recording is not on the ground (no points and no flight data). Nothing is matched to a map here: fast."""
+    r = m.con.execute("SELECT width, height, duration_s FROM video_probe WHERE source_version_id=?",
+                      (version_id,)).fetchone()
+    if r is None or not r[0]:
+        raise GeoError("This recording has not been read yet.")
+    w, h, dur = int(r[0]), int(r[1]), float(r[2] or 0.0)
+    g = CameraGeo(m).get(version_id)
+    if g is not None:
+        rms = g["fit"].get("rms_m")
+        good = rms is not None and rms <= GOOD_RMS_M
+        ref = LocalFrame(*g["fit"]["origin"])
+        found = [(0.0, np.array(g["fit"]["homography"], np.float64))]
+        how, fixed = ("points" if good else "points-poor"), True
+    else:
+        from .video_meta import stored
+        try:
+            path = svc.path(version_id)
+        except Exception:  # noqa: BLE001 - the file has gone: what was read before is still used
+            path = None
+        tel = stored(m.con, version_id, path)
+        if tel is None:
+            return None
+        found, ref = [], None
+        for k in range(int(dur / BEV_STEP_S) + 1):
+            t = round(k * BEV_STEP_S, 2)
+            s = tel.at(t)
+            if not s or s.get("lat") is None:
+                continue
+            fr = LocalFrame(float(s["lat"]), float(s["lon"]))
+            G = pose_from_telemetry(s, w, h, fr, None, None)
+            if G is None:
+                continue
+            ref = ref or fr
+            e, n = ref.to_en(fr.lat0, fr.lon0)
+            T = np.array([[1, 0, float(e)], [0, 1, float(n)], [0, 0, 1]], np.float64)
+            found.append((t, T @ G))
+        if not found:
+            return None
+        how, good, fixed = "flight-data", False, False
+    samples = []
+    for t, G in found:
+        parts = ground_parts(G, w, h, BEV_RANGE_M, max_px_m=BEV_PX_M)
+        if parts is None:
+            continue
+        G = G / G[2, 2] if abs(G[2, 2]) > 1e-12 else G
+        samples.append({"t": t, "G": [round(float(v), 10) for v in G.ravel()], "top_row": round(parts["top_row"], 1),
+                        "near": np.round(parts["near"], 2).tolist(), "far": np.round(parts["far"], 2).tolist()})
+    if not samples:
+        return None
+    return {"origin": [ref.lat0, ref.lon0], "frame_w": w, "frame_h": h, "how": how, "registered": good,
+            "fixed": fixed, "step_s": None if fixed else BEV_STEP_S, "samples": samples}
