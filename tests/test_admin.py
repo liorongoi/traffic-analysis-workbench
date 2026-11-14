@@ -115,7 +115,9 @@ def test_scheduler_records_scheduled_backup(env):
     from datetime import datetime
     from trafficwb.admin import BackupScheduler
     tmp, root, _, _ = env
-    s = BackupScheduler(root.path, tmp / "nightly", "02:00")
+    # due at 00:00, so the backup made now (whatever the hour) counts for today; at "02:00" a run between midnight and
+    # 02:00 made its backup before that day's slot and the second check rightly found it due again
+    s = BackupScheduler(root.path, tmp / "nightly", "00:00")
     p = s.run_if_due(datetime.now().replace(hour=23, minute=59))
     assert p is not None and verify(p) == []
     assert s.run_if_due(datetime.now().replace(hour=23, minute=59)) is None   # already done today
