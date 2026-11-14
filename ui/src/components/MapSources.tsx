@@ -21,9 +21,9 @@ export type LatLon = [number, number];
 const SIDES: [number, string][] = [[250, "250 m across"], [500, "500 m across"], [1000, "1 km across"], [2000, "2 km across"], [5000, "5 km across"], [10000, "10 km across"]];
 const DETAIL: [number, string][] = [[0.15, "As sharp as the source has"], [0.3, "About 30 cm a pixel"], [0.6, "About 60 cm a pixel"], [1.2, "About 1.2 m a pixel"], [2.5, "About 2.5 m a pixel"]];
 
-export default function MapSource({ role, cat, path, onPath, centres, onCatalogue }: {
+export default function MapSource({ role, cat, path, onPath, centres }: {
   role: Role; cat: Catalogue | null; path: string | null; onPath: (p: string | null) => void;
-  centres: { label: string; ll: LatLon | null }[]; onCatalogue: () => void;
+  centres: { label: string; ll: LatLon | null }[]; onCatalogue?: () => void;
 }) {
   const terrain = role === "terrain";
   const inMaps = !!(path && cat && path.startsWith(cat.maps_folder));
@@ -37,8 +37,6 @@ export default function MapSource({ role, cat, path, onPath, centres, onCatalogu
   const [detail, setDetail] = useState(0.3);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-  const [editing, setEditing] = useState<Partial<Source> | null>(null);
-
   // A path chosen elsewhere (a saved camera) shows its folder.
   useEffect(() => { if (path) { setFolder([path.replace(/[\\/][^\\/]*$/, "")]); if (mode === "none") setMode("file"); } }, [path]);
   useEffect(() => {
@@ -72,15 +70,10 @@ export default function MapSource({ role, cat, path, onPath, centres, onCatalogu
     setBusy(false);
   };
 
-  const remove = async (id: string) => {
-    try { await api(`/map-sources/servers/${id}`, { method: "DELETE" }); onCatalogue(); } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
-  };
-
   const tabs: [Mode, string, string][] = [
     ...(terrain ? [["none", "None", "Flat ground"] as [Mode, string, string]] : []),
     ["file", "Files", "On this computer"], ["online", "Online service", "Needs the internet"], ["server", "Our server", "WMTS, WMS or REST"],
   ];
-  const chosen = list.find((s) => s.id === sourceId);
   return (
     <div className="grid mapsrc" style={{ gap: 8 }}>
       <div className="seg mapsrc-tabs" role="tablist" aria-label={terrain ? "Where the ground heights come from" : "Where the map comes from"}>
@@ -109,13 +102,10 @@ export default function MapSource({ role, cat, path, onPath, centres, onCatalogu
             options={list.map((s) => [s.id, mode === "server" ? `${s.name} · ${cat?.kinds[s.kind] ?? s.kind}${s.layer ? ` · ${s.layer}` : ""}` : s.name] as [string, string])}
             onChange={setSourceId} />
             : <div className="muted small" style={{ flex: "1 1 260px" }}>{mode === "server" ? "No server of ours is set up yet." : "No online service for this."}</div>}
-          {mode === "server" && <button onClick={() => setEditing({ role, kind: terrain ? "elevation-api" : "wmts", auth: { type: "none" } })}>Add a server…</button>}
-          {mode === "server" && chosen && <button onClick={() => setEditing(chosen)}>Change</button>}
-          {mode === "server" && chosen && <button onClick={() => remove(chosen.id)} aria-label="Remove this server">Remove</button>}
         </div>
+        {mode === "server" && <div className="muted small">Our servers are added and changed once, in{" "}
+          <a href="#/settings/maps">Settings, Video, Map and ground heights</a>.</div>}
         {mode === "online" && <div className="muted small">Only when this computer is online. What is fetched is kept, so the same area works offline afterwards.</div>}
-        {editing && <ServerForm cat={cat!} start={editing} onClose={() => setEditing(null)}
-          onSaved={(s) => { setEditing(null); onCatalogue(); setSourceId(s.id); }} />}
         {list.length > 0 && <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <Choice label="Area centred on" value={centre} style={{ flex: "1 1 200px" }}
             options={[...usable.map(([i, c]) => [i, c.label] as [number, string]), [-1, "Coordinates I type…"]]} onChange={setCentre} />
@@ -129,6 +119,48 @@ export default function MapSource({ role, cat, path, onPath, centres, onCatalogu
         {where && list.length > 0 && <div className="muted small mono">{where[0].toFixed(5)}°, {where[1].toFixed(5)}°</div>}
       </>}
       {msg && <div className={`msg ${msg.kind} small`}>{msg.text}</div>}
+    </div>
+  );
+}
+
+/** Settings, Video: our own map and height servers, set up once and then picked from a list when placing a camera. */
+export function MapServers() {
+  const [cat, setCat] = useState<Catalogue | null>(null);
+  const [editing, setEditing] = useState<Partial<Source> | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const load = () => api("/map-sources").then(setCat).catch((e) => setErr((e as ApiError).message));
+  useEffect(() => { load(); }, []);
+  const remove = async (id: string) => {
+    setErr(null);
+    try { await api(`/map-sources/servers/${id}`, { method: "DELETE" }); load(); } catch (e) { setErr((e as ApiError).message); }
+  };
+  if (!cat) return err ? <div className="msg err small">{err}</div> : <div className="muted small">Loading…</div>;
+  const group = (role: Role, title: string) => {
+    const rows = cat.servers.filter((s) => s.role === role);
+    return (
+      <div className="grid" style={{ gap: 6 }}>
+        <div className="row" style={{ gap: 8, alignItems: "center" }}>
+          <b style={{ flex: 1 }}>{title}</b>
+          <button onClick={() => setEditing({ role, kind: role === "terrain" ? "elevation-api" : "wmts", auth: { type: "none" } })}>Add a server…</button>
+        </div>
+        {rows.length === 0 ? <div className="muted small">None yet.</div>
+          : <ul className="plain-list">{rows.map((s) => (
+            <li key={s.id} className="row" style={{ gap: 8, alignItems: "center" }}>
+              <span style={{ flex: 1, minWidth: 0 }}>{s.name} <span className="muted small">· {cat.kinds[s.kind] ?? s.kind}{s.layer ? ` · ${s.layer}` : ""}</span></span>
+              <button onClick={() => setEditing(s)}>Change</button>
+              <button onClick={() => remove(s.id)} aria-label={`Remove ${s.name}`}>Remove</button>
+            </li>))}</ul>}
+      </div>
+    );
+  };
+  return (
+    <div className="grid" style={{ gap: 14 }}>
+      {group("map", "Map pictures (WMTS, WMS, tiles or ArcGIS REST)")}
+      {group("terrain", "Ground heights")}
+      {editing && <ServerForm cat={cat} start={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+      {err && <div className="msg err small">{err}</div>}
+      <div className="muted small">Files on this computer and the online services need no setting up; they are picked when a camera is placed.
+        Whatever is fetched is kept in {cat.maps_folder}, so it works with no network afterwards.</div>
     </div>
   );
 }
