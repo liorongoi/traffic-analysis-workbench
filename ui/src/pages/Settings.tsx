@@ -3,7 +3,7 @@ import { api, ApiError, post } from "../api";
 import FolderPicker from "../components/FolderPicker";
 import { ZonePick } from "../components/Pick";
 import { MapServers } from "../components/MapSources";
-import { CameraChoice, DetectorChoice, ModelChoice, ParallelChoice, SamInterval, usesSam, partsOf } from "./Wizard";
+import { CameraChoice, DetectorChoice, ModelChoice, ParallelChoice, SamInterval, TrackFrames, usesSam, partsOf } from "./Wizard";
 import NameFormats from "./NameFormats";
 import Workers from "./Workers";
 import { PlayerColours } from "../components/TrackMarks";
@@ -15,7 +15,7 @@ type Defaults = {
   both: { results_folder: string | null; export_formats: string[]; iana_zone: string | null; country: string | null; watch: boolean;
     run_mode: string; teacher: string; auto_min_reviews: number; auto_epochs: number };
   images: { detector: string; mode: string; vehicle_model: string | null };
-  video: { detector: string; mode: string; sam3_interval_s: number; camera: string; video_workers: number; analyse_new: boolean };
+  video: { detector: string; mode: string; sam3_interval_s: number; camera: string; video_workers: number; analyse_new: boolean; track_min_frames: number | null };
 };
 type Part = keyof Defaults;
 
@@ -154,6 +154,8 @@ export default function Settings({ section }: { section?: string }) {
             <CameraChoice value={d.video.camera} onChange={(v) => change("video", { camera: v })} />
             <ParallelChoice value={d.video.video_workers} onChange={(v) => change("video", { video_workers: v })} />
             {usesSam(d.video.detector) && <SamInterval value={d.video.sam3_interval_s} onChange={(v) => change("video", { sam3_interval_s: v })} both={partsOf(d.video.detector).fast !== null} />}
+            <TrackFrames value={d.video.track_min_frames} onChange={(v) => change("video", { track_min_frames: v })}
+              step={d.video.detector === "sam3" ? d.video.sam3_interval_s : 0.2} auto={d.video.detector === "sam3" ? 3 : 5} />
             <label className="field"><span>New videos in the input folder</span>
               <select value={d.video.analyse_new ? "auto" : "wait"} onChange={(e) => change("video", { analyse_new: e.target.value === "auto" })}>
                 <option value="wait">Wait until I tick them in the catalog</option>

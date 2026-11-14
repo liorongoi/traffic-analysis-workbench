@@ -65,3 +65,16 @@ def test_a_new_kind_of_file_name_is_learned_and_remembered(env):  # noqa: F811
     c.post("/api/name-formats/learn", json={"folder": str(new), "save": True}, headers=H1)
     assert len(c.get("/api/name-formats").json()["formats"]) == 1
     assert c.post("/api/name-formats/learn", json={"folder": str(new)}, headers=H1).json()["template"] is None
+
+
+def test_frames_before_a_target_counts_is_a_video_setting_new_missions_take(tmp_path):
+    import pytest as _pytest
+    from trafficwb import defaults
+    assert defaults.load(tmp_path)["video"]["track_min_frames"] is None
+    defaults.save(tmp_path, {"video": {"track_min_frames": 8}})
+    d = defaults.load(tmp_path)
+    assert defaults.mission_fields(d, "video")["track_min_frames"] == 8
+    assert "track_min_frames" not in defaults.mission_fields(d, "images")
+    with _pytest.raises(ValueError, match="1 to 30"):
+        defaults.save(tmp_path, {"video": {"track_min_frames": 31}})
+    assert defaults.save(tmp_path, {"video": {"track_min_frames": 0}})["video"]["track_min_frames"] is None
