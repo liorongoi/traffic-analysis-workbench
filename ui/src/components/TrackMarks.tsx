@@ -34,6 +34,15 @@ export const shortKey = (k: string) => k.replace(/-0+(\d)/, "-$1");
 
 const foot = (b: number[]) => [(b[1] + b[3]) / 2, b[4]];        // [t, x1, y1, x2, y2] -> where it meets the road
 
+/** Each point averaged with its two neighbours on each side: a box jitters by a few pixels from frame to frame, and
+ *  a waiting target's tail would otherwise be a scribble. */
+function smooth(p: number[][]): number[][] {
+  return p.map((_, i) => {
+    const w = p.slice(Math.max(0, i - 2), i + 3);
+    return [w.reduce((a, v) => a + v[0], 0) / w.length, w.reduce((a, v) => a + v[1], 0) / w.length];
+  });
+}
+
 /** Stretches where the target stood still for STOP_S or longer: where, from, to. */
 function stops(b: number[][]): { x: number; y: number; t0: number; t1: number }[] {
   const out: { x: number; y: number; t0: number; t1: number }[] = [];
@@ -71,7 +80,7 @@ export function Tails({ events, now, len, sel, px, lookOf, boxAt }: {
       if (!cur) return null;
       const past = e.boxes.filter((b) => b[0] < now - 0.02 && b[0] >= now - span);
       if (!past.length) return null;
-      const pts = [...past.map(foot), [(cur[0] + cur[2]) / 2, cur[3]]];
+      const pts = [...smooth(past.map(foot)), [(cur[0] + cur[2]) / 2, cur[3]]];
       const ts = [...past.map((b) => b[0]), now];
       const on = e.id === sel, col = lookOf(e).stroke;
       const w = (on ? 2.5 : 1.5) * px;
@@ -86,7 +95,7 @@ export function Tails({ events, now, len, sel, px, lookOf, boxAt }: {
       const st = stops(past).filter((s) => s.t1 >= now - span);
       return <g key={e.id}>
         {pieces.map(({ q, pts: p }, k) => <polyline key={k} points={p.map((v) => v.join(",")).join(" ")} fill="none"
-          stroke={col} strokeOpacity={(on ? [0.35, 0.55, 0.75, 0.95] : [0.12, 0.25, 0.4, 0.6])[q]} strokeWidth={w}
+          stroke={col} strokeOpacity={(on ? [0.35, 0.55, 0.75, 0.95] : [0.2, 0.35, 0.55, 0.8])[q]} strokeWidth={w}
           strokeLinejoin="round" strokeLinecap="round" />)}
         {st.map((s, i) => <g key={i}>
           <circle cx={s.x} cy={s.y} r={(on ? 4 : 3) * px} fill="none" stroke={col} strokeWidth={1.2 * px} strokeOpacity={on ? 0.95 : 0.6} />
