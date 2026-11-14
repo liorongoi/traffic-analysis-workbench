@@ -92,6 +92,9 @@ def models_root() -> Path:
 
 
 def find(name: str, version: str | None = None, root: Path | None = None) -> ModelPack:
+    if not name or name in (".", "..") or any(c in name for c in "/\\:") or Path(name).is_absolute():
+        # A name is one folder under the models root, never a path (a UNC or absolute path would replace the root).
+        raise ModelPackError(f"'{name}' is not a model name.")
     base = (root or models_root()) / name
     if not base.is_dir():
         raise ModelPackError(f"Model '{name}' is not installed under {base.parent}.")

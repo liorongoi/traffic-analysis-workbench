@@ -2,8 +2,8 @@
 # LanePulse.app: starts the LanePulse server if it is not running, then opens it in the browser.
 # Everything LanePulse keeps (data, backups, models, logs) is in ~/LanePulse; the app itself changes nothing
 # inside its own folder. The first time it is opened, and after an update, it sets up what it runs on (Python, the
-# packages and the models) in ~/LanePulse/runtime, from the internet, in a Terminal window that shows the progress.
-# After that it runs offline.
+# packages and the models) in ~/LanePulse/runtime, from the files the app carries (no internet), in a Terminal window
+# that shows the progress.
 APP="$(cd "$(dirname "$0")/../.." && pwd)"
 RES="$APP/Contents/Resources"
 VER="$(cat "$RES/version.txt")"
@@ -82,7 +82,7 @@ st() { printf 'lpStatus({"state":"%s","text":"%s","detail":"%s","step":"setup","
     LOG="$H/logs/setup.log"
     STEP="$(grep '^== ' "$LOG" 2>/dev/null | tail -1 | cut -c4-)"
     LAST="$(tail -c 600 "$LOG" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' | tail -1)"
-    st setup "${STEP:-Checking the disk space and the internet connection}" "$LAST"
+    st setup "${STEP:-Checking the disk space}" "$LAST"
     sleep 1
   done ) &
 if "$APP/Contents/Resources/setup/setup.sh" "$H" "$(cat "$APP/Contents/Resources/build.txt")" 2>&1 | tee "$H/logs/setup.log"; [ "${PIPESTATUS[0]}" = 0 ]; then
@@ -92,10 +92,10 @@ if "$APP/Contents/Resources/setup/setup.sh" "$H" "$(cat "$APP/Contents/Resources
   sleep 2
 else
   rm -f "$H/.setup.pid"; wait
-  st failed "Setup did not finish. Check the internet connection and open LanePulse again: it continues from where it stopped." \
+  st failed "Setup did not finish. Open LanePulse again: it continues from where it stopped." \
     "$(grep 'Setup did not finish' "$H/logs/setup.log" | tail -1)"
   echo
-  echo "Nothing was changed outside the LanePulse folder. Check the internet connection and open LanePulse again:"
+  echo "Nothing was changed outside the LanePulse folder. Open LanePulse again (see the reason above):"
   echo "it continues from where it stopped. The details are in $H/logs/setup.log"
   read -r -p "Press Return to close."
 fi
