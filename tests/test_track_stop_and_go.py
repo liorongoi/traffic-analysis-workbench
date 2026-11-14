@@ -125,3 +125,13 @@ def test_one_box_per_target_on_a_frame():
     assert [k[0] for k in fuse([([0, 0, 200, 100], "car", 0.3), ([0, 10, 90, 100], "car", 0.9)], 0.7)] == [[0, 10, 90, 100]]
     # a car and a truck on one van: the surer stays
     assert [k[1] for k in fuse([([0, 0, 100, 100], "truck", 0.5), ([2, 2, 100, 98], "car", 0.8)], 0.7)] == ["car"]
+
+
+def test_a_car_queued_behind_a_truck_is_not_a_part_of_it():
+    """From the stop-and-go clip: a truck's box covers 75 % of the car waiting beside it, but the car lines up with it
+    on one side only (the frame's right edge, which does not count). The van's side lines up on two: a part."""
+    from trafficwb.tracker import fuse
+    truck, car = [1440, 304, 1914, 722], [1556, 421, 1920, 817]
+    assert len(fuse([(truck, "truck", 0.73), (car, "car", 0.86)], 0.7, w=1920, h=1080)) == 2
+    van, side = [535, 285, 1478, 1117], [1235, 500, 1505, 1117]
+    assert [k[0] for k in fuse([(van, "car", 0.91), (side, "truck", 0.34)], 0.7, w=1920, h=1080)] == [van]

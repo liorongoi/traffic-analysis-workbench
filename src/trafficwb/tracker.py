@@ -82,8 +82,8 @@ class TrackerParams:
     # target. 0 turns it off.
     still_hold_s: float = 6.0
     still_speed: float = 0.25
-    # One box per target: on each frame, of two boxes of the same family where one lies this much inside the other
-    # (half a van, its side, the top of a car), only the bigger one is kept; two of about the same place and size
+    # One box per target: on each frame, a box of the same family that is a part of a bigger one (this much inside
+    # it and lined up with it on two sides, or 90 % inside: half a van, its side, the top of a car) is left out; two of about the same place and size
     # (IoU 0.6 or more, a "car" and a "truck" on one van) keep only the surer. 0 turns it off.
     fuse_ioa: float = 0.7
 
@@ -125,10 +125,30 @@ def iou(a, b) -> float:
     return inter / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter)
 
 
-def fuse(dets: list, min_ioa: float, min_iou: float = 0.6, much_surer: float = 0.3) -> list:
-    """One box per target on a frame, within a family. A box mostly inside a bigger one (half a van, its side) is
-    left out; but when the inner one is much surer, it is the bigger one that goes (a weak box over two cars). Of two
-    in about the same place and size only the surer is kept. The boxes kept are the very ones given (callers key on
+def part_of(inner, outer, min_ioa: float, w: float = 0.0, h: float = 0.0) -> bool:
+    """Is box ``inner`` a part of the target in box ``outer`` (half a van, its side, its rear window)? Almost wholly
+    inside it (90 %), or mostly inside (``min_ioa``) and lined up with it on two sides or more, as a part is. A car
+    queued behind a truck overlaps the truck's box but lines up with it on one side at most, so it stays. Sides on
+    the frame's edge (``w``, ``h``) do not count: everything cut by the edge lines up there."""
+    a = ioa(inner, outer)
+    if a >= 0.9:
+        return True
+    if a < min_ioa:
+        return False
+    tol_x, tol_y = 0.06 * (outer[2] - outer[0]), 0.06 * (outer[3] - outer[1])
+    edge = lambda v, lim: lim > 0 and (v <= 2 or v >= lim - 2)
+    sides = [abs(inner[0] - outer[0]) <= tol_x and not edge(outer[0], w),
+             abs(inner[2] - outer[2]) <= tol_x and not edge(outer[2], w),
+             abs(inner[1] - outer[1]) <= tol_y and not edge(outer[1], h),
+             abs(inner[3] - outer[3]) <= tol_y and not edge(outer[3], h)]
+    return sum(sides) >= 2
+
+
+def fuse(dets: list, min_ioa: float, min_iou: float = 0.6, much_surer: float = 0.3, w: float = 0.0,
+         h: float = 0.0) -> list:
+    """One box per target on a frame, within a family. A box that is a part of a bigger one (``part_of``) is left
+    out; but when the inner one is much surer, it is the bigger one that goes (a weak box over two cars). Of two in
+    about the same place and size only the surer is kept. The boxes kept are the very ones given (callers key on
     them)."""
     area = lambda b: (b[2] - b[0]) * (b[3] - b[1])
     out = set(range(len(dets)))
@@ -144,7 +164,7 @@ def fuse(dets: list, min_ioa: float, min_iou: float = 0.6, much_surer: float = 0
                 continue                                # k is the smaller one here
             if iou(bj, bk) >= min_iou:
                 out.discard(k if sk <= sj else j)
-            elif ioa(bk, bj) >= min_ioa:
+            elif part_of(bk, bj, min_ioa, w, h):
                 out.discard(j if sk >= sj + much_surer else k)
             if j not in out:
                 break
@@ -255,7 +275,7 @@ class Tracker:
         """
         byte = self.p.algo == "byte"
         if self.p.fuse_ioa > 0:
-            dets = fuse(dets, self.p.fuse_ioa)
+            dets = fuse(dets, self.p.fuse_ioa, w=self.w, h=self.h)
         if byte:
             for tr in self.tracks:            # every track advances to this frame, as in ByteTrack
                 if tr.mean is not None:

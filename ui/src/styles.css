@@ -731,6 +731,7 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
 .player label.check { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
 .player .tlabel { font-family: var(--mono, ui-monospace, monospace); letter-spacing: -.02em; }
 .score-key { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-left: 6px; vertical-align: -1px; border: 1px solid var(--line-strong); }
 .score-key i { width: 44px; height: 6px; border-radius: 3px; display: inline-block; }
 .in-view .count-tile .small { overflow-wrap: anywhere; }
 .heat-scale { display: inline-block; width: 90px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, rgba(255, 140, 0, 0.05), rgba(255, 140, 0, 0.95)); border: 1px solid var(--line-strong, #666); }

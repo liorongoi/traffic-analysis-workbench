@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 // What the player draws for each target besides its box: the tail of where it has been (fading with age, with a
 // ring where it stood still) and a small label with its ID, coloured by how sure the detector was. Kept small and
 // thinned out in a busy scene: a label that would cover another one is left out (its box still shows, and pointing
@@ -67,10 +69,53 @@ function stops(b: number[][]): { x: number; y: number; t0: number; t1: number }[
   return out;
 }
 
-/** Tails, as dots fading with age: drawn under the boxes. ``px`` is video pixels per screen pixel. */
-export function Tails({ events, now, len, sel, px, lookOf, boxAt }: {
+/** Colours the tail dots can take: the box's own colour, one colour per target, or one colour for all. */
+export const DOT_COLOURS: Record<string, string> = {
+  box: "Same as the box", target: "A colour per target", "#ffe14d": "Yellow", "#3ff0ff": "Cyan", "#ff4fd8": "Magenta",
+  "#7dff5a": "Green", "#ffffff": "White",
+};
+export const hueOf = (id: number) => `hsl(${(id * 137.5) % 360}, 95%, 60%)`;
+
+/** Colours the boxes can take: by review state (not reviewed, confirmed, yours, rejected), one per target, or one
+ *  for all. The line style still tells the review state whatever the colour. */
+export const BOX_COLOURS: Record<string, string> = {
+  state: "By review state", target: "A colour per target", "#ff817f": "Coral", "#ffe14d": "Yellow", "#3ff0ff": "Cyan",
+  "#ff4fd8": "Magenta", "#7dff5a": "Green", "#ffffff": "White",
+};
+
+/** Where the player's colours are kept: in this browser, for every video. */
+export const COLOUR_KEYS = { boxes: "twb.player.boxes", dots: "twb.player.dots" };
+const read = (k: string, d: string) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
+const write = (k: string, v: string) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* not kept */ } };
+export const boxColourSetting = () => read(COLOUR_KEYS.boxes, "state") as string;
+export const dotColourSetting = () => read(COLOUR_KEYS.dots, "#ffe14d") as string;
+
+/** Settings, Video: the colours the player draws vehicle boxes and tail dots in. */
+export function PlayerColours() {
+  const [boxes, setBoxes] = useState(boxColourSetting);
+  const [dots, setDots] = useState(dotColourSetting);
+  const swatch = (v: string) => v.startsWith("#") ? <i className="swatch" style={{ background: v }} /> : null;
+  return <div className="card grid" style={{ gap: 8 }}>
+    <h2 style={{ margin: 0 }}>Player colours</h2>
+    <label className="field"><span>Vehicle boxes {swatch(boxes)}</span>
+      <select value={boxes} onChange={(e) => { setBoxes(e.target.value); write(COLOUR_KEYS.boxes, e.target.value); }}>
+        {Object.entries(BOX_COLOURS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+      <small className="muted">Whatever the colour, the line style still shows the review state (solid: not reviewed, dashed: confirmed or drawn by you, dotted: rejected).</small></label>
+    <label className="field"><span>Tail dots {swatch(dots)}</span>
+      <select value={dots} onChange={(e) => { setDots(e.target.value); write(COLOUR_KEYS.dots, e.target.value); }}>
+        {Object.entries(DOT_COLOURS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+      <small className="muted">One dot per video frame behind each target, smaller and fainter the older it is.</small></label>
+    <small className="muted">Kept in this browser, for every video.</small>
+  </div>;
+}
+
+const BUCKETS = 8;           // dots are drawn in this many steps of size and strength (one path each: fast)
+
+/** Tails, as one dot per video frame, smaller and fainter the older it is: drawn under the boxes. ``px`` is video
+ *  pixels per screen pixel; ``fps`` the recording's frame rate. */
+export function Tails({ events, now, len, sel, px, lookOf, boxAt, fps, colour }: {
   events: Ev[]; now: number; len: TailLen; sel: number | null; px: number;
-  lookOf: (e: any) => Look; boxAt: (e: any, t: number) => number[] | null;
+  lookOf: (e: any) => Look; boxAt: (e: any, t: number) => number[] | null; fps: number; colour: string;
 }) {
   if (len === "off") return null;
   const span = len === "all" ? Infinity : Number(len);
@@ -78,23 +123,39 @@ export function Tails({ events, now, len, sel, px, lookOf, boxAt }: {
     {events.map((e) => {
       const cur = boxAt(e, now);
       if (!cur) return null;
-      const past = e.boxes.filter((b) => b[0] < now - 0.02 && b[0] >= now - span);
-      if (!past.length) return null;
+      const past = e.boxes.filter((b) => b[0] <= now + 0.25 && b[0] >= now - span - 0.25);
+      if (past.length < 2) return null;
       const pts = smooth(past.map(foot));
       const ts = past.map((b) => b[0]);
-      const on = e.id === sel, col = lookOf(e).stroke;
-      // one dot per analysed frame, smaller and fainter the older it is
-      const age = Math.min(span, now - ts[0]) || 1;
-      const st = stops(past).filter((s) => s.t1 >= now - span);
-      return <g key={e.id} fill={col}>
-        {pts.map(([x, y], i) => {
-          const k = Math.max(0, 1 - (now - ts[i]) / age);          // 1 newest, 0 oldest
-          return <circle key={i} cx={x} cy={y} r={((on ? 1.4 : 1) + (on ? 1.6 : 1.3) * k) * px}
-            fillOpacity={(on ? 0.3 : 0.15) + (on ? 0.65 : 0.65) * k} />;
-        })}
-        {st.map((s, i) => <g key={i}>
-          <circle cx={s.x} cy={s.y} r={(on ? 4 : 3) * px} fill="none" stroke={col} strokeWidth={1.2 * px} strokeOpacity={on ? 0.95 : 0.6} />
-          {on && <text x={s.x + 6 * px} y={s.y + 3.5 * px} fontSize={10 * px} fill={col} paintOrder="stroke" stroke="#000"
+      const t0 = Math.max(ts[0], now - span);
+      // one dot per video frame (fewer on a very long track, at most 900 for one target)
+      const step = Math.max(1 / (fps || 25), (now - t0) / 900);
+      const age = Math.max(now - t0, 1e-3);
+      const on = e.id === sel;
+      const col = colour === "box" ? lookOf(e).stroke : colour === "target" ? hueOf(e.id) : colour;
+      const paths: string[] = new Array(BUCKETS).fill("");
+      let i = 0;
+      for (let t = now; t >= t0 - 1e-6; t -= step) {
+        while (i + 1 < ts.length && ts[i + 1] < t) i++;
+        // ts is ascending: find the analysed frames around t
+        let j = ts.length - 1;
+        while (j > 0 && ts[j - 1] >= t) j--;
+        const a = Math.max(0, j - 1), b = j;
+        if (ts[b] - ts[a] > 2 || t > ts[ts.length - 1] + 0.25) continue;          // a gap: no dots across it
+        const w = ts[b] > ts[a] ? Math.min(1, Math.max(0, (t - ts[a]) / (ts[b] - ts[a]))) : 0;
+        const x = pts[a][0] + w * (pts[b][0] - pts[a][0]), y = pts[a][1] + w * (pts[b][1] - pts[a][1]);
+        const k = 1 - (now - t) / age;                                                // 1 newest, 0 oldest
+        const q = Math.min(BUCKETS - 1, Math.floor(k * BUCKETS));
+        const r = ((on ? 1.6 : 1.2) + (on ? 2.2 : 1.8) * ((q + 0.5) / BUCKETS)) * px;
+        paths[q] += `M${(x - r).toFixed(1)} ${y.toFixed(1)}a${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(2 * r).toFixed(2)} 0a${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(-2 * r).toFixed(2)} 0`;
+      }
+      const st = stops(past.filter((b) => b[0] <= now)).filter((s) => s.t1 >= now - span);
+      return <g key={e.id}>
+        {paths.map((d, q) => d && <path key={q} d={d} fill={col} fillOpacity={0.25 + 0.75 * ((q + 0.5) / BUCKETS)}
+          stroke="#000" strokeOpacity={0.55 * ((q + 0.5) / BUCKETS)} strokeWidth={0.6 * px} />)}
+        {st.map((s, n) => <g key={n}>
+          <circle cx={s.x} cy={s.y} r={(on ? 5 : 4) * px} fill="none" stroke={col} strokeWidth={1.4 * px} strokeOpacity={0.9} />
+          {on && <text x={s.x + 7 * px} y={s.y + 3.5 * px} fontSize={10 * px} fill={col} paintOrder="stroke" stroke="#000"
             strokeWidth={2.5 * px}>stood {(s.t1 - s.t0).toFixed(1)} s</text>}
         </g>)}
       </g>;

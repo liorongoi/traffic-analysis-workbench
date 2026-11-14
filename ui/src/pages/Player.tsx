@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, post } from "../api";
 import { fmtT } from "./Events";
 import { NamePick } from "../components/Pick";
-import { Labels, ScoreKey, Tails, TAILS, scoreAt, type TailLen } from "../components/TrackMarks";
+import { Labels, ScoreKey, Tails, TAILS, boxColourSetting, dotColourSetting, hueOf, scoreAt, type TailLen } from "../components/TrackMarks";
 
 // The player: a recording plays with every event's box drawn on it, and is reviewed and edited where it plays, as a
 // still image is. Click a box (or a bar on the timeline) to pick its event; drag on the paused picture to redraw the
@@ -94,6 +94,14 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   const [showId, setShowIdRaw] = useState<boolean>(() => kept("ids", true));
   const [showScore, setShowScoreRaw] = useState<boolean>(() => kept("scores", false));
   const setTail = (v: TailLen) => { setTailRaw(v); keep("tail", v); };
+  // Colours of the boxes and the tail's dots: chosen in Settings, Video.
+  const [dotColour] = useState<string>(dotColourSetting);
+  const [boxColour] = useState<string>(boxColourSetting);
+  // The box's look with the chosen colour (the line style keeps telling the review state).
+  const lookFor = (e: PEvent) => {
+    const l = lookOfEv(e);
+    return boxColour === "state" ? l : { ...l, stroke: boxColour === "target" ? hueOf(e.id) : boxColour };
+  };
   const setShowId = (v: boolean) => { setShowIdRaw(v); keep("ids", v); };
   const setShowScore = (v: boolean) => { setShowScoreRaw(v); keep("scores", v); };
   // Measuring the camera: two points on the road and the real distance between them give km/h and metres.
@@ -350,11 +358,12 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             <svg ref={svg} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%", cursor: drawing ? "crosshair" : "default" }}
               onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}>
-              <Tails events={shown} now={now} len={tail} sel={sel} px={px} lookOf={lookOfEv} boxAt={boxAt} />
+              <Tails events={shown} now={now} len={tail} sel={sel} px={px} lookOf={lookFor} boxAt={boxAt}
+                fps={ov.recording.nominal_fps || 25} colour={dotColour} />
               {shown.map((e) => {
                 const b = boxAt(e, now);
                 if (!b) return null;
-                const look = LOOK[e.status === "rejected" ? "rejected" : e.origin === "human" || e.fixes.length ? "human" : e.status] ?? LOOK.pending;
+                const look = lookFor(e);
                 const on = e.id === sel;
                 return (
                   <g key={e.id} onPointerDown={(ev) => { if (!adding && !measuring && !zoning && e.id !== sel) { ev.stopPropagation(); pick(e); pause(); } }}
@@ -430,6 +439,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               title="A line behind each target showing where it has been; a ring where it stood still">
               {Object.entries(TAILS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
+            <a className="small" href="#/settings/video" title="Colours of the vehicle boxes and of the tail's dots">Colours…</a>
             <label className="check small" title="A small ID over each target, coloured by how sure the detector was">
               <input type="checkbox" checked={showId} onChange={(e) => setShowId(e.target.checked)} /> IDs</label>
             <label className="check small" title="The detector's score (0 to 1) beside each ID (S)">
