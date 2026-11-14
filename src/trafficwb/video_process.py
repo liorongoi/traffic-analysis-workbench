@@ -22,6 +22,7 @@ Rules:
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Callable
 
@@ -38,6 +39,8 @@ MAX_ATTEMPTS = 3
 class VideoSettings:
     interval_s: float = 0.2          # analysis every 0.2 s of presentation time (5 per second)
     chunk_frames: int = 50           # analysed frames per committed chunk
+    chunk_seconds: float = 2.0       # and at most this long: the chunk holds the mission's write lock, which the
+                                     # screens (reviews, edits, colours) wait for, at most busy_timeout (5 s)
     tracker: TrackerParams = field(default_factory=TrackerParams)
     sam3_interval_s: float | None = None   # SAM 3.1 every this many seconds (None: the mission's choice, else 1 s)
     camera: str | None = None              # fixed | moving (None: the mission's choice)
@@ -332,6 +335,7 @@ class VideoProcessor:
         ids = {r["track_key"]: r["id"] for r in self.con.execute(
             "SELECT id, track_key FROM track WHERE run_item_id=?", (it["id"],))}
         in_chunk = 0
+        chunk_start = time.monotonic()
         acc = None                                 # the camera's motion since the tracker last saw a frame
         self.con.execute("BEGIN")
         try:
@@ -380,10 +384,11 @@ class VideoProcessor:
                 last_t, nxt, count = fr.t, nxt_after, count + 1
                 rep.frames += 1
                 in_chunk += 1
-                if in_chunk >= self.s.chunk_frames:
+                if in_chunk >= self.s.chunk_frames or time.monotonic() - chunk_start >= self.s.chunk_seconds:
                     self._checkpoint(it["id"], last_t, nxt, count, tracker, prev, pm)
                     self.con.execute("COMMIT")
                     in_chunk = 0
+                    chunk_start = time.monotonic()
                     self.control.checkpoint()          # pause or cancel only between committed chunks
                     self.con.execute("BEGIN")
             end_t = pr["duration_s"] if pr["duration_s"] else last_t

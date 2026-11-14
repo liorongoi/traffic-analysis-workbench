@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 import threading
+import time
 from pathlib import PurePosixPath
 
 from .detect import family
@@ -187,8 +189,17 @@ def read_missing_colours(svc, events, stop: threading.Event | None = None) -> in
             data = read_target_colours(f.image, e.thumb_box, e.cls) if f is not None else {"error": "frame not found"}
         except Exception as exc:  # noqa: BLE001 (a file gone or unreadable: say so, do not stop the others)
             data = {"error": f"{type(exc).__name__}: {exc}"}
-        svc.con.execute("INSERT OR REPLACE INTO video_event_colour(event_id, version, data, read_at) VALUES (?,?,?,?)",
-                        (e.id, COLOUR_VERSION, json.dumps(data), utcnow()))
+        for attempt in range(12):
+            # A video still being analysed holds the write lock for a moment at a time: wait for it, never give up
+            # on the colours already read.
+            try:
+                svc.con.execute("INSERT OR REPLACE INTO video_event_colour(event_id, version, data, read_at) "
+                                "VALUES (?,?,?,?)", (e.id, COLOUR_VERSION, json.dumps(data), utcnow()))
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc) or attempt == 11 or (stop is not None and stop.is_set()):
+                    raise
+                time.sleep(1.0)
         n += 1
     return n
 

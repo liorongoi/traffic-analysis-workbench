@@ -6,6 +6,8 @@ Mutating requests need the X-TWB header, which blocks cross-site form posts.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -608,6 +610,77 @@ def default_detector_factory(data_root: Path | str | None = None):
     return make_detector(pack), pack.card
 
 
+ACCESS_COOKIE = "twb_access"
+
+
+class AccessBody(BaseModel):
+    key: str
+
+
+def access_key_for(data_root: Path | str, new: bool = False) -> str:
+    """The network access key, kept in <data>/access-key (readable by the server's account only), made when missing."""
+    p = Path(data_root) / "access-key"
+    if not new:
+        try:
+            k = p.read_text(encoding="utf-8").strip()
+            if k:
+                return k
+        except FileNotFoundError:
+            pass
+    p.parent.mkdir(parents=True, exist_ok=True)
+    k = "-".join(secrets.token_hex(3) for _ in range(5))          # e.g. 3f9a1c-07be42-…: easy to read out and type
+    tmp = p.with_name("access-key.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(k + "\n")
+    os.replace(tmp, p)
+    return k
+
+
+def _access_token(key: str) -> str:
+    """What the browser keeps in its cookie: derived from the key, so the cookie is not the key itself."""
+    return hashlib.sha256(("lanepulse-access:" + key).encode()).hexdigest()
+
+
+def _host_allowlist(listening: dict) -> Callable[[str], bool] | None:
+    """The Host header check for a server started by `serve` (None: not started that way, e.g. inside tests).
+
+    On this computer only: localhost and loopback addresses. On the network (--lan): also any IP address, this
+    computer's own names, and the names in TWB_ALLOWED_HOSTS (comma separated). Names an attacker controls are
+    refused, which is what stops DNS rebinding.
+    """
+    import ipaddress
+    import os
+    import socket
+    if not listening.get("port"):
+        return None
+    names = {"localhost"}
+    if listening.get("lan"):
+        try:
+            h = socket.gethostname().lower()
+            names |= {h, h.split(".")[0], h.split(".")[0] + ".local", socket.getfqdn().lower()}
+        except OSError:
+            pass
+        names |= {n.strip().lower() for n in os.environ.get("TWB_ALLOWED_HOSTS", "").split(",") if n.strip()}
+
+    def ok(host: str) -> bool:
+        host = host.strip().lower()
+        if host.startswith("["):                       # [IPv6]:port
+            name = host[1:host.find("]")] if "]" in host else ""
+        else:
+            name = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+        name = name.rstrip(".")
+        if name in names:
+            return True
+        try:
+            ip = ipaddress.ip_address(name)
+        except ValueError:
+            return False
+        return bool(listening.get("lan")) or ip.is_loopback
+
+    return ok
+
+
 def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True,
                plate_factory: Callable | None = None, model_loader: Callable | None = None,
@@ -660,6 +733,39 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         body = exc.detail if isinstance(exc.detail, dict) else {"error": "error", "message": str(exc.detail)}
         return JSONResponse(body, status_code=exc.status_code)
 
+    allowed_host = _host_allowlist(listening)
+
+    @app.middleware("http")
+    async def _host_check(request: Request, call_next):
+        # DNS rebinding: a web page whose own domain is switched to this computer's address would otherwise be
+        # same-origin with the API. Only names that really mean this server are answered.
+        if allowed_host is not None and not allowed_host(request.headers.get("host", "")):
+            return JSONResponse({"error": "bad_host", "message": "This address is not one LanePulse answers on. "
+                                 "Open it by its IP address, or add the name to TWB_ALLOWED_HOSTS."}, status_code=421)
+        return await call_next(request)
+
+    access_key = access_key_for(data_root) if listening.get("lan") else None
+    access_token = _access_token(access_key) if access_key else None
+    OPEN_PATHS = ("/api/health", "/api/access")
+
+    def has_access(request: Request) -> bool:
+        if access_token is None:
+            return True
+        if hmac.compare_digest(request.cookies.get(ACCESS_COOKIE, ""), access_token):
+            return True
+        auth = request.headers.get("authorization", "")
+        return auth.lower().startswith("bearer ") and hmac.compare_digest(auth[7:].strip(), access_key)
+
+    @app.middleware("http")
+    async def _access(request: Request, call_next):
+        # On the network the API needs the access key (made at install, `trafficwb-web key`). Workers keep their own
+        # pairing codes on /api/worker/; the screens themselves are not data and load without it, to ask for the key.
+        path = request.url.path
+        if access_token is not None and path.startswith("/api/") and path not in OPEN_PATHS \
+                and not path.startswith("/api/worker/") and not has_access(request):
+            return JSONResponse({"error": "need_key", "message": "Enter the LanePulse access key."}, status_code=401)
+        return await call_next(request)
+
     @app.middleware("http")
     async def _csrf(request: Request, call_next):
         if request.url.path.startswith("/api/") and request.method in ("POST", "PUT", "PATCH", "DELETE") \
@@ -692,6 +798,23 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
 
     def flt(b: FilterBody | None) -> Filter:
         return Filter(**b.model_dump()) if b else Filter()
+
+    @app.get("/api/access")
+    def access_state(request: Request):
+        return {"required": access_token is not None, "ok": has_access(request)}
+
+    @app.post("/api/access")
+    def access_enter(body: AccessBody, request: Request):
+        if access_token is None:
+            return {"required": False, "ok": True}
+        if not hmac.compare_digest(body.key.strip(), access_key):
+            time.sleep(1)                                  # slows guessing; the key is long and random anyway
+            raise ApiError(403, "wrong_key", "That is not the access key. Ask whoever installed the server, "
+                                             "or run: sudo lanepulse key")
+        r = JSONResponse({"required": True, "ok": True})
+        r.set_cookie(ACCESS_COOKIE, access_token, max_age=400 * 86400, httponly=True, samesite="strict",
+                     secure=request.url.scheme == "https")
+        return r
 
     # A neutral health probe keeps installers and supervisors independent of any user or session API.
     @app.get("/api/health")
@@ -2693,7 +2816,13 @@ def main(argv=None) -> int:
     s.add_argument("--lan", action="store_true", help="accept connections from other computers on the network")
     s.add_argument("--backup-dir", help="folder for the nightly database backup, ideally on another drive")
     s.add_argument("--backup-at", default="02:00", help="local time of the nightly backup (HH:MM)")
+    k = sub.add_parser("key", help="show the access key the browser asks for on the network (--lan)")
+    k.add_argument("--data", required=True)
+    k.add_argument("--new", action="store_true", help="make a new key (browsers must enter it again)")
     args = ap.parse_args(argv)
+    if args.cmd == "key":
+        print(access_key_for(args.data, new=args.new))
+        return 0
     if args.cmd == "serve":
         host = "0.0.0.0" if args.lan else "127.0.0.1"
         uvicorn.run(create_app(args.data, backup_dir=args.backup_dir, backup_at=args.backup_at,
