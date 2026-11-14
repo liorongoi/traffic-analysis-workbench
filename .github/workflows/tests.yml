@@ -3,6 +3,10 @@ on:
   push:
     branches: [main, "codex/**"]
   pull_request:
+# A newer push to the same branch cancels the build still running for an older one (main always runs to the end).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   test:
     strategy:

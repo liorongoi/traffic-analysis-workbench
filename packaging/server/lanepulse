@@ -1,18 +1,46 @@
 #!/bin/bash
 # Day-to-day control of the LanePulse server.   lanepulse help
+# Works for both kinds of install: the system service (sudo ./install-server.sh; commands that change it need sudo)
+# and the install made without root (./install-server.sh as an ordinary user; nothing needs sudo).
 set -euo pipefail
 CONF=/etc/lanepulse/lanepulse.conf
-BASE=/opt/lanepulse
 [ -f "$CONF" ] || { echo "LanePulse is not installed (no $CONF)."; exit 1; }
+MODE=system
+BASE=/opt/lanepulse
 # shellcheck disable=SC1090
 . "$CONF"
 PY="$BASE/current/python/bin/python3"
-need_root() { [ "$(id -u)" = 0 ] || { echo "Run with sudo: sudo lanepulse $*"; exit 1; }; }
-as_service() { if [ "$(id -u)" = 0 ]; then runuser -u lanepulse -- "$@"; else "$@"; fi; }
+if [ "$MODE" = user ]; then
+  SUDO=""
+  need_root() { :; }
+  as_service() { "$@"; }
+  # shellcheck source=user-service.sh
+  . "$BASE/user-service.sh"
+else
+  SUDO="sudo "
+  need_root() { [ "$(id -u)" = 0 ] || { echo "Run with sudo: sudo lanepulse $*"; exit 1; }; }
+  as_service() { if [ "$(id -u)" = 0 ]; then runuser -u lanepulse -- "$@"; else "$@"; fi; }
+fi
+svc() {   # start | stop | restart
+  if [ "$MODE" = user ]; then
+    case "$1" in
+      stop) user_service_stop "$BASE";;
+      start) user_service_start "$BASE";;
+      restart) user_service_stop "$BASE"; user_service_start "$BASE";;
+    esac
+  else
+    systemctl "$1" lanepulse.service
+  fi
+}
 cmd="${1:-help}"; shift || true
 case "$cmd" in
   status)
-    systemctl --no-pager --lines=0 status lanepulse.service || true
+    if [ "$MODE" = user ]; then
+      echo "Installed for user $(id -un) in $BASE; starts by itself: ${SERVICE:-none}"
+      [ -e "$BASE/stopped" ] && echo "Stopped on purpose (lanepulse start starts it again)."
+    else
+      systemctl --no-pager --lines=0 status lanepulse.service || true
+    fi
     echo
     if curl -fsS -m 3 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
       echo "Answering at http://$(hostname -I | awk '{print $1}'):$PORT  (version $(basename "$(readlink -f "$BASE/current")" | sed 's/^lanepulse-//'))"
@@ -21,25 +49,37 @@ case "$cmd" in
     fi
     command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total --format=csv || true
     echo "Data: $DATA   Backups: $BACKUPS   Models: $MODELS   Allowed from: ${ALLOW:-any}";;
-  start|stop|restart) need_root "$cmd"; systemctl "$cmd" lanepulse.service; echo "LanePulse: $cmd done.";;
+  start|stop|restart)
+    need_root "$cmd"; svc "$cmd"
+    if [ "$cmd" != stop ]; then
+      for _ in $(seq 90); do curl -fsS -m 2 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && break; sleep 1; done
+    fi
+    echo "LanePulse: $cmd done.";;
   logs) tail -n "${1:-100}" -f "$BASE/logs/server.log";;
   import-model)
     need_root import-model
-    [ -n "${1:-}" ] || { echo "Usage: sudo lanepulse import-model <model .zip>"; exit 2; }
-    Z="$(readlink -f "$1")"; T="$(mktemp -d)"; cp "$Z" "$T/"; chown -R lanepulse "$T"
-    runuser -u lanepulse -- "$PY" -c 'import sys; from trafficwb.model_import import main; sys.exit(main(sys.argv[1:]))' \
+    [ -n "${1:-}" ] || { echo "Usage: ${SUDO}lanepulse import-model <model .zip>"; exit 2; }
+    Z="$(readlink -f "$1")"; T="$(mktemp -d)"; cp "$Z" "$T/"
+    [ "$MODE" = system ] && chown -R lanepulse "$T"
+    as_service "$PY" -c 'import sys; from trafficwb.model_import import main; sys.exit(main(sys.argv[1:]))' \
       --models "$MODELS" import "$T/$(basename "$Z")"
     rm -rf "$T";;
   models) "$PY" -c 'import sys; from trafficwb.model_import import main; sys.exit(main(sys.argv[1:]))' --models "$MODELS" list;;
   backup)
     need_root backup
-    runuser -u lanepulse -- "$PY" -c 'import sys; from trafficwb.admin import main; sys.exit(main(sys.argv[1:]))' \
+    as_service "$PY" -c 'import sys; from trafficwb.admin import main; sys.exit(main(sys.argv[1:]))' \
       backup --data "$DATA" --to "$BACKUPS" "$@";;
   speed-check)
     need_root speed-check
-    runuser -u lanepulse -- env TWB_MODELS="$MODELS" TWB_ACCELERATOR="${TWB_ACCELERATOR:-auto}" \
+    as_service env TWB_MODELS="$MODELS" TWB_ACCELERATOR="${TWB_ACCELERATOR:-auto}" \
       "$PY" -c 'import sys; from trafficwb.speedcheck import main; sys.exit(main(sys.argv[1:]))' --out "$BASE/logs/speed-check.txt" "$@";;
   firewall)
+    if [ "$MODE" = user ]; then
+      echo "Changing the firewall needs the server's administrator. Ask them to allow TCP port $PORT from ${ALLOW:-any}:"
+      echo "  Red Hat:  sudo firewall-cmd --permanent --add-port=$PORT/tcp && sudo firewall-cmd --reload"
+      echo "  Ubuntu:   sudo ufw allow from ${ALLOW:-any} to any port $PORT proto tcp"
+      exit 0
+    fi
     need_root firewall
     # shellcheck source=system.sh
     . "$BASE/system.sh"
@@ -49,9 +89,11 @@ case "$cmd" in
     [ -L "$BASE/previous" ] || { echo "No previous version to go back to."; exit 1; }
     cur="$(readlink "$BASE/current")"; prev="$(readlink "$BASE/previous")"
     ln -sfn "$prev" "$BASE/current"; ln -sfn "$cur" "$BASE/previous"
-    # shellcheck source=system.sh
-    . "$BASE/system.sh"; selinux_label "$BASE"
-    systemctl restart lanepulse.service
+    if [ "$MODE" = system ]; then
+      # shellcheck source=system.sh
+      . "$BASE/system.sh"; selinux_label "$BASE"
+    fi
+    svc restart
     echo "Now running $(basename "$prev"). If the update changed the database format, restore the backup taken before it"
     echo "(see INSTALL.txt, Roll back).";;
   setup-training)
@@ -59,37 +101,40 @@ case "$cmd" in
     "$PY" -c 'from trafficwb.train import pick_device, describe_device; print("Training would use:", describe_device(pick_device()))';;
   train)
     need_root train
-    [ -n "${1:-}" ] || { echo "Usage: sudo lanepulse train <exported dataset folder> [--epochs 40]  (or press Train on the learning page)"; exit 2; }
+    [ -n "${1:-}" ] || { echo "Usage: ${SUDO}lanepulse train <exported dataset folder> [--epochs 40]  (or press Train on the learning page)"; exit 2; }
     DS="$1"; shift
     OUT="$(dirname "$MODELS")/trained"; mkdir -p "$OUT"
     "$PY" -c 'import sys; from trafficwb.train import main; sys.exit(main(sys.argv[1:]))' run --dataset "$DS" --out "$OUT" "$@"
-    echo "To use it: sudo lanepulse import-model $(ls -t "$OUT"/*.zip | head -1)";;
+    echo "To use it: ${SUDO}lanepulse import-model $(ls -t "$OUT"/*.zip | head -1)";;
   worker)
     # Help another LanePulse server analyse long videos (asks for its address and pairing code when left out).
     TWB_MODELS="$MODELS" "$PY" -m trafficwb.workers "$@";;
-  key)
-    # The access key browsers ask for (made at install). "sudo lanepulse key --new" replaces it.
-    need_root key
-    runuser -u lanepulse -- "$PY" -c 'import sys; from trafficwb.web.app import main; sys.exit(main(sys.argv[1:]))' \
-      key --data "$DATA" "$@"
-    [ "${1:-}" = "--new" ] && systemctl restart lanepulse.service && echo "Restarted: browsers must enter the new key." || true;;
+  password)
+    # The password browsers ask for. "lanepulse password" sets a new one (asks twice): the way back in when it
+    # is forgotten. --show prints the one made at install (until someone chooses their own).
+    need_root password
+    as_service "$PY" -c 'import sys; from trafficwb.web.app import main; sys.exit(main(sys.argv[1:]))' \
+      password --data "$DATA" "$@";;
+  key) exec "$0" password --show;;
   version) basename "$(readlink -f "$BASE/current")" | sed 's/^lanepulse-//';;
+  uninstall) exec "$BASE/uninstall-server.sh";;
   *)
     cat <<HELP
 lanepulse status                 is it running, where, on which GPU
-sudo lanepulse start|stop|restart
+${SUDO}lanepulse start|stop|restart
 lanepulse logs [lines]           follow the server log (Ctrl+C to leave)
-sudo lanepulse import-model ZIP  add a trained model; then evaluate and promote it on the learning page
+${SUDO}lanepulse import-model ZIP  add a trained model; then evaluate and promote it on the learning page
 lanepulse models                 installed models
-sudo lanepulse key [--new]       the access key the browser asks for (--new replaces it)
-sudo lanepulse backup [--with-evidence]
-sudo lanepulse speed-check [--images FOLDER]
-sudo lanepulse firewall          allow only $ALLOW to port $PORT (and SSH), turn the firewall on
-sudo lanepulse rollback          go back to the previous version
+${SUDO}lanepulse password         choose a new password (also when it is forgotten); --show: the one from install
+${SUDO}lanepulse backup [--with-evidence]
+${SUDO}lanepulse speed-check [--images FOLDER]
+${SUDO}lanepulse firewall          allow only ${ALLOW:-any} to port $PORT$([ "$MODE" = user ] && echo " (says what to ask the administrator)" || echo " (and SSH), turn the firewall on")
+${SUDO}lanepulse rollback          go back to the previous version
 lanepulse setup-training         which GPU training on the learning page uses (PyTorch is built in)
-sudo lanepulse train FOLDER      train on an exported dataset from the command line
+${SUDO}lanepulse train FOLDER      train on an exported dataset from the command line
 lanepulse worker [--server URL --code CODE]  help another LanePulse server analyse long videos
-Settings: $CONF (then sudo lanepulse restart)
+${SUDO}lanepulse uninstall         remove the program; data, backups and models are kept
+Settings: $CONF (then ${SUDO}lanepulse restart)
 HELP
     ;;
 esac

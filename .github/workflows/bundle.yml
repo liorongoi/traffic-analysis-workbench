@@ -7,6 +7,10 @@ on:
   push:
     branches: [main, "claude/**", "codex/**"]
   workflow_dispatch:
+# A newer push to the same branch cancels the build still running for an older one (main always runs to the end).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 # actions: read lets each job fetch the previous build from main, to test updating over it.
 permissions:
   contents: read
@@ -33,11 +37,30 @@ jobs:
         run: |
           python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           python -m pip install "rfdetr[train]>=1.12.1,<1.13" "onnx>=1.16"
-      # Stopgap: one Setup.exe holds at most 4.2 GB, so the Windows build leaves out the largest sizes (the app falls back
-      # to the nearest installed size) until Setup is split across files; the server and Mac builds carry every size.
-      - run: >-
-          python scripts/fetch_models.py --require-rfdetr --require-detr --yolox-sizes nano,tiny,s,m
-          --rfdetr-sizes nano,small --detr-sizes d-fine:nano,d-fine:small,d-fine:medium,rt-detr:r18
+      # Every detector size, as in the server and Mac builds. One Setup.exe holds at most 4.2 GB, so the largest sizes
+      # go in a second wizard, LanePulse-Detectors (detectors.iss); without it the app uses the nearest size installed.
+      - run: python scripts/fetch_models.py --require-rfdetr --require-detr
+      - name: Set the largest sizes aside for the detectors installer
+        shell: pwsh
+        run: |
+          $extra = "yolox-l", "yolox-x", "rf-detr-medium", "d-fine-large", "d-fine-xlarge", "rt-detr-r34", "rt-detr-r50", "rt-detr-r101"
+          $det = "$env:RUNNER_TEMP\detectors"
+          New-Item -ItemType Directory -Force "$det\models", "$det\training" | Out-Null
+          foreach ($n in $extra) {
+            if (-not (Test-Path "models\$n")) { throw "models\$n was not fetched" }
+            Move-Item "models\$n" "$det\models\$n"
+            $w = if ($n -like "yolox-*") { "yolox_$($n.Substring(6)).pth" } else { "$n-coco.pth" }
+            if (-not (Test-Path "training_weights\$w")) { throw "training_weights\$w was not fetched" }
+            Move-Item "training_weights\$w" "$det\training\$w"
+          }
+          Copy-Item packaging\install-detectors.ps1 $det
+          Push-Location $det
+          Get-ChildItem -Recurse -File models, training | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $((Resolve-Path -Relative $_.FullName).Substring(2) -replace '\\', '/')"
+          } | Set-Content -Encoding ascii SHA256SUMS
+          Pop-Location
+          Get-Content "$det\SHA256SUMS"
+          Write-Host ("Detectors: {0:N2} GB" -f ((Get-ChildItem -Recurse -File $det | Measure-Object Length -Sum).Sum / 1GB))
       - name: LanePulse's own Python (python-build-standalone, checked against its SHA-256; never registered in Windows)
         shell: pwsh
         run: |
@@ -74,7 +97,9 @@ jobs:
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
           & $iscc "/DBundleDir=$PWD\dist\${{ steps.py.outputs.folder }}" "/DAppVersion=${{ steps.py.outputs.version }}" "/DOutDir=$PWD\setup" packaging\setup.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
-          Get-ChildItem setup | Format-Table Name, Length
+          & $iscc "/DDetDir=$env:RUNNER_TEMP\detectors" "/DAppVersion=${{ steps.py.outputs.version }}" "/DOutDir=$PWD\detectors-setup" packaging\detectors.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed for the detectors installer" }
+          Get-ChildItem setup, detectors-setup | Format-Table Name, Length
       - name: The previous build from main, to test updating over it
         shell: pwsh
         env:
@@ -107,7 +132,7 @@ jobs:
             # Not Start-Process -Wait: PowerShell 7 would also wait for a server left running.
             $p = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup-$what.log"
             $done = $p.WaitForExit(15 * 60 * 1000)
-            Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 25
+            Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 25 | Out-Host
             if (-not $done) { Get-Content "$env:RUNNER_TEMP\setup-$what.log" | Select-Object -Last 40; throw "$what did not finish in 15 minutes" }
             if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\setup-$what.log" | Select-Object -Last 40; throw "$what exit code $($p.ExitCode)" }
             if (-not (Test-Path "$dir\current.txt")) { throw "$what did not install the app" }
@@ -165,6 +190,64 @@ jobs:
           Remove-Item -Recurse -Force "$dir\trained-models"
           $null = Install-Wizard "reinstall"        # after an uninstall, with the data kept
           Uninstall-Wizard                          # the server is running again here too
+      - name: Try the detectors wizard (LanePulse, then the large sizes, then each uninstalled)
+        shell: pwsh
+        env:
+          PIP_NO_INDEX: "1"
+          HTTPS_PROXY: http://127.0.0.1:9
+          HTTP_PROXY: http://127.0.0.1:9
+        run: |
+          $env:PATH = ($env:PATH -split ";" | Where-Object { $_ -notmatch "Python" }) -join ";"
+          $dir = "$env:LOCALAPPDATA\TrafficWorkbench"
+          function Run-Setup([string]$exe, [string]$what) {
+            $p = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup-$what.log"
+            if (-not $p.WaitForExit(20 * 60 * 1000) -or $p.ExitCode -ne 0) {
+              Get-Content "$dir\logs\install-detectors.log", "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 30
+              throw "$($what): Setup failed (code $($p.ExitCode))"
+            }
+          }
+          function Uninstall-App([string]$id, [string]$what) {
+            $k = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{$id}_is1"
+            $exe = $k.UninstallString.Trim('"')
+            # The uninstaller hands over to a copy of itself in TEMP and exits (its exit code says nothing then);
+            # it is done when its .exe is gone.
+            $p = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
+            $null = $p.WaitForExit(5 * 60 * 1000)
+            for ($i = 0; $i -lt 120 -and (Test-Path $exe); $i++) { Start-Sleep -Seconds 2 }
+            if (Test-Path $exe) { throw "$($what): the uninstaller did not finish" }
+          }
+          # Without LanePulse it refuses, and adds nothing.
+          $det = (Get-ChildItem detectors-setup -Filter *.exe | Select-Object -First 1).FullName
+          $p = Start-Process -PassThru $det -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
+          $null = $p.WaitForExit(5 * 60 * 1000)
+          if ($p.ExitCode -eq 0) { throw "the detectors installer ran without LanePulse installed" }
+          Run-Setup (Get-ChildItem setup -Filter *.exe | Select-Object -First 1).FullName "main"
+          & "$dir\autostart.ps1" -Mode remove | Out-Host
+          $venv = (Get-Content "$dir\current.txt" -Raw).Trim()
+          $cli = "$venv\Scripts\trafficwb-models.exe"
+          $before = (& $cli --models "$dir\models" list) -join "`n"
+          if ($before -match "yolox-x") { throw "the main Setup should not carry YOLOX-x" }
+          Run-Setup $det "detectors"
+          $after = (& $cli --models "$dir\models" list) -join "`n"
+          Write-Host $after
+          foreach ($n in "yolox-l", "yolox-x", "rf-detr-medium", "d-fine-large", "d-fine-xlarge", "rt-detr-r34", "rt-detr-r50", "rt-detr-r101") {
+            if ($after -notmatch [regex]::Escape($n)) { throw "$n is not installed after the detectors wizard" }
+          }
+          if (-not (Test-Path "$venv\share\lanepulse\yolox_x.pth")) { throw "the YOLOX-x training starting weights were not installed" }
+          Uninstall-App "B4D2A7C9-3E61-4F58-8A0D-5C9E1B7F2A43" "detectors"
+          $left = (& $cli --models "$dir\models" list) -join "`n"
+          if ($left -match "yolox-x") { throw "uninstalling the detectors left YOLOX-x" }
+          if ($left -notmatch "yolox-s") { throw "uninstalling the detectors removed LanePulse's own YOLOX-s" }
+          if (-not (Test-Path "$dir\current.txt")) { throw "uninstalling the detectors removed LanePulse" }
+          . "$PWD\.github\scripts\uninstall_check.ps1"
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\TrafficData\keep-me" | Out-Null
+          Test-Uninstall -Dir $dir -Data "$env:USERPROFILE\TrafficData"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LanePulse-Detectors-${{ steps.py.outputs.version }}
+          path: detectors-setup/*.exe
+          compression-level: 0
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         with:
           name: LanePulse-Setup-${{ steps.py.outputs.version }}
@@ -244,10 +327,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           runs="$(gh run list -R "${{ github.repository }}" --workflow bundle.yml --branch main --status success -L 200 --json databaseId -q '.[].databaseId')"
-          out="[]"
+          # One build of each earlier version (the newest), at most 8 versions: each update check takes a Windows
+          # runner for up to an hour, and repeats of a version found nothing the first one did not.
+          out="[]"; seen=" "; n=0
           for r in $runs; do
+            [ "$n" -ge 8 ] && break
             name="$(gh api "repos/${{ github.repository }}/actions/runs/$r/artifacts" --jq '[.artifacts[] | select((.name | test("-Setup-")) and (.expired | not))][0].name // empty')"
-            if [ -n "$name" ]; then out="$(echo "$out" | jq -c --arg r "$r" --arg n "$name" '. + [{run: $r, name: $n}]')"; fi
+            if [ -n "$name" ] && [ "${seen#* $name }" = "$seen" ]; then
+              seen="$seen$name "; n=$((n + 1)); out="$(echo "$out" | jq -c --arg r "$r" --arg n "$name" '. + [{run: $r, name: $n}]')"
+            fi
           done
           echo "$out" | jq .
           echo "runs=$out" >> "$GITHUB_OUTPUT"
@@ -608,6 +696,34 @@ jobs:
           sudo "$P/install-server.sh" --allow-from any --skip-check
           up
           sudo /opt/lanepulse/uninstall-server.sh
+      - name: Try it without root (an ordinary user, no sudo anywhere)
+        run: |
+          set -x
+          P="$RUNNER_TEMP/pkg/${{ steps.srv.outputs.name }}"
+          h() { curl -fsS -m 2 http://127.0.0.1:8765/api/health; }
+          up() { for i in $(seq 120); do h && return 0; sleep 1; done; tail -40 ~/lanepulse/logs/server.log; return 1; }
+          "$P/install-server.sh"                              # with the offline install check
+          h
+          test ! -e /opt/lanepulse && test -d ~/lanepulse/data
+          export PATH="$HOME/.local/bin:$PATH"
+          lanepulse status
+          test -n "$(lanepulse password --show)"
+          grep -E '^SERVICE="(systemd-user|cron)"' ~/lanepulse/lanepulse.conf
+          lanepulse stop
+          if h; then echo "still answering after lanepulse stop"; exit 1; fi
+          sleep 70                                            # a stop on purpose stays stopped
+          if h; then echo "started again after lanepulse stop"; exit 1; fi
+          lanepulse start && up
+          # It comes back by itself after a crash.
+          kill -9 "$(cat ~/lanepulse/logs/server.pid)"
+          sleep 2; up
+          mkdir -p ~/lanepulse/data/keep-me
+          "$P/install-server.sh" --skip-check                 # repair: the same version again
+          up && test -d ~/lanepulse/data/keep-me
+          lanepulse uninstall
+          if h; then echo "still running after uninstall"; exit 1; fi
+          test -d ~/lanepulse/data/keep-me && test ! -e ~/.local/bin/lanepulse
+          if crontab -l 2>/dev/null | grep -q LanePulse; then echo "cron entry left behind"; exit 1; fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.srv.outputs.name }}
@@ -729,6 +845,11 @@ jobs:
       - uses: actions/download-artifact@v4
         if: steps.v.outputs.exists != '1'
         with:
+          name: LanePulse-Detectors-${{ steps.v.outputs.version }}
+          path: rel
+      - uses: actions/download-artifact@v4
+        if: steps.v.outputs.exists != '1'
+        with:
           name: LanePulse-Mac-${{ steps.v.outputs.version }}
           path: rel
       - uses: actions/download-artifact@v4
@@ -777,6 +898,8 @@ jobs:
               printf -- "$split_note"
               echo
             fi
+            echo "**Windows**: LanePulse-Setup-$V.exe installs LanePulse; LanePulse-Detectors-$V.exe (optional, run after it) adds the largest detector sizes."
+            echo
             echo "SHA256SUMS lists each whole file, to check the joined file with \`sha256sum -c SHA256SUMS --ignore-missing\` (or \`certutil -hashfile <file> SHA256\` on Windows)."
           } > ../notes.md
           cat ../notes.md; ls -l
