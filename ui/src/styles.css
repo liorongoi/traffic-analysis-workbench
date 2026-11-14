@@ -730,3 +730,13 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
 .measure-line { pointer-events: none; }
 .in-view .count-tile .small { overflow-wrap: anywhere; }
 .heat-scale { display: inline-block; width: 90px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, rgba(255, 140, 0, 0.05), rgba(255, 140, 0, 0.95)); border: 1px solid var(--line-strong, #666); }
+
+/* where the map and the ground heights come from (geo-registration) */
+.mapsrc-tabs { margin-bottom: 2px; }
+.mapsrc-tabs button { flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 12px; min-height: 46px; text-align: start; }
+.mapsrc-tabs button small { color: var(--muted); font-size: 12px; font-weight: 500; }
+.mapsrc label.small, .serverform label.small, .platform label.small { display: grid; gap: 4px; }
+.platform .grow { flex: 1 1 220px; }
+.serverform .grow { flex: 1 1 200px; }
+.serverform { background: transparent; }
+.maplayers label { cursor: pointer; }
