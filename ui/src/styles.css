@@ -738,12 +738,3 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
 .serverform .grow { flex: 1 1 200px; }
 .serverform { background: transparent; }
 .maplayers label { cursor: pointer; }
-/* the player's bird's-eye view: the road from above */
-.player .views { display: grid; gap: 8px; }
-.player .views.both { grid-template-columns: 1fr 1fr; }
-.player .stage.offstage { position: absolute; width: 2px; height: 2px; opacity: 0; pointer-events: none; overflow: hidden; }
-.stage.bev { user-select: none; -webkit-user-select: none; touch-action: none; }
-.stage.bev svg text { pointer-events: none; font-family: var(--mono, ui-monospace, monospace); }
-.bev-tools { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; }
-.bev-tools button { min-height: 26px; padding: 2px 10px; background: rgba(8, 12, 18, .72); }
-.bev-note { position: absolute; left: 8px; bottom: 30px; right: 8px; font-size: 12px; color: var(--warn); text-shadow: 0 1px 2px #000; pointer-events: none; }

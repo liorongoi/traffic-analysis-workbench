@@ -9,7 +9,8 @@ import { fmtT } from "./Events";
 // target of the video is drawn on the map along the road it drove. The camera is kept by folder, like its lines.
 // The map and the ground heights come from files, an online service or a server on our network (MapSources).
 // The frame is laid on the map (no black edges) inside its footprint: the near part green when the camera is placed by
-// points (red for flight data only), the far part, toward the horizon, in its own colour.
+// points (red for flight data only), the far part, toward the horizon, in its own colour. For a fixed camera the
+// picture laid on the map is the empty road (moving vehicles taken out), so the map shows the ground it covers.
 
 type MapInfo = { width: number; height: number; top: number; left: number; bottom: number; right: number; m_per_px: number };
 type Pt = [number, number, number, number];                    // x, y on the frame; lat, lon on the map
@@ -35,7 +36,7 @@ export default function GeoPlace({ missionId, versionId }: { missionId: string; 
   const [dtmPath, setDtmPath] = useState<string | null>(null);
   const [dtm, setDtm] = useState<DtmInfo | null>(null);
   const [fp, setFp] = useState<Footprint | null>(null);
-  const [layers, setLayers] = useState({ frame: true, footprint: true, shade: true });
+  const [layers, setLayers] = useState({ frame: true, empty: true, footprint: true, shade: true, paths: false });
   const [aligning, setAligning] = useState(false);
   const [corners, setCorners] = useState("");
   const [info, setInfo] = useState<MapInfo | null>(null);
@@ -106,6 +107,7 @@ export default function GeoPlace({ missionId, versionId }: { missionId: string; 
     setSaved(null); setPts([]); setFit(null); setMsg({ kind: "ok", text: "The camera is no longer on the map." });
   };
 
+  const fixedCam = fp?.how === "points" || fp?.how === "points-poor";
   const centres: { label: string; ll: LatLon | null }[] = [
     { label: "The points picked", ll: pts.length ? [pts.reduce((a, p) => a + p[2], 0) / pts.length, pts.reduce((a, p) => a + p[3], 0) / pts.length] : null },
     { label: "Where the camera looks (its footprint)", ll: fp?.bounds ? [(fp.bounds[0] + fp.bounds[2]) / 2, (fp.bounds[1] + fp.bounds[3]) / 2] : null },
@@ -163,14 +165,17 @@ export default function GeoPlace({ missionId, versionId }: { missionId: string; 
               <input type="range" min={0} max={Math.max(0.1, rec.duration - 0.1)} step={0.1} value={t} onChange={(e) => setT(Number(e.target.value))} style={{ flex: 1 }} /></label>}
           </div>
           <div style={{ flex: "1 1 420px", minWidth: 300 }}>
-            {info && mapPath ? <MapPanel src={`/api/map-image?${mapQuery}`} info={info} pts={pts} fit={fit} paths={paths} onPick={onMap} waiting={!!half}
+            {info && mapPath ? <MapPanel src={`/api/map-image?${mapQuery}`} info={info} pts={pts} fit={fit} paths={layers.paths ? paths : []} onPick={onMap} waiting={!!half}
               fp={layers.footprint ? fp : null}
-              frameSrc={layers.frame && fp?.bounds ? `/api/missions/${missionId}/recordings/${versionId}/frame-on-map?t=${t.toFixed(1)}${dtmQ}&v=${saved?.created_at ?? ""}${fit ? fit.rms_m : ""}` : null}
+              frameSrc={layers.frame && fp?.bounds ? `/api/missions/${missionId}/recordings/${versionId}/frame-on-map?t=${fixedCam && layers.empty ? "0.0" : t.toFixed(1)}${dtmQ}${fixedCam && layers.empty ? "&empty=1" : ""}&v=${saved?.created_at ?? ""}${fit ? fit.rms_m : ""}` : null}
               shadeSrc={layers.shade && dtmPath ? `/api/terrain-shade?path=${encodeURIComponent(dtmPath)}&top=${info.top}&left=${info.left}&bottom=${info.bottom}&right=${info.right}&w=${Math.min(2048, info.width)}` : null} />
               : <div className="muted small" style={{ padding: 24 }}>Pick or fetch a map first.</div>}
             {info && mapPath && <div className="row small maplayers" style={{ gap: 14, flexWrap: "wrap", marginTop: 6 }}>
-              <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={layers.frame} onChange={(e) => setLayers({ ...layers, frame: e.target.checked })} />The frame on the map</label>
+              <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={layers.frame} onChange={(e) => setLayers({ ...layers, frame: e.target.checked })} />{fixedCam && layers.empty ? "The ground the camera covers" : "The frame on the map"}</label>
+              {fixedCam && layers.frame && <label className="row" style={{ gap: 6 }} title="The road as it is without traffic: the middle of many frames across the video, so moving vehicles drop out">
+                <input type="checkbox" checked={layers.empty} onChange={(e) => setLayers({ ...layers, empty: e.target.checked })} />Vehicles removed</label>}
               <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={layers.footprint} onChange={(e) => setLayers({ ...layers, footprint: e.target.checked })} />Footprint</label>
+              {paths.length > 0 && <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={layers.paths} onChange={(e) => setLayers({ ...layers, paths: e.target.checked })} />Vehicle paths</label>}
               {dtmPath && <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={layers.shade} onChange={(e) => setLayers({ ...layers, shade: e.target.checked })} />Hill shading</label>}
               <FootprintKey fp={fp} aligning={aligning} />
             </div>}
@@ -257,7 +262,10 @@ function MapPanel({ src, info, pts, fit, paths, onPick, waiting, fp, frameSrc, s
       [c(b[2], info.bottom - dl, info.top + dl), c(b[3], info.left - dw, info.right + dw)]];
   };
   useEffect(() => {
-    const ll = [...pts.map((p) => [p[2], p[3]]), ...paths.flatMap((p) => p.path.map((q) => [q[1], q[2]])),
+    // a path that runs off toward the horizon (far boxes) does not set the view: only its points around the map
+    const dl = (info.top - info.bottom) / 2, dw = (info.right - info.left) / 2;
+    const near = (q: number[]) => q[0] <= info.top + dl && q[0] >= info.bottom - dl && q[1] >= info.left - dw && q[1] <= info.right + dw;
+    const ll = [...pts.map((p) => [p[2], p[3]]), ...paths.flatMap((p) => p.path.map((q) => [q[1], q[2]])).filter(near),
       ...(fp?.view_bounds ? clip(fp.view_bounds) : fp?.bounds ? [[fp.bounds[0], fp.bounds[1]], [fp.bounds[2], fp.bounds[3]]] : [])];
     if (!ll.length) return;
     const xs = ll.map((q) => toX(q[1])), ys = ll.map((q) => toY(q[0]));
