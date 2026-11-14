@@ -271,6 +271,13 @@ class CrowdAlertBody(BaseModel):
     people: int | None = Field(None, ge=2, le=10000)
 
 
+class GeoBody(BaseModel):
+    points: list[list[float]] = Field(..., min_length=1, max_length=100)    # [x, y, lat, lon]
+    map_path: str | None = None
+    corners: list[float] | None = Field(None, min_length=4, max_length=4)
+    check_only: bool = False
+
+
 class CalibrationBody(BaseModel):
     points: list[float] = Field(..., min_length=4, max_length=4)
     meters: float
@@ -2304,6 +2311,66 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             return {"zones": Zones(m).of(version_id), "line_names": LINE_NAMES, "area_names": AREA_NAMES}
         except ZoneError as exc:
             raise ApiError(404, "zone", str(exc)) from None
+
+    # ---------- a fixed camera on the map (video_geo) ----------
+    def _geo_call(fn):
+        from ..video_geo import GeoError
+        try:
+            return fn()
+        except GeoError as exc:
+            raise ApiError(400, "geo", str(exc)) from None
+
+    @app.get("/api/map-files")
+    def map_files_get(folder: str, _u: User = Depends(user)):
+        """Map pictures in a folder on this computer: GeoTIFFs, and JPEG or PNG pictures (they need their corners)."""
+        from ..video_geo import map_files
+        return {"files": _geo_call(lambda: map_files(folder))}
+
+    @app.get("/api/map-info")
+    def map_info_get(path: str, corners: str | None = None, _u: User = Depends(user)):
+        """Where a map file is: its corners in latitude and longitude, its size and metres per pixel."""
+        from ..video_geo import load_map, map_info
+        cs = [float(v) for v in corners.split(",")] if corners else None
+        return _geo_call(lambda: map_info(load_map(path, cs)))
+
+    @app.get("/api/map-image")
+    def map_image_get(path: str, corners: str | None = None, _u: User = Depends(user)):
+        """The map file as a JPEG (at most 4096 pixels a side), for the browser to draw on."""
+        from ..video_geo import load_map, preview
+        cs = [float(v) for v in corners.split(",")] if corners else None
+        data = _geo_call(lambda: preview(load_map(path, cs)))
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=600"})
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/geo")
+    def geo_get(version_id: int, m: Mission = Depends(mission)):
+        """This camera on the map (points, map file and fit), or null."""
+        from ..video_geo import CameraGeo
+        _video(m)
+        return {"geo": _geo_call(lambda: CameraGeo(m).get(version_id))}
+
+    @app.put("/api/missions/{mission_id}/recordings/{version_id}/geo")
+    def geo_set(version_id: int, body: GeoBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Put the camera on the map from points picked on a frame and on the map (``check_only``: fit, do not save)."""
+        from ..video_geo import CameraGeo
+        _video(m)
+        cg = CameraGeo(m)
+        if body.check_only:
+            return {"fit": _geo_call(lambda: cg.check(body.points))}
+        return {"geo": _geo_call(lambda: cg.set(version_id, body.points, body.map_path, body.corners, u.username))}
+
+    @app.delete("/api/missions/{mission_id}/recordings/{version_id}/geo")
+    def geo_clear(version_id: int, m: Mission = Depends(mission), u: User = Depends(user)):
+        from ..video_geo import CameraGeo
+        _video(m)
+        _geo_call(lambda: CameraGeo(m).clear(version_id, u.username))
+        return {"geo": None}
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/map-paths")
+    def geo_paths(version_id: int, m: Mission = Depends(mission)):
+        """Each counted target of this video as a line on the map (latitude and longitude, two points a second)."""
+        from ..video_geo import CameraGeo
+        svc = _video(m)
+        return {"paths": _geo_call(lambda: _video_call(lambda: CameraGeo(m).paths(svc, version_id)))}
 
     @app.get("/api/missions/{mission_id}/recordings/{version_id}/telemetry")
     def telemetry_get(version_id: int, m: Mission = Depends(mission)):

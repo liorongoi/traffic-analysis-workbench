@@ -11,6 +11,7 @@ import Investigate from "./pages/Investigate";
 import RegionEditor from "./pages/RegionEditor";
 import NameFormats from "./pages/NameFormats";
 import Workers from "./pages/Workers";
+import GeoPlace from "./pages/GeoPlace";
 
 export default function App() {
   const route = useRoute();
@@ -21,6 +22,7 @@ export default function App() {
   else if (section === "formats") body = <NameFormats />;
   else if (section === "workers") body = <Workers />;
   else if (section === "m" && id && sub === "i" && extra) body = <Investigate missionId={id} versionId={Number(extra)} />;
+  else if (section === "m" && id && sub === "map" && extra) body = <GeoPlace missionId={id} versionId={Number(extra)} />;
   else if (section === "m" && id && sub === "regions" && extra) body = <RegionEditor missionId={id} viewId={Number(extra)} />;
   else if (section === "m" && id) body = <MissionPage missionId={id} tab={sub ?? "overview"} extra={extra} />;
   else body = <Missions />;
