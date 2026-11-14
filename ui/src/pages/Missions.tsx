@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, post } from "../api";
+import { DeleteMissionDialog } from "./Mission";
 
 type Review = { unreviewed: number; first_unreviewed: number | null; approved: number; processed: number; latest: number | null };
 type M = { id: string; name: string; input_type: string; mode: string; processing: string; monitoring: boolean; created_at: string;
@@ -97,6 +98,7 @@ export default function Missions() {
 function MissionCard({ m, reload }: { m: M; reload: () => void }) {
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const video = m.input_type === "video";
   const r = m.review;
   const job = m.job && ["running", "paused"].includes(m.job.state) ? m.job : null;
@@ -140,7 +142,11 @@ function MissionCard({ m, reload }: { m: M; reload: () => void }) {
           const x = await post(`/missions/${m.id}/export`, { filter: {} });
           return `Exported ${x.files.length} file${x.files.length > 1 ? "s" : ""}.`;
         })}>Export</button>}
+        <button className="mdel" disabled={!!job} title={job ? "Cancel processing before deleting this mission." : `Delete ${m.name}`}
+          aria-label={`Delete ${m.name}`} onClick={() => setDeleting(true)}>Delete…</button>
       </div>
+      {deleting && <DeleteMissionDialog id={m.id} name={m.name} onClose={() => setDeleting(false)}
+        onDeleted={() => { setDeleting(false); reload(); }} />}
     </div>
   );
 }

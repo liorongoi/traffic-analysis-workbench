@@ -434,6 +434,10 @@ class DeleteBody(BaseModel):
     confirm_name: str
 
 
+class RerunBody(BaseModel):
+    detector: str | None = None            # None: run again with the mission's current detector
+
+
 class DatasetRef(BaseModel):
     mission_id: str
     dataset_id: int
@@ -1115,8 +1119,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         counts = dict(m.con.execute(
             "SELECT processing_state, COUNT(*) FROM run_item i WHERE i.id IN (SELECT MAX(id) FROM run_item GROUP BY "
             "source_version_id) GROUP BY processing_state").fetchall())
-        runs = [dict(r) for r in m.con.execute("SELECT id, kind, state, created_at, started_at, finished_at FROM run "
-                                               "ORDER BY id DESC LIMIT 10")]
+        from ..runs import summaries
+        runs = summaries(m.con, 10)
         notes = [dict(r) for r in m.con.execute("SELECT id, created_at, severity, code, message, acknowledged FROM "
                                                 "notification ORDER BY id DESC LIMIT 30")]
         return {"id": m.id, "config": asdict(cfg), "status": m.status(), "processing_counts": counts, "runs": runs,
@@ -1186,10 +1190,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "invalid", "Segments side by side must be 1 to 32.")
         if body.track_min_frames is not None and not (0 <= body.track_min_frames <= 30):
             raise ApiError(400, "invalid", "Frames before a target counts must be 1 to 30.")
-        if uses_sam(body.detector) and not sam_info()["installed"]:
-            raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""))
-        if fast_of(body.detector) == "rfdetr" and not cfg.vehicle_model and not rfdetr_info(data_root)["installed"]:
-            raise ApiError(400, "rfdetr_missing", rfdetr_info(data_root)["reason"])
+        _detector_ready(body.detector, cfg)
         if jobs.busy(m.id):
             raise ApiError(409, "busy", "Processing is running. Change the detector when it has finished or is cancelled.")
         if body.detector != getattr(cfg, "detector", "standard"):
@@ -1208,6 +1209,38 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         c2 = m.config()
         return {"detector": body.detector, "sam3_interval_s": c2.sam3_interval_s, "camera": c2.camera,
                 "video_workers": c2.video_workers, "track_min_frames": c2.track_min_frames}
+
+    def _detector_ready(detector: str, cfg) -> None:
+        if uses_sam(detector) and not sam_info()["installed"]:
+            raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""))
+        if fast_of(detector) == "rfdetr" and not cfg.vehicle_model and not rfdetr_info(data_root)["installed"]:
+            raise ApiError(400, "rfdetr_missing", rfdetr_info(data_root)["reason"])
+
+    @app.post("/api/missions/{mission_id}/rerun")
+    def rerun(body: RerunBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Run every processed still image again, optionally with another detector. The earlier runs' detections
+        are kept: the results show the new run, and the runs can be compared on the Overview."""
+        from ..runs import rerun_versions
+        from ..store import DETECTORS
+        cfg = m.config()
+        if m.input_type != "images":
+            raise ApiError(400, "video", "Videos are analysed again from the list of recordings on the Overview.")
+        if cfg.mode == "indoor_outdoor":
+            raise ApiError(400, "no_detector", "Sorting indoor from outdoor uses no detector.")
+        detector = body.detector or getattr(cfg, "detector", "standard")
+        if detector not in DETECTORS:
+            raise ApiError(400, "invalid", f"Detector must be one of {sorted(DETECTORS)}.")
+        _detector_ready(detector, cfg)
+        if jobs.busy(m.id):
+            raise ApiError(409, "busy", "Processing is running. Run again when it has finished or is cancelled.")
+        ids = rerun_versions(m.con)
+        if not ids:
+            raise ApiError(400, "nothing", "No image has been processed yet. Use Scan and process first.")
+        if detector != getattr(cfg, "detector", "standard"):
+            m.update_config(u.username, f"detector set to {detector} to run the images again", detector=detector)
+        run_id = m.create_run("reprocess", ids)
+        return {"run_id": run_id, "images": len(ids), "detector": detector,
+                "job": jobs.start(m.id, kind="process").snapshot()}
 
     @app.post("/api/missions/{mission_id}/sources")
     def sources_add(body: SourcesBody, m: Mission = Depends(mission), u: User = Depends(user)):
@@ -1300,6 +1333,10 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             local = {"time": lt.local.isoformat(), "abbreviation": lt.abbreviation, "dst": lt.is_dst}
         regions = RegionSet.load(m.con, view_id) if view_id else RegionSet([])
         item = rs._latest_item(version_id)
+        from ..runs import image_runs, model_names
+        names = model_names(m.con)
+        found_by = {d[0]: names.get(d[1]) for d in m.con.execute(
+            "SELECT id, model_version_id FROM detection WHERE run_item_id=?", (item["id"],))} if item else {}
         return {
             "id": version_id, "file": r["rel_path"], "sha256": r["sha256"], "capture_utc": r["capture_utc"],
             "capture_precision": r["capture_precision"], "local": local, "zone": m.zone,
@@ -1312,7 +1349,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             "error": item["error_detail"] if item else None,
             "review_status": rs.review_status(version_id),
             "empty_background": ChangeService(m).is_marked(version_id),
-            "objects": [{**o.__dict__, "counted": o.counted} for o in rs.objects(version_id)],
+            "objects": [{**o.__dict__, "counted": o.counted, "found_by": found_by.get(o.detection_id)}
+                        for o in rs.objects(version_id)],
+            "runs": image_runs(m.con, version_id),
             "classes": rs.classes(),
             "uncounted_classes": sorted(rs.uncounted()),
             "candidates": [c.__dict__ for c in rs.candidates(version_id)],

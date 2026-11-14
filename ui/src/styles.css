@@ -262,6 +262,8 @@ table.t th { font-weight: 600; letter-spacing: .01em; }
 .mline { color: var(--text-2); font-size: 13px; }
 .mline .attn { color: var(--lane); }
 .macts { display: grid; gap: 8px; min-width: 120px; }
+.macts .mdel { background: transparent; border-color: transparent; color: var(--text-2); font-size: 12.5px; padding: 4px 8px; }
+.macts .mdel:hover:not(:disabled) { color: var(--bad); border-color: rgba(255, 107, 126, .4); }
 .attention { display: grid; gap: 10px; }
 .attention .item { padding: 12px; border: 1px solid rgba(255, 182, 72, .35); background: rgba(255, 182, 72, .06); }
 .attention .item p { margin: 0 0 8px; }

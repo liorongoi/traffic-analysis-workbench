@@ -81,6 +81,7 @@ class ResultRow:
     candidate_count_max: int | None = None
     condition: str | None = None
     confirmed_from_candidates: int = 0
+    detector: str | None = None          # what found the vehicles shown: the detector of the run they come from
 
 
 @dataclass
@@ -411,6 +412,9 @@ class ReviewService:
             "FROM source_version v JOIN source_file f ON f.id=v.source_file_id "
             "WHERE v.superseded_by IS NULL AND EXISTS (SELECT 1 FROM run_item i WHERE i.source_version_id=v.id)").fetchall()
         names = {r["id"]: r["name"] for r in self.con.execute("SELECT id, name FROM camera_view")}
+        from .runs import detector_of
+        run_detector = {r["id"]: detector_of(r["config_snapshot"])["label"]
+                        for r in self.con.execute("SELECT id, config_snapshot FROM run")}
         states = {r["id"]: r["state"] for r in self.con.execute("SELECT id, state FROM camera_view")}
         out = []
         for r in rows:
@@ -462,7 +466,8 @@ class ReviewService:
                 flags.append("view_needs_review")
             out.append(ResultRow(vid, r["rel_path"], r["capture_utc"], local, r["view_id"], names.get(r["view_id"]),
                                  count, cmin, pstate, rstatus, item["run_id"] if item else None, flags, cmax,
-                                 cond["condition"] if cond else None, confirmed))
+                                 cond["condition"] if cond else None, confirmed,
+                                 run_detector.get(item["run_id"]) if item and pstate == "done" else None))
         key = {"capture_utc": lambda x: (x.capture_utc or "", x.filename), "filename": lambda x: x.filename,
                "vehicle_count": lambda x: (x.vehicle_count if x.vehicle_count is not None else -1, x.capture_utc or ""),
                "view": lambda x: (x.view or "", x.capture_utc or ""), "review_status": lambda x: (x.review_status, x.filename),
