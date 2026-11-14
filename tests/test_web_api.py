@@ -501,3 +501,51 @@ def test_saved_models_process_a_missions_images(env, monkeypatch):
     assert c.put(f"/api/missions/{mid}/vehicle-model", json={"saved": None}, headers=H1).json()["vehicle_model"] is None
     assert c.put(f"/api/missions/{mid}/vehicle-model", json={"saved": "Ghost"}, headers=H1).status_code == 400
     assert c.request("DELETE", "/api/models/saved/Night cars", headers=H1).json()["removed"] == "Night cars"
+
+
+def test_rerun_with_another_detector_keeps_both_runs(env, monkeypatch):
+    import trafficwb.web.app as web
+    import trafficwb.web.jobs as jobs_mod
+    monkeypatch.setattr(web, "rfdetr_info", lambda root: {"installed": True, "reason": None})
+
+    class Other(Fake):
+        def describe(self):
+            return {"model": {"name": "other", "version": "2", "sha256": "1" * 64}, "preprocessing": {}}
+    monkeypatch.setattr(jobs_mod.JobManager, "rfdetr", lambda self: (Other(), {"task": "vehicle_detection"}))
+    tmp, src, out = env
+    c = direct_access(client(tmp))
+    mid = mission(c, src, out)
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    wait_job(c, mid)
+    first = c.get(f"/api/missions/{mid}").json()["runs"]
+    assert len(first) == 1 and first[0]["detector"]["key"] == "standard" and first[0]["detections"] > 0
+    rows = c.post(f"/api/missions/{mid}/results", json={}, headers=H1).json()["rows"]
+    assert {r["detector"] for r in rows} == {"YOLOX-s"}
+
+    r = c.post(f"/api/missions/{mid}/rerun", json={"detector": "nope"}, headers=H1)
+    assert r.status_code == 400
+    r = c.post(f"/api/missions/{mid}/rerun", json={"detector": "rfdetr"}, headers=H1)
+    assert r.status_code == 200, r.text
+    assert r.json()["images"] == 6
+    assert wait_job(c, mid)["state"] == "finished"
+
+    m = c.get(f"/api/missions/{mid}").json()
+    assert m["config"]["detector"] == "rfdetr"
+    runs = {x["id"]: x for x in m["runs"]}
+    new, old = runs[r.json()["run_id"]], runs[first[0]["id"]]
+    assert new["kind"] == "reprocess" and new["detector"]["key"] == "rfdetr" and new["done"] == 6
+    assert new["shown"] == 6 and old["shown"] == 0 and old["detections"] == first[0]["detections"]   # nothing overwritten
+    rows = c.post(f"/api/missions/{mid}/results", json={}, headers=H1).json()["rows"]
+    assert {r["detector"] for r in rows} == {"RF-DETR"} and {r["run_id"] for r in rows} == {new["id"]}
+    item = c.post(f"/api/missions/{mid}/items/{rows[0]['source_version_id']}", json={}, headers=H1).json()
+    assert [x["run_id"] for x in item["runs"]] == [new["id"], old["id"]]
+    assert all(o["found_by"] == "other 2" for o in item["objects"] if o["origin"] == "machine")
+    assert new["model"] == "other 2" and old["model"] == "fake 1"
+
+
+def test_rerun_needs_processed_images(env):
+    tmp, src, out = env
+    c = direct_access(client(tmp))
+    mid = mission(c, src, out)
+    r = c.post(f"/api/missions/{mid}/rerun", json={}, headers=H1)
+    assert r.status_code == 400 and r.json()["error"] == "nothing"

@@ -340,6 +340,14 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
               <span className="badge">{item.processing_state}</span>
             </div>
             {item.error && <div className="msg err">{item.error}</div>}
+            {item.runs && item.runs.length > 0 && <div className="muted" style={{ marginTop: 6 }}>
+              Found by <b>{item.runs[0].detector.label}</b> (run {item.runs[0].run_id}{item.runs[0].model ? `, ${item.runs[0].model}` : ""})
+              {item.runs.length > 1 && <details style={{ marginTop: 4 }}>
+                <summary>{item.runs.length - 1} earlier run{item.runs.length > 2 ? "s" : ""} of this image</summary>
+                <ul>{item.runs.slice(1).map((r) => <li key={r.run_id}>Run {r.run_id} · {r.detector.label}: {r.detections} box{r.detections === 1 ? "" : "es"}
+                  {r.detections > 0 ? ` (${Object.entries(r.by_class).map(([c, n]) => `${n} ${c}`).join(", ")})` : ""}</li>)}</ul>
+              </details>}
+            </div>}
             {item.view.id != null && item.processing_state === "done" && (
               <div className="empty-toggle">
                 <label className="row">
@@ -357,6 +365,7 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
           {selObj && (
             <div className="card selcard">
               <h3>Selected: {ORIGIN_TEXT[selObj.origin]} {selObj.cls}</h3>
+              {selObj.found_by && <div className="muted">Found by {selObj.found_by}{selObj.score != null ? `, score ${selObj.score.toFixed(2)}` : ""}</div>}
               {selObj.machine_cls && selObj.machine_cls !== selObj.cls && <div className="muted">{selObj.origin === "change" ? "Found as" : "Detector said"} {selObj.machine_cls}</div>}
               {selObj.origin === "change" && <div className="muted">This part of the road differs from the view's empty background{selObj.machine_cls === "vehicle" ? "; SAM 3.1 did not tell its type, so choose one if you can" : ""}.</div>}
               <div className="row" style={{ marginTop: 6 }}>

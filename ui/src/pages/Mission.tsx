@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, ApiError, Filter, fmtDuration, Job, post, REVIEW_LABEL, ResultRow } from "../api";
 import { go } from "../router";
 import { ScoreSlider } from "../components/ScoreSlider";
@@ -74,7 +75,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
       </div>
       {tab === "overview" && <Overview m={m} reload={load} />}
       {tab === "sort" && sorting && <SortingTab m={m} reload={load} />}
-      {tab === "results" && !isVideo && <Results missionId={missionId} />}
+      {tab === "results" && !isVideo && <Results m={m} reload={load} />}
       {tab === "night" && !isVideo && <NightReviewTab missionId={missionId} />}
       {tab === "views" && !isVideo && <Views missionId={missionId} />}
       {(tab === "setup" || tab === "settings") && <MissionSetup m={m} reload={load} />}
@@ -169,11 +170,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
         </div>
       </div>
       <div className="grid cols-2">
-        <div className="card">
-          <h2>Runs</h2>
-          <table className="t"><thead><tr><th>Run</th><th>Kind</th><th>State</th><th>Started (UTC)</th><th>Finished (UTC)</th></tr></thead>
-            <tbody>{m.runs.map((r: any) => <tr key={r.id}><td>{r.id}</td><td>{r.kind}</td><td>{r.state}</td><td className="mono">{r.started_at ?? ""}</td><td className="mono">{r.finished_at ?? ""}</td></tr>)}</tbody></table>
-        </div>
+        <RunsCard m={m} reload={reload} />
         <div className="card">
           <div className="row" style={{ justifyContent: "space-between" }}><h2>Notifications</h2>
             <button onClick={async () => { await post(`/missions/${m.id}/notifications/ack`); reload(); }}>Mark all read</button></div>
@@ -294,8 +291,9 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
       {video && <TrackFrames value={minFrames || null} onChange={setMinFrames} disabled={busy}
         step={value === "sam3" ? every : 0.2} auto={value === "sam3" ? 3 : 5} />}
       {value !== "sam3" && <ModelChoice saved={saved} value={m.config.vehicle_model ?? null} onChange={setModel} disabled={busy} rfdetr={partsOf(value).fast === "rfdetr"} />}
-      {changed && <p className="muted">{video ? "Recordings" : "Images"} already processed keep their detections; the change applies to the next run. Each detection records the model that made it.</p>}
+      {changed && <p className="muted">{video ? "Recordings already processed keep their detections; the change applies to the next run." : "Images already processed keep their detections until you run them again (the button appears once the detector is saved)."} Each detection records the model that made it.</p>}
       {busy && <p className="muted">The detector can be changed when processing has finished.</p>}
+      {!video && !changed && <RerunButton m={m} reload={reload} />}
       {changed && <div className="row"><button className="primary" disabled={busy || saving} onClick={saveIt}>{saving ? "Saving…" : value !== (m.config.detector ?? "standard") ? "Use this detector" : "Save"}</button>
         <button onClick={() => { setValue(m.config.detector ?? "standard"); setEvery(m.config.sam3_interval_s ?? 1); setCamera(m.config.camera ?? "fixed"); setWorkers(m.config.video_workers ?? 1); setMinFrames(m.config.track_min_frames ?? 0); }}>Cancel</button></div>}
       {err && <div className="msg err" role="alert">{err}</div>}
@@ -553,9 +551,10 @@ function SamWords({ m, defaults, busy, reload, samOnly, standardOnly, standardKn
 }
 
 const COLS: [string, string, string][] = [["filename", "File", ""], ["capture_utc", "Local time", ""], ["view", "View", ""],
-  ["vehicle_count", "Vehicles", "num"], ["", "Unresolved at night", "num"], ["processing_state", "Processing", ""], ["review_status", "Review", ""]];
+  ["vehicle_count", "Vehicles", "num"], ["", "Unresolved at night", "num"], ["", "Found by", ""], ["processing_state", "Processing", ""], ["review_status", "Review", ""]];
 
-function Results({ missionId }: { missionId: string }) {
+function Results({ m, reload }: { m: any; reload: () => void }) {
+  const missionId: string = m.id;
   const [q, setQ] = useState<SavedQuery>(() => loadQuery(missionId));
   const [page, setPage] = useState(0);
   const [data, setData] = useState<{ total: number; rows: ResultRow[] } | null>(null);
@@ -586,6 +585,7 @@ function Results({ missionId }: { missionId: string }) {
 
   return (
     <div className="grid" style={{ gap: 10 }}>
+      <FoundBy m={m} reload={reload} />
       <div className="card row">
         <input placeholder="Search file name" value={q.filter.search ?? ""} onChange={(e) => setF("search", e.target.value)} />
         <select value={q.filter.view_id ?? ""} onChange={(e) => setF("view_id", e.target.value)}>
@@ -626,6 +626,7 @@ function Results({ missionId }: { missionId: string }) {
                     <td>{r.view ?? <span className="muted">no view</span>}</td>
                     <td className="num">{r.vehicle_count ?? "–"}</td>
                     <td className="num">{r.candidate_count_max ? `${r.candidate_count}–${r.candidate_count_max}` : r.condition && r.condition !== "day" ? "0" : ""}</td>
+                    <td>{r.detector ?? ""}</td>
                     <td>{r.processing_state === "failed" ? <span className="badge failed">failed</span> : r.processing_state}</td>
                     <td><span className={`badge ${r.review_status}`}>{REVIEW_LABEL[r.review_status]}</span></td>
                     <td>{r.condition && r.condition !== "day" && <span className="badge flag">{r.condition}</span>} {r.flags.map((f) => <span key={f} className="badge flag">{f.replace(/_/g, " ")}</span>)}</td>
@@ -894,37 +895,154 @@ function NightBandsRow({ missionId, view, reload }: { missionId: string; view: a
   );
 }
 
+type RunSummary = {
+  id: number; kind: string; kind_label: string; state: string; created_at: string; started_at: string | null; finished_at: string | null;
+  detector: { key: string; label: string; saved_model: string | null }; model: string | null;
+  images: number; done: number; failed: number; detections: number; by_class: Record<string, number>; by_model: Record<string, number>; shown: number;
+};
+
+const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+/** Every run keeps its own detections, so runs with different detectors can be compared here. */
+function RunsCard({ m, reload }: { m: any; reload: () => void }) {
+  const runs: RunSummary[] = m.runs ?? [];
+  const stills = m.config.input_type !== "video" && m.config.mode !== "indoor_outdoor";
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2>Runs</h2>
+        {stills && <RerunButton m={m} reload={reload} small />}
+      </div>
+      {runs.length === 0 ? <p className="muted">Nothing has run yet.</p> : (
+        <div className="tablewrap">
+          <table className="t"><thead><tr><th>Run</th><th>Detector</th><th className="num">Images</th><th>Found</th><th>State</th><th>Finished (UTC)</th></tr></thead>
+            <tbody>{runs.map((r) => (
+              <tr key={r.id}>
+                <td>{r.id}<div className="muted">{r.kind_label}</div></td>
+                <td title={r.model ? `Model loaded: ${r.model}` : undefined}>{m.config.mode === "indoor_outdoor" ? "CLIP (indoor or outdoor)" : r.detector.label}
+                  {r.shown > 0 && stills && <div><span className="badge approved" title="The Results tab shows what this run found on these images">shown on {plural(r.shown, "image")}</span></div>}</td>
+                <td className="num">{r.done}{r.images !== r.done ? <span className="muted"> of {r.images}</span> : null}</td>
+                <td>{r.detections ? <>{r.detections} box{r.detections === 1 ? "" : "es"}<div className="muted">{Object.entries(r.by_class).map(([c, n]) => `${n} ${c}`).join(", ")}</div>
+                  {Object.keys(r.by_model).length > 1 && <div className="muted">{Object.entries(r.by_model).map(([k, n]) => `${k}: ${n}`).join(" · ")}</div>}</>
+                  : <span className="muted">–</span>}</td>
+                <td>{r.state.replace(/_/g, " ")}{r.failed > 0 && <div className="muted">{r.failed} failed</div>}</td>
+                <td className="mono">{r.finished_at?.replace("T", " ").slice(0, 16) ?? ""}</td>
+              </tr>))}</tbody></table>
+        </div>
+      )}
+      {stills && runs.length > 1 && <p className="muted" style={{ marginBottom: 0 }}>Each run keeps what it found. The Results tab shows every image's latest finished run; the export names the run and the model of every box.</p>}
+    </div>
+  );
+}
+
+/** Above the results: which detector found the vehicles shown, and running the images again with another one. */
+function FoundBy({ m, reload }: { m: any; reload: () => void }) {
+  if (m.config.mode === "indoor_outdoor") return null;
+  const runs: RunSummary[] = m.runs ?? [];
+  const shown = runs.filter((r) => r.shown > 0);
+  const earlier = runs.filter((r) => r.shown === 0 && r.detections > 0).length;
+  const job = m.job && ["running", "paused"].includes(m.job.state);
+  return (
+    <div className="card row" style={{ justifyContent: "space-between" }}>
+      <span>
+        {shown.length === 0 ? <span className="muted">No image has finished processing yet.</span> : <>Vehicles shown were found by{" "}
+          {shown.map((r, i) => <span key={r.id}>{i > 0 && (i === shown.length - 1 ? " and " : ", ")}<b>{r.detector.label}</b> (run {r.id}{shown.length > 1 ? `, ${plural(r.shown, "image")}` : ""})</span>)}.</>}
+        {earlier > 0 && <span className="muted"> {plural(earlier, "earlier run")} {earlier === 1 ? "is" : "are"} kept: compare them under Runs on the <a href={`#/m/${m.id}/overview`}>Overview</a>.</span>}
+        {job && <span className="muted"> Processing now: results switch to the new run image by image as it finishes them.</span>}
+      </span>
+      <RerunButton m={m} reload={reload} />
+    </div>
+  );
+}
+
+/** Run every processed image again, with the mission's detector or another one. Nothing is overwritten. */
+function RerunButton({ m, reload, small }: { m: any; reload: () => void; small?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState<string>(m.config.detector ?? "standard");
+  const [sam, setSam] = useState<any>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [going, setGoing] = useState(false);
+  const pc = (m.processing_counts ?? {}) as Record<string, number>;
+  const n = (pc.done ?? 0) + (pc.failed ?? 0) + (pc.cancelled ?? 0);
+  const busy = !!(m.job && ["running", "paused"].includes(m.job.state));
+  useEffect(() => { if (open && !sam) api("/sam3").then(setSam).catch(() => setSam({ installed: false, reason: "Could not check." })); }, [open, sam]);
+  if (m.config.input_type === "video" || m.config.mode === "indoor_outdoor") return null;
+  const current = m.config.detector ?? "standard";
+  const start = async () => {
+    setErr(null);
+    setGoing(true);
+    try { await post(`/missions/${m.id}/rerun`, { detector: value }); setOpen(false); reload(); }
+    catch (e) { setErr((e as ApiError).message); }
+    finally { setGoing(false); }
+  };
+  return (
+    <>
+      <button className={small ? undefined : "primary"} disabled={busy || n === 0}
+        title={busy ? "Processing is running. Run again when it has finished." : n === 0 ? "Nothing has been processed yet." : undefined}
+        onClick={() => { setValue(current); setErr(null); setOpen(true); }}>Run again with another detector…</button>
+      {open && createPortal(
+        <div className="dialog-bg" onClick={() => setOpen(false)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720, maxHeight: "90vh", overflowY: "auto" }}>
+            <h2>Run the images again</h2>
+            <p>All {plural(n, "processed image")} of <b className="bidi">{m.config.name}</b> are analysed again with the detector you tick. It also becomes this mission's detector for new images.</p>
+            <DetectorChoice value={value} onChange={setValue} sam={sam ?? undefined} legend={false} />
+            <ul className="muted">
+              <li>Nothing is overwritten. The earlier run keeps its boxes, and the Runs list on the Overview compares the runs side by side.</li>
+              <li>The Results tab switches to the new run image by image as it finishes. Until then each image shows what the earlier run found.</li>
+              <li>Vehicles you drew by hand carry over. Corrections to the earlier detector's boxes stay with the earlier run.</li>
+            </ul>
+            {err && <div className="msg err" role="alert">{err}</div>}
+            <div className="row" style={{ justifyContent: "flex-end" }}>
+              <button onClick={() => setOpen(false)}>Cancel</button>
+              <button className="primary" disabled={going} onClick={start}>{going ? "Starting…" : `Run ${plural(n, "image")} with ${DETECTOR_LABEL[value]?.split(" (")[0] ?? value}`}</button>
+            </div>
+          </div>
+        </div>
+      , document.body)}
+    </>
+  );
+}
+
 function DeleteMission({ m }: { m: any }) {
   const [open, setOpen] = useState(false);
-  const [sure, setSure] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   return (
     <div className="card">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <span className="muted">Deleting a mission removes its database, crops and clips. Source images and exported files stay where they are. Administrators only.</span>
-        <button className="danger" onClick={() => { setOpen(true); setSure(false); setErr(null); }}>Delete mission…</button>
+        <button className="danger" onClick={() => setOpen(true)}>Delete mission…</button>
       </div>
-      {open && (
-        <div className="dialog-bg" onClick={() => setOpen(false)}>
-          <div className="dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>Delete mission</h2>
-            <p>This permanently removes the analysis results, corrections, reviews, datasets and evidence of <b className="bidi">{m.config.name}</b>. It cannot be undone except from a backup. The deletion is recorded in the audit log.</p>
-            <p className="muted">Not touched: the source folder <span className="mono bidi">{m.config.source_dir}</span> and exports in <span className="mono bidi">{m.config.output_dir}</span>.</p>
-            <label className="row"><input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} />
-              <span>Yes, permanently delete <b className="bidi">{m.config.name}</b></span></label>
-            {err && <div className="msg err">{err}</div>}
-            <div className="row" style={{ justifyContent: "flex-end" }}>
-              <button onClick={() => setOpen(false)}>Cancel</button>
-              <button className="danger" disabled={!sure} onClick={async () => {
-                try { await post(`/missions/${m.id}/delete`, { confirm_name: m.config.name }); go("/"); }
-                catch (e) { setErr((e as ApiError).message); }
-              }}>Delete permanently</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {open && <DeleteMissionDialog id={m.id} name={m.config.name} source={m.config.source_dir} output={m.config.output_dir}
+        onClose={() => setOpen(false)} onDeleted={() => go("/")} />}
     </div>
   );
+}
+
+/** The one place a mission is deleted from: its setup page and the missions list both open it. */
+export function DeleteMissionDialog({ id, name, source, output, onClose, onDeleted }:
+  { id: string; name: string; source?: string; output?: string; onClose: () => void; onDeleted: () => void }) {
+  const [sure, setSure] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [going, setGoing] = useState(false);
+  return createPortal(
+    <div className="dialog-bg" onClick={onClose}>
+      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+        <h2>Delete mission</h2>
+        <p>This permanently removes the analysis results, corrections, reviews, datasets and evidence of <b className="bidi">{name}</b>. It cannot be undone except from a backup. The deletion is recorded in the audit log.</p>
+        <p className="muted">Not touched: the source images{source ? <> in <span className="mono bidi">{source}</span></> : null} and exported files{output ? <> in <span className="mono bidi">{output}</span></> : null}.</p>
+        <label className="row"><input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} />
+          <span>Yes, permanently delete <b className="bidi">{name}</b></span></label>
+        {err && <div className="msg err" role="alert">{err}</div>}
+        <div className="row" style={{ justifyContent: "flex-end" }}>
+          <button onClick={onClose}>Cancel</button>
+          <button className="danger" disabled={!sure || going} onClick={async () => {
+            setGoing(true);
+            try { await post(`/missions/${id}/delete`, { confirm_name: name }); onDeleted(); }
+            catch (e) { setErr((e as ApiError).message); }
+            finally { setGoing(false); }
+          }}>Delete permanently</button>
+        </div>
+      </div>
+    </div>, document.body);
 }
 
 const STATE_TEXT: Record<string, string> = {
