@@ -6,6 +6,7 @@ import { MapServers } from "../components/MapSources";
 import { CameraChoice, DetectorChoice, ModelChoice, ParallelChoice, SamInterval, usesSam, partsOf } from "./Wizard";
 import NameFormats from "./NameFormats";
 import Workers from "./Workers";
+import { PlayerColours } from "../components/TrackMarks";
 
 // Settings: everything decided once, before analysis, so the working pages show only what is done during and after a
 // run. In three parts, as the operator thinks of them: for still images and video alike, for still images only, and
@@ -162,6 +163,7 @@ export default function Settings({ section }: { section?: string }) {
           <Card title="Detector" wide lead="Which detectors look at each analysed frame.">
             <DetectorChoice value={d.video.detector} onChange={(v) => change("video", { detector: v })} sam={sam ?? undefined} legend={false} video />
           </Card>
+          <div id="set-colours"><PlayerColours /></div>
           <div className="set-wide" id="set-workers"><Workers embedded /></div>
           <Card title="Map and ground heights" wide id="set-maps" lead="Our own map and height servers, for putting a camera on the map. Set up once; then picked from a list.">
             <MapServers />
