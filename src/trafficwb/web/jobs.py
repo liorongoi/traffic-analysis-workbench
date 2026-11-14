@@ -212,7 +212,7 @@ class JobManager:
         d = lib.get(name)
         if d is None:
             raise RuntimeError(f"The saved model \u201c{name}\u201d chosen for this mission is no longer saved. Choose "
-                               "another model on the mission's overview.")
+                               "another model on the mission's Settings tab.")
         key = (d["model_name"], d["model_version"], d["sha256"])
         with self._lock:
             hit = self._saved.get(key)

@@ -77,6 +77,10 @@ class MissionBody(BaseModel):
     camera: str = "fixed"                  # video: fixed | moving (PTZ, vehicle, drone, body-worn)
     video_workers: int | None = None       # video: segments analysed side by side (None: 1)
     run_mode: str = "manual"               # learning: manual decisions | auto
+    teacher: str = "none"                  # learning: none | sam3
+    auto_min_reviews: int = 20
+    auto_epochs: int = 30
+    analyse_new: bool = False              # video: new videos analysed as they arrive
 
     def config(self) -> MissionConfig:
         d = self.model_dump()
@@ -377,6 +381,14 @@ class QuickBody(BaseModel):
     include_subdirs: bool = True
 
 
+class LearnFormatBody(BaseModel):
+    folder: str
+    include_subdirs: bool = True
+    zone: str | None = None     # the time zone the names are in; None: UTC
+    save: bool = False
+    name: str | None = None
+
+
 class FolderBody(BaseModel):
     path: str
 
@@ -499,21 +511,31 @@ def quick_start(source_dir: str, include_subdirs: bool, data_root: Path, limit: 
     name = " ".join(words) or "New mission"
     if first is not None:
         name += f", {first.day} {first:%b %Y}"
+    from .. import defaults
+    settings = defaults.load(data_root)
+    both = settings["both"]
     zone, country = "Asia/Jerusalem", "IL"
     zone_from = None
     dr = DataRoot(data_root)
     rows = sorted(dr.missions(), key=lambda r: r["created_at"])
-    if rows:
+    if both["iana_zone"]:
+        zone, zone_from = both["iana_zone"], "settings"
+        country = both["country"] or next((c for c, z in COUNTRY_ZONES.items() if z == zone), country)
+    elif rows:
         cfg = dr.open_mission(rows[-1]["id"]).config()
         zone, country, zone_from = cfg.iana_zone, cfg.country, rows[-1]["name"]
-    out = (root.parent if root.parent != root else root) / f"{root.name} LanePulse exports"
+    # Results go in the results folder chosen in Settings, or else in a new folder beside the input.
+    base = Path(both["results_folder"]).expanduser() if both["results_folder"] else (root.parent if root.parent != root else root)
+    out = base / f"{root.name} LanePulse exports"
+    input_type = "video" if videos > images else "images"
     return {
-        "source_dir": str(root), "name": name, "input_type": "video" if videos > images else "images",
+        "source_dir": str(root), "name": name, "input_type": input_type,
         "images": images, "videos": videos, "readable": readable, "more": more, "pattern": pattern,
         "first_utc": first.isoformat().replace("+00:00", "Z") if first else None,
         "last_utc": last.isoformat().replace("+00:00", "Z") if last else None,
         "unreadable": unreadable, "iana_zone": zone, "country": country, "zone_from": zone_from,
         "output_dir": str(out), "output_exists": out.is_dir(),
+        "settings": defaults.mission_fields(settings, input_type),
     }
 
 
@@ -742,6 +764,23 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def quick_start_get(body: QuickBody, _u: User = Depends(user)):
         return quick_start(body.source_dir, body.include_subdirs, data_root)
 
+    @app.get("/api/settings/missions")
+    def mission_defaults_get(_u: User = Depends(user)):
+        """What new missions take: for still images and video alike, for still images only, for video only."""
+        from .. import defaults
+        return defaults.load(data_root)
+
+    @app.put("/api/settings/missions")
+    def mission_defaults_put(body: dict[str, Any], u: User = Depends(user)):
+        from .. import defaults
+        try:
+            out = defaults.save(data_root, body)
+        except ValueError as exc:
+            raise ApiError(400, "invalid", str(exc)) from None
+        from ..admin import audit
+        audit(DataRoot(data_root), u.username, "settings_changed", parts=sorted(body))
+        return out
+
     @app.post("/api/quick-start/output")
     def quick_start_output(body: FolderBody, _u: User = Depends(user)):
         """Make the suggested exports folder: one new folder inside a folder that already exists, nothing deeper."""
@@ -799,6 +838,56 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                 out["folder"] = {"checked": len(rows), "matched": len(rows) - len(bad),
                                  "not_matched_examples": [r["name"] for r in bad[:10]],
                                  "matched_examples": [r for r in rows if r["ok"]][:3]}
+        return out
+
+    @app.post("/api/name-formats/learn")
+    def name_formats_learn(body: LearnFormatBody, u: User = Depends(user)):
+        """A new kind of file name in an input folder: guess its format from the names that cannot be read now and
+        check it on all of them. With save, remember it with the other formats, so every mission reads such names
+        from then on."""
+        from ..inventory import IMAGE_EXT, VIDEO_EXT
+        from ..name_formats import load, save, try_format
+        from ..timeparse import FormatError, suggest_template
+        root = Path(body.folder.strip()).expanduser()
+        if not root.is_dir():
+            raise ApiError(400, "no_folder", f"{root} is not a folder on this workstation.")
+        unread: list[str] = []
+        for p in (root.rglob("*") if body.include_subdirs else root.glob("*")):
+            if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in IMAGE_EXT | VIDEO_EXT:
+                try:
+                    parse_capture_time(p.name)
+                except MalformedName:
+                    unread.append(p.name)
+                if len(unread) >= 2000:
+                    break
+        if not unread:
+            return {"template": None, "total": 0, "matched": 0, "examples": []}
+        template = suggest_template(unread[0])
+        if not template:
+            return {"template": None, "total": len(unread), "matched": 0, "examples": [],
+                    "reason": "No date and time could be found in names like " + unread[0] + "."}
+        zone = body.zone or "UTC"
+        rows = try_format(template, zone, unread)
+        good = [r for r in rows.get("results", []) if r.get("ok")]
+        out = {"template": template, "zone": zone, "total": len(unread), "matched": len(good),
+               "examples": [{"name": r["name"], "utc": r["utc"]} for r in good[:3]],
+               "not_matched": [r["name"] for r in rows.get("results", []) if not r.get("ok")][:3]}
+        if body.save:
+            if not good:
+                raise ApiError(400, "bad_format", "This format reads none of the names, so it was not kept.")
+            have = load(data_root)
+            if any(f.get("template") == template and (f.get("zone") or "UTC") == zone for f in have):
+                return out | {"saved": True}
+            names = {f.get("name") for f in have}
+            base = (body.name or "").strip() or f"Learned from {root.name}"
+            name, n = base, 2
+            while name in names:
+                name, n = f"{base} ({n})", n + 1
+            try:
+                save(DataRoot(data_root), [*have, {"name": name, "template": template, "zone": zone}], u.username)
+            except FormatError as exc:
+                raise ApiError(400, "bad_format", str(exc)) from None
+            out |= {"saved": True, "name": name}
         return out
 
     @app.put("/api/name-formats")
@@ -2083,7 +2172,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def _worker(code: str | None) -> int:
         if not jobs.hub.enabled:
             raise ApiError(403, "workers_off", "This server does not take help from other computers now. Turn it on "
-                                               "on the Workers screen.")
+                                               "in Settings, Other computers.")
         cid = Pairing(data_root).check(code)
         if cid is None:
             raise ApiError(401, "bad_code", "That pairing code is not valid (or was revoked). Make a new one on the "

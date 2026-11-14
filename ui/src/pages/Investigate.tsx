@@ -42,6 +42,9 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [pickedLights, setPickedLights] = useState<number[]>([]);
   const [help, setHelp] = useState(false);
+  // The side panel folds away so the image can take the whole width; the choice is remembered on this computer.
+  const [panel, setPanel] = useState<boolean>(() => { try { return localStorage.getItem("twb.inv-panel") !== "off"; } catch { return true; } });
+  const togglePanel = () => setPanel((p) => { try { localStorage.setItem("twb.inv-panel", p ? "off" : "on"); } catch { /* this visit only */ } return !p; });
   const [plates, setPlates] = useState<Record<string, any>>({});
   const [drawPlate, setDrawPlate] = useState(false);
   const [plateBox, setPlateBox] = useState<number[] | null>(null);
@@ -114,6 +117,7 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
       else if (k === "h") setOverlays((o) => !o);
       else if (k === "escape") { setDrag(null); setDrawing(false); setDrawPlate(false); setPlateBox(null); setSel(null); setPickedLights([]); setHelp(false); }
       else if (k === "?") setHelp((h) => !h);
+      else if (k === "]" || k === "p") togglePanel();
       else if ((k === "delete" || k === "backspace") && selObj) objAct(selObj.uid, { action: selObj.status === "removed" ? "restore" : "remove" });
       else if ((k === "delete" || k === "backspace") && selCand) candAct(selCand.uid, { action: "reject" });
       else if (k === "c" && selCand) candAct(selCand.uid, { action: "confirm", cls: drawCls });
@@ -179,21 +183,10 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
   );
 
   return (
-    <div className="page" style={{ maxWidth: "none" }}>
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
-        <div className="row" style={{ gap: 14 }}>
-          <a href={`#/m/${missionId}/results`}>← Results</a>
-          <h1 style={{ margin: 0, fontSize: 22 }}>Image {item.position.index ?? "–"} of {item.position.total}</h1>
-          {(item.position.unreviewed ?? 0) > 0 && <span style={{ color: "var(--lane)", fontSize: 13 }}>{item.position.unreviewed} waiting for review</span>}
-        </div>
-        <div className="row">
-          <button aria-pressed={!overlays} title="Show or hide the marks on the image: vehicles, candidates, plates, regions and distance bands" onClick={() => setOverlays(!overlays)}>{overlays ? "Hide" : "Show"} results <kbd>H</kbd></button>
-          <button onClick={() => setHelp(true)} aria-label="Keyboard shortcuts"><kbd>?</kbd></button>
-        </div>
-      </div>
-      {err && <div className="msg err">{err}</div>}
-      {doneMsg && <div className="msg ok" role="status">{doneMsg} <a href={`#/m/${missionId}/results`}>Back to results</a></div>}
-      <div className="inv">
+    <div className="page workspace">
+      {err && <div className="msg err ws-float">{err}</div>}
+      {doneMsg && <div className="msg ok ws-float" role="status">{doneMsg} <a href={`#/m/${missionId}/results`}>Back to results</a></div>}
+      <div className={`inv${panel ? "" : " no-panel"}`}>
         <div className="inv-main">
         <div ref={stageRef} className={`stage zoomable${canPan ? " can-pan" : ""}${spaceHeld ? " space" : ""}${panning ? " panning" : ""}`}>
           <div className="stage-layer" style={{ transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.z})` }}>
@@ -328,13 +321,13 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
           </nav>
         )}
         </div>
-        <aside className="side">
+        {panel && <aside className="side">
           <div className="card">
             <div className="mono bidi" style={{ wordBreak: "break-all" }}>{item.file}</div>
-            <div className="muted" style={{ marginTop: 4 }}>
-              UTC <span className="mono">{item.capture_utc}</span> ({item.capture_precision} precision)<br />
-              Local <span className="mono">{item.local?.time.replace("T", " ")}</span> {item.local?.abbreviation} {item.local?.dst ? "(summer time)" : ""}<br />
-              {item.zone} · view <b>{item.view.name ?? "none"}</b>{item.view.regions_applied === false ? " (regions not applied)" : ""} · {item.condition?.condition ?? ""}
+            {/* Local time first, as people think; the UTC the app keeps is one hover away. */}
+            <div className="muted" style={{ marginTop: 4 }} title={`UTC ${item.capture_utc} (${item.capture_precision} precision) · ${item.zone}`}>
+              <span className="mono">{item.local?.time.replace("T", " ").slice(0, 19)}</span> {item.local?.abbreviation} · view <b>{item.view.name ?? "none"}</b>
+              {item.view.regions_applied === false ? " (regions not applied)" : ""} · {item.condition?.condition ?? ""}
             </div>
             {item.view_assignment_history.length > 0 && <details style={{ marginTop: 6 }}>
               <summary>View assignment history</summary>
@@ -357,9 +350,9 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
               </div>
             )}
           </div>
-          <div className="card grid cols-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
+          <div className="card grid cols-2" style={{ gridTemplateColumns: cmax || item.candidates.length ? "1fr 1fr" : "1fr" }}>
             <div className="stat"><div className="n">{counted}</div><div className="l">vehicles in this image</div></div>
-            <div className="stat"><div className="n">{cmax ? `${cmin}–${cmax}` : 0}</div><div className="l">unresolved night candidates (not counted)</div></div>
+            {(cmax > 0 || item.candidates.length > 0) && <div className="stat"><div className="n">{cmax ? `${cmin}–${cmax}` : 0}</div><div className="l">unresolved night candidates (not counted)</div></div>}
           </div>
           {selObj && (
             <div className="card selcard">
@@ -445,8 +438,8 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
               </div>
             ))}
           </div>
-          <div className="card legend">
-            <h3>Legend</h3>
+          <details className="card legend">
+            <summary><h3 style={{ display: "inline" }}>Legend</h3></summary>
             {([["machine", "M  detected by the model"], ["human", "H  drawn by an operator"],
               ...(item.objects.some((o) => o.origin === "change") ? [["change", "V  differs from the empty road (lights count)"]] as const : []),
               ["candidate", "?  night candidate, not counted"], ["confirmed", "C  candidate confirmed by an operator"]] as const).map(([k, l]) => (
@@ -455,17 +448,24 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
             {Object.keys(plates).length > 0 && <div><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke="var(--plate)" strokeWidth="2" /></svg> plate found by the model (dashed: drawn by an operator)</div>}
             <div><svg width="36" height="10"><rect width="36" height="10" fill="url(#hatch)" stroke="var(--exclude)" /></svg> excluded area</div>
             {item.bands?.rows && <div><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke="var(--band)" strokeWidth="2" strokeDasharray="6 4" /></svg> night distance bands: far, middle, close</div>}
-          </div>
-        </aside>
+          </details>
+        </aside>}
       </div>
-      <div className="actionbar">
-        <button disabled={!item.position.prev} onClick={() => go(`/m/${missionId}/i/${item.position.prev}`)}>‹ Previous <kbd>K</kbd></button>
+      <div className="actionbar ws-bar">
+        <a className="ws-back" href={`#/m/${missionId}/results`} title="Back to the results table">‹ Results</a>
+        <span className="ws-pos"><b>{item.position.index ?? "–"}</b> / {item.position.total}
+          {(item.position.unreviewed ?? 0) > 0 && <span className="attn"> · {item.position.unreviewed} to review</span>}</span>
+        <span className="sep" aria-hidden="true" />
+        <button disabled={!item.position.prev} onClick={() => go(`/m/${missionId}/i/${item.position.prev}`)}>‹ Prev <kbd>K</kbd></button>
         <button disabled={!item.position.next} onClick={() => go(`/m/${missionId}/i/${item.position.next}`)}>Next <kbd>J</kbd> ›</button>
         <span className="sep" aria-hidden="true" />
-        <button className={drawing ? "primary" : ""} onClick={() => setDrawing(!drawing)}>{drawing ? "Drawing: drag a box" : "Draw a missed vehicle"} <kbd>B</kbd></button>
+        <button className={drawing ? "primary" : ""} onClick={() => setDrawing(!drawing)}>{drawing ? "Drag a box…" : "Draw missed"} <kbd>B</kbd></button>
         <select aria-label="Class for a drawn box" value={drawCls} onChange={(e) => { setDrawCls(e.target.value); e.target.blur(); }}>{CLASSES.map((c, i) => <option key={c} value={c}>{i + 1} {c}</option>)}</select>
         <span className="grow" />
-        <span className="hint">{item.position.next_unreviewed && item.position.next_unreviewed !== versionId ? "Approve moves on to the next image to review" : "This is the last image to review"}</span>
+        <button className="iconbtn" aria-pressed={!overlays} title="Show or hide the marks on the image (H)" onClick={() => setOverlays(!overlays)}>{overlays ? "Hide marks" : "Show marks"}</button>
+        <button className="iconbtn" aria-pressed={panel} title="Show or hide the details panel (])" onClick={togglePanel}>{panel ? "Hide details" : "Details"}</button>
+        <button className="iconbtn" onClick={() => setHelp(true)} aria-label="Keyboard shortcuts"><kbd>?</kbd></button>
+        <span className="sep" aria-hidden="true" />
         <button className="primary big" onClick={approve} disabled={item.processing_state !== "done"}
           title="Approve means every vehicle inside the included regions is marked correctly. The image can then train and test models, and unmarked areas count as road with no vehicle.">{item.position.next_unreviewed && item.position.next_unreviewed !== versionId ? "Approve and next" : "Approve"} <kbd>A</kbd></button>
       </div>

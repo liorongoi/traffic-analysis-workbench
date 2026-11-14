@@ -16,7 +16,8 @@ const PART_LABEL: Record<string, string> = { year: "Year", year2: "Year", month:
 const PART_ORDER = ["year", "year2", "month", "day", "hour", "minute", "second", "camera", "suffix"];
 const blank: Format = { name: "", template: "", zone: "UTC" };
 
-export default function NameFormats() {
+/** Embedded on the Settings page, it drops its own page frame and title. */
+export default function NameFormats({ embedded = false }: { embedded?: boolean }) {
   const [formats, setFormats] = useState<Format[] | null>(null);
   const [builtin, setBuiltin] = useState<{ name: string; description: string }[]>([]);
   const [tokens, setTokens] = useState<Token[]>([]);
@@ -126,10 +127,10 @@ export default function NameFormats() {
   const canSave = !!draft.name.trim() && !!tried?.ok && !busy;
 
   return (
-    <div className="page">
+    <div className={embedded ? undefined : "page"}>
       <div className="page-head">
         <div>
-          <h1>Filename formats</h1>
+          {embedded ? <h2 style={{ margin: 0 }}>Filename formats</h2> : <h1>Filename formats</h1>}
           <p>LanePulse reads each image's capture time from its filename. If your camera names files in a way the app does not know, show it here how the names are built.</p>
         </div>
         {editing === null && <button className="primary" onClick={() => start(-1)}>New format</button>}

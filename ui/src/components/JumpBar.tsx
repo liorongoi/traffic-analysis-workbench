@@ -40,7 +40,8 @@ export default function JumpBar() {
       all.push({ label: `${m.name}: ${m.input_type === "video" ? "events" : "results"}`, hint: "Tab", to: `/m/${m.id}/${m.input_type === "video" ? "events" : "results"}` });
     }
     all.push({ label: "New mission", hint: "Page", to: "/new" }, { label: "All missions", hint: "Page", to: "/" },
-      { label: "Filename formats", hint: "Page", to: "/formats" });
+      { label: "Filename formats", hint: "Settings", to: "/settings/formats" },
+      { label: "Settings", hint: "Page", to: "/settings" }, { label: "Other computers that help", hint: "Settings", to: "/settings/workers" });
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     return all.filter((it) => words.every((w) => it.label.toLowerCase().includes(w))).slice(0, 12);
   }, [list, q]);
