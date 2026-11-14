@@ -40,3 +40,6 @@
 .sort-card .acts button { min-height: 26px; padding: 0 8px; font-size: 12px; }
 .sort-card .acts a { font-size: 12px; }
 .sort-learn p { max-width: 80ch; }
+.sort-unres { outline: 1px solid rgba(255, 182, 72, .45); }
+.sort-unres .sort-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.sort-card .acts .unres { min-height: 26px; padding: 0 4px; font-size: 13px; font-weight: 700; }

@@ -7,9 +7,14 @@ groups, by where the camera is and what it shows:
 - **Outdoor**: the camera is outside the building, **or** it is inside and the outside can be seen (through a window
   or a glass front). This second kind stays in the outdoor group but is marked "seen from inside".
 
-So each image gets one of three labels: `indoor`, `window` (outdoor, seen from inside) and `outdoor`. The operator can
+So each image gets one of three labels: `indoor`, `window` (outdoor, seen from inside) and `outdoor`.
+
+A third set, **Unresolved**, holds the images nobody can place yet: those LanePulse is less than 80% sure of (unless
+images a person placed decided them), and those the operator marks unresolved because they cannot tell either. It is
+shown first, each image with the way LanePulse leans, and is copied to `unresolved/`. An unresolved mark is never
+learned from. The operator can
 move any image to either of the other two, take a move back, and teach LanePulse from the moves. The groups are then
-copied into `indoor/`, `outdoor/` and `outdoor/seen from inside/` in the mission's exports folder, with `sorting.csv`
+copied into `indoor/`, `outdoor/` and `outdoor/seen from inside/` (and `unresolved/`) in the mission's exports folder, with `sorting.csv`
 listing every image, its group, whether it was seen from inside, who decided it and what LanePulse chose. The source
 images are only read.
 

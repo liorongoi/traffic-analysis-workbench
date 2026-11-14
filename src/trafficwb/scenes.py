@@ -3,6 +3,8 @@
 Two groups, as the operator defines them: indoor is a camera inside a location (a house, a store, a restaurant, a
 mosque) that sees only the inside; outdoor is a camera outside a building, or a camera inside that sees the outside
 (through a window or a door). The second kind of outdoor is marked apart: "seen from inside" (label "window").
+A third set holds the unresolved images: those LanePulse is not sure of, and those the operator marks "unresolved"
+because they cannot tell either. They wait there for a person; they are never learned from.
 
 Each image is turned into a CLIP ViT-B/32 image embedding (512 numbers; the model pack clip-vit-b32-image, MIT) and
 kept in the mission's database. Its label is decided against three text embeddings (scene_prompts.json), so no
@@ -37,8 +39,9 @@ TASK = "scene_embedding"
 LABELS = ("indoor", "window", "outdoor")     # window: outdoor, seen from inside
 GROUP = {"indoor": "indoor", "window": "outdoor", "outdoor": "outdoor"}
 TITLE = {"indoor": "indoor", "window": "outdoor, seen from inside", "outdoor": "outdoor"}
-FOLDER = {"indoor": "indoor", "window": "outdoor/seen from inside", "outdoor": "outdoor"}
-UNSURE_BELOW = 0.8        # chance of the chosen label under which an image is shown as "not sure"
+FOLDER = {"indoor": "indoor", "window": "outdoor/seen from inside", "outdoor": "outdoor", "unresolved": "unresolved"}
+UNSURE_BELOW = 0.8        # chance of the chosen label under which an unchecked image waits in the unresolved set
+UNRESOLVED = "unresolved"   # a set, and a decision the operator can make; not a label LanePulse learns or chooses
 _PROMPTS = Path(__file__).with_name("scene_prompts.json")
 _MEAN = np.array([0.48145466, 0.4578275, 0.40821073], np.float32)
 _STD = np.array([0.26862954, 0.26130258, 0.27577711], np.float32)
@@ -54,7 +57,7 @@ CREATE TABLE IF NOT EXISTS scene_result (       -- one row per image: its CLIP e
 CREATE TABLE IF NOT EXISTS scene_decision (     -- the operator's choices, append-only; newest per image wins
   id INTEGER PRIMARY KEY,
   source_version_id INTEGER NOT NULL,
-  label TEXT,                                   -- indoor | window | outdoor | NULL (back to LanePulse's choice)
+  label TEXT,                                   -- indoor | window | outdoor | unresolved | NULL (LanePulse's choice)
   author TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -299,9 +302,10 @@ def learner_summary(data_root: Path) -> dict:
 class SceneItem:
     version_id: int
     file: str
-    label: str            # the final label: the operator's when they chose, otherwise LanePulse's
-    group: str            # indoor | outdoor (window is outdoor, seen from inside)
-    machine: str          # LanePulse's label (with what it learned)
+    label: str            # the final label: the operator's when they chose, otherwise LanePulse's; "unresolved" when
+                          # the operator said so, or LanePulse is not sure and nobody checked it
+    group: str            # indoor | outdoor (window is outdoor, seen from inside) | unresolved
+    machine: str          # LanePulse's label (with what it learned); for an unresolved image, the way it leans
     sure: float           # how sure the prompts are of their own label, 1/3 to 1
     decided: str | None   # the operator's label, when they chose one
     decided_by: str | None
@@ -329,14 +333,17 @@ class SceneService:
         out = []
         for r, li, lr, pi in zip(rows, lab, learned, sure):
             machine = LABELS[int(li)]
-            label = r[3] if r[3] in LABELS else machine
-            out.append(SceneItem(r[0], r[2], label, GROUP[label], machine, float(pi), r[3],
+            if r[3] in LABELS or r[3] == UNRESOLVED:
+                label = r[3]
+            else:       # nobody checked it: unresolved when LanePulse is not sure, unless images people placed decided it
+                label = UNRESOLVED if pi < UNSURE_BELOW and not lr else machine
+            out.append(SceneItem(r[0], r[2], label, GROUP.get(label, UNRESOLVED), machine, float(pi), r[3],
                                  r[4] if r[3] else None, bool(lr)))
         return out
 
     def decide(self, version_ids: list[int], label: str | None, author: str) -> int:
-        if label is not None and label not in LABELS:
-            raise ValueError("Choose indoor, outdoor, or outdoor seen from inside (window).")
+        if label is not None and label not in LABELS and label != UNRESOLVED:
+            raise ValueError("Choose indoor, outdoor, outdoor seen from inside (window), or unresolved.")
         known = {r[0] for r in self.con.execute("SELECT source_version_id FROM scene_result")}
         bad = [v for v in version_ids if v not in known]
         if bad:
@@ -352,19 +359,21 @@ class SceneService:
         items = self.items() if items is None else items
         return {"indoor": sum(i.group == "indoor" for i in items), "outdoor": sum(i.group == "outdoor" for i in items),
                 "window": sum(i.label == "window" for i in items),
-                "moved": sum(i.decided is not None and i.decided != i.machine for i in items),
-                "confirmed": sum(i.decided is not None and i.decided == i.machine for i in items),
-                "unsure": sum(i.decided is None and i.sure < UNSURE_BELOW for i in items)}
+                "unresolved": sum(i.group == UNRESOLVED for i in items),
+                "moved": sum(i.decided in LABELS and i.decided != i.machine for i in items),       # placed by a person,
+                "confirmed": sum(i.decided in LABELS and i.decided == i.machine for i in items),   # not left unresolved
+                "unsure": sum(i.decided is None and i.label == UNRESOLVED for i in items)}
 
     def copy_out(self, dest: Path, progress: Callable[[int, int], None] | None = None) -> dict:
         """Copy every sorted image into dest/indoor and dest/outdoor, the outdoor ones seen from inside in
-        dest/outdoor/seen from inside (keeping subfolders), with a list of them. The source files are only read."""
+        dest/outdoor/seen from inside and the unresolved ones in dest/unresolved (keeping subfolders), with a list
+        of them. The source files are only read."""
         import csv
         from .views import ViewService
         items = self.items()
         vs = ViewService(self.m)
         dest = Path(dest)
-        for lab in LABELS:
+        for lab in (*LABELS, UNRESOLVED):
             (dest / FOLDER[lab]).mkdir(parents=True, exist_ok=True)
         copied = missing = 0
         listing = dest / "sorting.csv"
@@ -374,7 +383,7 @@ class SceneService:
             for n, it in enumerate(items, 1):
                 src = vs._path(it.version_id)
                 target = dest / FOLDER[it.label] / Path(it.file)
-                for lab in LABELS:      # moved since the last copy
+                for lab in (*LABELS, UNRESOLVED):      # moved since the last copy
                     other = dest / FOLDER[lab] / Path(it.file)
                     if lab != it.label and other.is_file():
                         other.unlink()
@@ -392,7 +401,7 @@ class SceneService:
         os.replace(listing.with_suffix(".tmp"), listing)
         c = self.counts(items)
         return {"folder": str(dest), "copied": copied, "missing": missing, "indoor": c["indoor"], "outdoor": c["outdoor"],
-                "window": c["window"], "list": str(listing)}
+                "window": c["window"], "unresolved": c["unresolved"], "list": str(listing)}
 
 
 class SceneProcessor:

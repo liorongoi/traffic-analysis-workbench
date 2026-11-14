@@ -125,8 +125,8 @@ def test_sort_correct_learn_and_copy(tmp_path, models_dir):
     assert all(items[f"holiday out {k}.jpg"]["label"] == "outdoor" for k in range(4, 8))
     tricky = [i for f, i in items.items() if "tricky" in f]
     assert all(i["machine"] == "indoor" for i in tricky)     # LanePulse gets these wrong
-    assert r["counts"] == {"indoor": 7, "outdoor": 6, "window": 2, "moved": 0, "confirmed": 0,
-                           "unsure": r["counts"]["unsure"]}
+    assert r["counts"] == {"indoor": 7, "outdoor": 6, "window": 2, "unresolved": 0, "moved": 0, "confirmed": 0,
+                           "unsure": 0}
 
     # The operator moves two of the three tricky ones; the decision wins over LanePulse's choice.
     moved = [tricky[0]["version_id"], tricky[1]["version_id"]]
@@ -188,6 +188,43 @@ def test_sort_correct_learn_and_copy(tmp_path, models_dir):
     c.post(f"/api/missions/{mid}/scenes/copy", headers=H1)
     assert (dest / "indoor" / tricky[0]["file"]).is_file() and not (dest / "outdoor" / tricky[0]["file"]).exists()
     assert {p.name: p.stat().st_mtime for p in src.iterdir()} == before
+
+
+def test_unresolved_set(tmp_path, models_dir, monkeypatch):
+    c = app_client(tmp_path)
+    src, out = tmp_path / "src", tmp_path / "out"
+    out.mkdir()
+    photos(src, n_in=3, n_out=3, n_tricky=0)
+    mid = make_mission(c, src, out)
+    items = c.get(f"/api/missions/{mid}/scenes").json()["items"]
+    one = items[0]
+    # The operator cannot tell: the image waits in the unresolved set, keeps LanePulse's lean, and is not learned.
+    d = c.post(f"/api/missions/{mid}/scenes/decide", json={"version_ids": [one["version_id"]], "label": "unresolved"},
+               headers=H1).json()
+    assert d["counts"]["unresolved"] == 1 and d["counts"]["indoor"] + d["counts"]["outdoor"] == 5
+    it = {i["version_id"]: i for i in c.get(f"/api/missions/{mid}/scenes").json()["items"]}[one["version_id"]]
+    assert it["label"] == it["group"] == "unresolved" and it["machine"] == one["machine"]
+    ins = [i["version_id"] for i in items if i["file"].startswith("holiday in")][1:]
+    outs = [i["version_id"] for i in items if i["file"].startswith("holiday out")][:2]
+    c.post(f"/api/missions/{mid}/scenes/decide", json={"version_ids": ins, "label": "indoor"}, headers=H1)
+    c.post(f"/api/missions/{mid}/scenes/decide", json={"version_ids": outs, "label": "outdoor"}, headers=H1)
+    res = c.post(f"/api/missions/{mid}/scenes/learn", headers=H1).json()
+    assert res["decisions"] == 4, res          # the unresolved one is not a lesson
+    cp = c.post(f"/api/missions/{mid}/scenes/copy", headers=H1).json()
+    assert cp["unresolved"] == 1
+    dest = out / "Bundle - indoor and outdoor"
+    assert (dest / "unresolved" / one["file"]).is_file()
+    # Placing it later takes its copy out of unresolved.
+    c.post(f"/api/missions/{mid}/scenes/decide", json={"version_ids": [one["version_id"]], "label": "indoor"}, headers=H1)
+    c.post(f"/api/missions/{mid}/scenes/copy", headers=H1)
+    assert (dest / "indoor" / one["file"]).is_file() and not (dest / "unresolved" / one["file"]).exists()
+    # Images LanePulse is not sure of, and nobody checked, wait in the unresolved set by themselves.
+    c.post(f"/api/missions/{mid}/scenes/forget", headers=H1)
+    monkeypatch.setattr(scenes, "UNSURE_BELOW", 1.01)
+    now = c.get(f"/api/missions/{mid}/scenes").json()
+    assert {i["group"] for i in now["items"] if i["decided"] is None} == {"unresolved"}
+    assert all(i["group"] != "unresolved" for i in now["items"] if i["decided"])
+    assert now["counts"]["unsure"] == now["counts"]["unresolved"] == sum(i["decided"] is None for i in now["items"])
 
 
 def test_other_missions_have_no_sorting(tmp_path, models_dir):
