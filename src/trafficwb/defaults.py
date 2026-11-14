@@ -30,7 +30,8 @@ BUILT_IN: dict = {
     },
     "images": {"detector": "standard", "mode": "general_traffic", "vehicle_model": None},
     "video": {"detector": "standard", "mode": "object_search", "sam3_interval_s": 1.0, "camera": "fixed",
-              "video_workers": 1, "analyse_new": False},
+              "video_workers": 1, "analyse_new": False,
+              "track_min_frames": None},       # analysed frames before a target counts (None: 5, or 3 with SAM 3.1 alone)
 }
 
 
@@ -85,6 +86,9 @@ def check(d: dict) -> list[str]:
         errors.append("SAM 3.1 in video runs every 0.2 to 10 seconds of the recording.")
     if not isinstance(vi["video_workers"], int) or not 1 <= vi["video_workers"] <= 32:
         errors.append("Parts analysed side by side must be 1 to 32.")
+    n = vi["track_min_frames"]
+    if n is not None and (not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 30):
+        errors.append("Frames before a target counts must be 1 to 30.")
     return errors
 
 
@@ -99,6 +103,8 @@ def save(data_root: Path | str, changes: dict) -> dict:
                 raise ValueError(f"Unknown setting '{part}.{k}'.")
             if k == "results_folder" and isinstance(v, str):
                 v = v.strip() or None
+            if k == "track_min_frames" and v == 0:
+                v = None                                  # 0: back to the default
             cur[part][k] = v
     errors = check(cur)
     if errors:
@@ -119,7 +125,8 @@ def mission_fields(d: dict, input_type: str) -> dict:
            "auto_min_reviews": int(b["auto_min_reviews"]), "auto_epochs": int(b["auto_epochs"])}
     if input_type == "video":
         out.update(sam3_interval_s=float(part["sam3_interval_s"]), camera=part["camera"],
-                   video_workers=int(part["video_workers"]), analyse_new=bool(part["analyse_new"]))
+                   video_workers=int(part["video_workers"]), analyse_new=bool(part["analyse_new"]),
+                   track_min_frames=part["track_min_frames"])
     else:
         out["vehicle_model"] = part["vehicle_model"]
     return out

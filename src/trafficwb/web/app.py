@@ -83,6 +83,7 @@ class MissionBody(BaseModel):
     auto_min_reviews: int = 20
     auto_epochs: int = 30
     analyse_new: bool = False              # video: new videos analysed as they arrive
+    track_min_frames: int | None = None    # video: analysed frames before a target counts (None: the default)
 
     def config(self) -> MissionConfig:
         d = self.model_dump()
