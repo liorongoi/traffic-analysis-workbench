@@ -228,7 +228,9 @@ def main(argv=None) -> int:
     report["image_counts"] = imd.get("processing_counts")
     report["video_counts"] = vmd.get("processing_counts")
     checks["video_finished"] = vj.get("state") in DONE and not vj.get("error")
-    checks["images_finished"] = ij.get("state") in DONE and not ij.get("error")
+    # A job finished before the crash is not in the restarted server's memory: the items say whether it finished.
+    checks["images_finished"] = (ij.get("state") in DONE and not ij.get("error")) or \
+        (not ij and set((imd.get("processing_counts") or {})) == {"done"})
     checks["no_failed_items"] = not (imd.get("processing_counts") or {}).get("failed") and \
         not (vmd.get("processing_counts") or {}).get("failed")
     if restarted:

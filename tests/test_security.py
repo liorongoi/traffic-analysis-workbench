@@ -1,4 +1,5 @@
 """Security checks: the Host header (DNS rebinding), the network access key, model names, worker checksums."""
+import os
 from pathlib import Path
 
 import pytest
@@ -47,7 +48,8 @@ def test_no_key_on_this_computer(tmp_path):
 def test_network_needs_the_access_key(tmp_path):
     c = TestClient(_app(tmp_path, port=8765, lan=True, discovery=False), base_url="http://10.0.0.5:8765")
     key = access_key_for(tmp_path / "data")
-    assert (tmp_path / "data" / "access-key").stat().st_mode & 0o077 == 0
+    if os.name != "nt":                                            # Windows has no such mode bits (ACLs instead)
+        assert (tmp_path / "data" / "access-key").stat().st_mode & 0o077 == 0
     assert c.get("/api/health").status_code == 200                 # installers and supervisors
     assert c.get("/").status_code in (200, 404)                    # the screens load, to ask for the key
     assert c.get("/api/missions").status_code == 401
