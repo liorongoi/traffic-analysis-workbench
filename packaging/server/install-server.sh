@@ -234,7 +234,11 @@ if [ -z "$ALLOW" ]; then
 fi
 if [ "$MODE" = user ]; then
   echo "Other computers reach it on port $PORT. If they cannot (a firewall on this server), the server's administrator"
-  echo "allows it once with:  sudo firewall-cmd --permanent --add-port=$PORT/tcp && sudo firewall-cmd --reload   (Red Hat)"
+  if [ "$ALLOW" = any ]; then
+    echo "allows it once with:  sudo firewall-cmd --permanent --add-port=$PORT/tcp && sudo firewall-cmd --reload   (Red Hat)"
+  else
+    echo "allows it once with:  sudo firewall-cmd --permanent --add-rich-rule='rule family=\"ipv4\" source address=\"$ALLOW\" port port=\"$PORT\" protocol=\"tcp\" accept' && sudo firewall-cmd --reload   (Red Hat)"
+  fi
   echo "                  or:  sudo ufw allow from $ALLOW to any port $PORT proto tcp                         (Ubuntu)"
 elif fw_active; then
   fw_open "$ALLOW" "$PORT"

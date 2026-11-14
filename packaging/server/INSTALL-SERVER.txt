@@ -27,6 +27,18 @@ Install or update (no root: type these as yourself)
   LanePulse's files for SELinux and opens the port in firewalld (ufw on Ubuntu). The NVIDIA driver steps for Red Hat
   are in the PDF guide, section 18.
 
+Ports to open (only if a firewall on the server blocks other computers; ask the server's administrator, once)
+  TCP 8765   the web screens: browsers open http://<server address>:8765. The only one you need.
+             (If you installed with --port N, open N instead.)
+  UDP 8766   optional: lets other LanePulse computers that help with long videos find this server by themselves.
+             Not needed when you type the server's address into them.
+  Open them to your own network only, never to the whole internet. The commands for the administrator:
+    Red Hat:  sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.168.1.0/24" port port="8765" protocol="tcp" accept'
+              sudo firewall-cmd --reload
+    Ubuntu:   sudo ufw allow from 192.168.1.0/24 to any port 8765 proto tcp
+  Put your own network in place of 192.168.1.0/24; the installer prints the exact line for this server at the end.
+  For UDP 8766, the same lines with 8766 and udp. If the server has no firewall turned on, nothing needs opening.
+
 Open it from other computers:  http://<server address>:8765
   The browser asks once for the password, which the installer prints at the end. Choose your own in LanePulse:
   the key icon at the top right (it needs the current one). Forgotten? On the server: lanepulse password
