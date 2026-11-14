@@ -1,0 +1,45 @@
+/* Indoor and outdoor sorting (pages/Sorting.tsx). */
+.sorting { display: grid; gap: 14px; }
+.sort-head { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; }
+.sort-figs { display: flex; gap: 22px; }
+.sort-figs > div { display: grid; }
+.sort-figs b { font-family: var(--display); font-size: 26px; line-height: 1.1; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sort-figs span { color: var(--muted); font-size: 12.5px; }
+.sort-figs .warn b { color: var(--warn); }
+.sort-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sort-picked { position: sticky; top: 8px; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px;
+  background: var(--panel-2); outline: 1px solid var(--accent); box-shadow: var(--accent-glow); }
+.sort-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+@media (max-width: 900px) { .sort-cols { grid-template-columns: 1fr; } }
+.sort-col h2 { margin: 0; }
+.sort-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 12px 0; }
+.sort-card { margin: 0; display: grid; gap: 4px; background: var(--field); outline: 1px solid var(--line); padding: 6px; min-width: 0; }
+.sort-card.unsure { outline-color: rgba(255, 182, 72, .6); }
+.sort-card.yours { outline-color: rgba(101, 221, 160, .55); }
+.sort-card.learned { outline-color: rgba(185, 162, 255, .7); }
+.sort-card.learned .why { color: var(--change); }
+.sort-card.window:not(.on):not(.unsure):not(.learned):not(.yours) { outline: 1px dashed rgba(255, 159, 122, .75); }
+.sort-pick .win-badge { position: absolute; left: 0; bottom: 0; padding: 2px 7px; font-size: 11.5px; font-weight: 600;
+  background: rgba(255, 159, 122, .92); color: #1a0d06; }
+.sort-figs .win b { color: #ff9f7a; }
+.sort-col > .row { gap: 8px; flex-wrap: wrap; }
+.sort-card .moves { display: flex; flex-wrap: wrap; gap: 4px; }
+.sort-card.on { outline: 2px solid var(--accent); box-shadow: var(--accent-glow); }
+.sort-pick { position: relative; padding: 0; border: 0; min-height: 0; background: #000; display: block; width: 100%; cursor: pointer; }
+.sort-pick:hover:not(:disabled) { background: #000; border: 0; }
+.sort-pick img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+.sort-pick .tick { position: absolute; top: 6px; left: 6px; width: 20px; height: 20px; display: grid; place-items: center; font-size: 13px;
+  background: rgba(6, 11, 20, .7); border: 1px solid var(--text-2); color: var(--accent-text); }
+.sort-card.on .tick { background: var(--accent); border-color: var(--accent); }
+.sort-card figcaption { display: grid; gap: 2px; font-size: 12px; min-width: 0; }
+.sort-card .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.sort-card .why { color: var(--muted); }
+.sort-card.unsure .why { color: var(--warn); }
+.sort-card.yours .why { color: var(--human); }
+.sort-card .acts { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 2px; }
+.sort-card .acts button { min-height: 26px; padding: 0 8px; font-size: 12px; }
+.sort-card .acts a { font-size: 12px; }
+.sort-learn p { max-width: 80ch; }
+.sort-unres { outline: 1px solid rgba(255, 182, 72, .45); }
+.sort-unres .sort-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.sort-card .acts .unres { min-height: 26px; padding: 0 4px; font-size: 13px; font-weight: 700; }

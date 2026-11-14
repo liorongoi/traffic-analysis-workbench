@@ -9,7 +9,8 @@ Every size of the four fast detectors is fetched by default, so the app can choo
 (hardware.py): YOLOX nano, tiny, s, m, l, x; RF-DETR nano, small, medium (exported to ONNX here; needs PyTorch and the
 rfdetr package; --no-rfdetr skips it); D-FINE nano to xlarge and RT-DETRv2 R18 to R101 (need PyTorch and transformers;
 --no-detr skips them). --yolox-sizes, --rfdetr-sizes and --detr-sizes pick fewer; --minimal keeps one of each.
-It also fetches SAM 3.1 (sam3.1-w8a16, about 880 MB; --no-sam3 skips it) and the training starting weights
+It also fetches the indoor/outdoor sorter (CLIP ViT-B/32 image encoder, 8-bit, 89 MB), SAM 3.1
+(sam3.1-w8a16, about 880 MB; --no-sam3 skips it) and the training starting weights
 (yolox_<size>.pth, rf-detr-<size>-coco.pth, d-fine-<size>-coco.pth, rt-detr-<size>-coco.pth) into training_weights/;
 the installers put them next to their own Python (share/lanepulse), so training on the learning page never goes
 online. Files already in --dest and --training-weights are checked and kept, so with everything staged it runs
@@ -72,6 +73,24 @@ PACKS = [
         "max_slots": 10,
         "region_labels": ['Albania', 'Andorra', 'Argentina', 'Armenia', 'Australia', 'Austria', 'Azerbaijan', 'Bahrain', 'Belarus', 'Belgium', 'Bosnia and Herzegovina', 'Brazil', 'Bulgaria', 'Cambodia', 'Canada', 'Croatia', 'Cyprus', 'Czech Republic', 'Denmark', 'Estonia', 'Finland', 'France', 'Georgia', 'Germany', 'Gibraltar', 'Greece', 'Guernsey', 'Hungary', 'Iceland', 'Indonesia', 'Ireland', 'Israel', 'Italy', 'Latvia', 'Liechtenstein', 'Lithuania', 'Luxembourg', 'Malaysia', 'Malta', 'Mexico', 'Moldova', 'Monaco', 'Montenegro', 'Netherlands', 'New Zealand', 'North Macedonia', 'Norway', 'Poland', 'Portugal', 'Qatar', 'Romania', 'San Marino', 'Serbia', 'Singapore', 'Slovakia', 'Slovenia', 'Spain', 'Sweden', 'Switzerland', 'Thailand', 'Turkey', 'United States', 'Ukraine', 'United Kingdom', 'Vietnam', 'Unknown'],
         "evaluation_only": True,
+    },
+    {
+        # The indoor/outdoor sorter (scenes.py): OpenAI CLIP ViT-B/32's image encoder, 8-bit, as exported by
+        # transformers.js, pinned to one commit. Its text side is not shipped: the two prompt embeddings it needs are
+        # in src/trafficwb/scene_prompts.json (made once by scripts/scene_prompts.py).
+        "name": "clip-vit-b32-image",
+        "version": "xenova-6b7c523-int8",
+        "task": "scene_embedding",
+        "weights_url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/6b7c523703ae26e39be4b03774966f8571c7f523/onnx/vision_model_quantized.onnx",
+        "sha256": "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299",
+        "license": "MIT (OpenAI CLIP code and released weights)",
+        "license_url": "https://raw.githubusercontent.com/openai/CLIP/main/LICENSE",
+        "data_note": "Trained by OpenAI on 400 million image and text pairs from the internet (not released). The ONNX "
+                     "export and 8-bit quantisation are by Xenova (transformers.js, MIT).",
+        "source": "https://huggingface.co/Xenova/clip-vit-base-patch32 (export of openai/clip-vit-base-patch32)",
+        "input_size": 224,
+        "input_format": "RGB, shorter side resized to 224 (bicubic), centre crop 224x224, /255, CLIP mean and std; "
+                        "output image_embeds [batch, 512]",
     },
 ]
 

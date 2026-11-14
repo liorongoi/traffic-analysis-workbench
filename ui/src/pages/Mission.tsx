@@ -5,9 +5,10 @@ import { ScoreSlider } from "../components/ScoreSlider";
 import SearchTab from "./Search";
 import EventsTab from "./Events";
 import PlatesTab from "./Plates";
-import LearningTab from "./Learning";
+import LearningTab, { MissionRunMode } from "./Learning";
 import NightReviewTab from "./NightReview";
-import { CameraChoice, DETECTOR_LABEL, DetectorChoice, ModelChoice, ParallelChoice, SamInterval, partsOf, usesSam } from "./Wizard";
+import SortingTab from "./Sorting";
+import { CameraChoice, DETECTOR_LABEL, DetectorChoice, ModelChoice, ParallelChoice, SamInterval, TrackFrames, partsOf, usesSam } from "./Wizard";
 import FolderPicker from "../components/FolderPicker";
 import { Choice, NamePick } from "../components/Pick";
 
@@ -29,7 +30,12 @@ export function loadQuery(mid: string): SavedQuery {
 export default function MissionPage({ missionId, tab, extra }: { missionId: string; tab: string; extra?: string }) {
   const [m, setM] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
-  const load = useCallback(() => api(`/missions/${missionId}`).then(setM).catch((e: ApiError) => setErr(e.message)), [missionId]);
+  const [review, setReview] = useState<any>(null);
+  const load = useCallback(() => {
+    // The mission list carries what waits for review, for the one button that is always the next step.
+    api("/missions").then((r) => setReview((r.missions as any[]).find((x) => x.id === missionId)?.review ?? null)).catch(() => undefined);
+    return api(`/missions/${missionId}`).then(setM).catch((e: ApiError) => setErr(e.message));
+  }, [missionId]);
   useEffect(() => { load(); }, [load]);
   const active = m?.job && ["running", "paused"].includes(m.job.state);
   useEffect(() => {
@@ -39,32 +45,39 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
 
   if (err) return <div className="page"><div className="msg err">{err}</div></div>;
   if (!m) return <div className="page muted">Loading…</div>;
+  // Sorting indoor from outdoor finds no vehicles: its own tab replaces the vehicle tabs.
+  const sorting = m.config.mode === "indoor_outdoor";
   const isVideo = m.config.input_type === "video";
   const tabs = [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
     ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []),
     ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"]]), ["learning", "Learning"]];
+  const job = m.job && ["running", "paused"].includes(m.job.state) ? m.job : null;
+  const pct = job && job.total ? Math.round((100 * job.done) / job.total) : null;
+  const facts = (sorting ? ["Still images", "Indoor and outdoor", m.config.iana_zone]
+    : [isVideo ? "Video" : "Still images", cap(m.config.mode.replace(/_/g, " ")), m.config.iana_zone,
+      DETECTOR_LABEL[m.config.detector ?? "standard"] ?? "Standard detector"]).join(" · ");
   return (
     <div className="page">
-      <div className="page-head">
-        <div>
-          <nav className="crumbs" aria-label="Breadcrumb"><a href="#/">Missions</a><span aria-hidden="true">/</span><span className="bidi">{m.config.name}</span></nav>
-          <h1 className="bidi">{m.config.name}</h1>
-          <div className="meta">
-            <span>{isVideo ? "Video" : "Still images"}</span>
-            <span>{cap(m.config.mode.replace(/_/g, " "))}</span>
-            <span>{m.config.iana_zone}</span>
-            <span>{m.config.processing === "continuous" ? `Continuous, monitoring ${m.config.monitoring_enabled ? "on" : "off"}` : "One-time"}</span>
-            {<span>{DETECTOR_LABEL[m.config.detector ?? "standard"] ?? "Standard detector"}{m.config.detector !== "sam3" && m.config.vehicle_model ? ` · ${m.config.vehicle_model}` : ""}</span>}
-          </div>
-        </div>
+      {/* One strip instead of a breadcrumb, a title, a row of facts and a row of tabs: the work below gets the room. */}
+      <div className="mstrip">
+        <a className="mstrip-back" href="#/" aria-label="All missions" title="All missions">‹</a>
+        <h1 className="bidi" title={facts}>{m.config.name}</h1>
+        {job ? <span className="tag live"><i aria-hidden="true" />{job.state === "paused" ? "Paused" : `Processing${pct != null ? ` ${pct}%` : ""}`}</span>
+          : m.config.monitoring_enabled ? <span className="tag watch"><i aria-hidden="true" />Watching the folder</span> : null}
+        <nav className="tabs mstrip-tabs" aria-label="Mission">
+          {(sorting ? [tabs[0], ["sort", "Indoor and outdoor"]] : tabs).map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""} aria-current={tab === k ? "page" : undefined}>{l}</a>)}
+        </nav>
+        <span className="grow" />
+        {!isVideo && !sorting && review?.unreviewed > 0 && review.first_unreviewed &&
+          <a className="btn attn" href={`#/m/${missionId}/i/${review.first_unreviewed}`}>Review {review.unreviewed}</a>}
+        <a className={`gear${tab === "setup" ? " on" : ""}`} href={`#/m/${missionId}/setup`} title={`This mission's setup: ${facts}`} aria-label="Mission setup"><GearIcon /></a>
       </div>
-      <nav className="tabs">
-        {tabs.map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""}>{l}</a>)}
-      </nav>
       {tab === "overview" && <Overview m={m} reload={load} />}
+      {tab === "sort" && sorting && <SortingTab m={m} reload={load} />}
       {tab === "results" && !isVideo && <Results missionId={missionId} />}
       {tab === "night" && !isVideo && <NightReviewTab missionId={missionId} />}
       {tab === "views" && !isVideo && <Views missionId={missionId} />}
+      {(tab === "setup" || tab === "settings") && <MissionSetup m={m} reload={load} />}
       {tab === "learning" && <LearningTab missionId={missionId} job={m.job} reload={load} />}
       {tab === "plates" && m.config.mode === "plate_recognition" && <PlatesTab missionId={missionId} />}
       {tab === "events" && isVideo && <EventsTab missionId={missionId} extra={extra ?? null} />}
@@ -101,7 +114,7 @@ function JobCard({ job, mid, reload, unit }: { job: Job | null; mid: string; rel
             <div className={job.result.scan.queued ? "muted" : "msg err"}>
               <b>Scan: {job.result.scan.queued} file(s) queued.</b>
               <ul style={{ margin: "4px 0 0" }}>{job.result.scan.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
-              {!!job.result.scan.no_capture_time && <a className="btn" href="#/formats">Show the app how your files are named</a>}
+              {!!job.result.scan.no_capture_time && <a className="btn" href="#/settings/formats">Show the app how your files are named</a>}
             </div>
           )}
         </>
@@ -141,6 +154,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
       {m.config.input_type === "video" && <CatalogCard m={m} reload={reload} />}
       <div className="grid cols-2">
         <JobCard job={m.job} mid={m.id} reload={reload} unit={m.config.input_type === "video" ? "recordings" : "images"} />
+        <SourcesCard m={m} reload={reload} />
         <div className="card">
           <h2>Monitoring</h2>
           {m.config.processing === "continuous" ? (
@@ -153,8 +167,6 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
             </>
           ) : <p className="muted">One-time mission: it processes the files present at its first scan.</p>}
         </div>
-        <DetectorCard m={m} reload={reload} />
-        <SourcesCard m={m} reload={reload} />
       </div>
       <div className="grid cols-2">
         <div className="card">
@@ -175,8 +187,42 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** What this mission decided before it ran: the detector, how its model learns, where results go, and deleting it.
+ *  New missions take these from Settings; this is where one mission is changed. Its input folders stay on the
+ *  Overview, because adding a folder is part of the work. */
+function MissionSetup({ m, reload }: { m: any; reload: () => void }) {
+  const c = m.config;
+  return (
+    <div className="grid" style={{ gap: 14 }}>
+      <div className="setup-facts card">
+        <h2 style={{ margin: 0 }}>This mission's setup</h2>
+        <dl>
+          <dt>Kind</dt><dd>{c.input_type === "video" ? "Video" : "Still images"} · {cap(c.mode.replace(/_/g, " "))}</dd>
+          <dt>Time zone</dt><dd>{c.iana_zone} ({c.country})</dd>
+          <dt>Results</dt><dd className="mono bidi">{c.output_dir} ({c.export_formats.join(", ")})</dd>
+          <dt>New files</dt><dd>{c.processing === "continuous" ? "Keeps watching the input folder" : "Analysed once"}</dd>
+        </dl>
+        <p className="muted" style={{ margin: 0 }}>New missions take their setup from <a href={`#/settings/${c.input_type === "video" ? "video" : "images"}`}>Settings</a>. Changes here apply to this mission only.</p>
+      </div>
+      <div className="grid cols-2" style={{ alignItems: "start" }}>
+        <DetectorCard m={m} reload={reload} />
+        <MissionRunMode missionId={m.id} />
+      </div>
       <DeleteMission m={m} />
     </div>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3.2" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
   );
 }
 
@@ -227,14 +273,17 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
   useEffect(() => { setCamera(m.config.camera ?? "fixed"); }, [m.config.camera]);
   const [workers, setWorkers] = useState<number>(m.config.video_workers ?? 1);
   useEffect(() => { setWorkers(m.config.video_workers ?? 1); }, [m.config.video_workers]);
-  const changed = value !== (m.config.detector ?? "standard") || (video && (every !== (m.config.sam3_interval_s ?? 1) || camera !== (m.config.camera ?? "fixed") || workers !== (m.config.video_workers ?? 1)));
+  const [minFrames, setMinFrames] = useState<number>(m.config.track_min_frames ?? 0);
+  useEffect(() => { setMinFrames(m.config.track_min_frames ?? 0); }, [m.config.track_min_frames]);
+  const changed = value !== (m.config.detector ?? "standard") || (video && (every !== (m.config.sam3_interval_s ?? 1) || camera !== (m.config.camera ?? "fixed") || workers !== (m.config.video_workers ?? 1) || minFrames !== (m.config.track_min_frames ?? 0)));
   const saveIt = async () => {
     setErr(null);
     setSaving(true);
-    try { await api(`/missions/${m.id}/detector`, { method: "PUT", body: { detector: value, ...(video ? { sam3_interval_s: every, camera, video_workers: workers } : {}) } }); reload(); }
+    try { await api(`/missions/${m.id}/detector`, { method: "PUT", body: { detector: value, ...(video ? { sam3_interval_s: every, camera, video_workers: workers, track_min_frames: minFrames } : {}) } }); reload(); }
     catch (e) { setErr((e as ApiError).message); }
     finally { setSaving(false); }
   };
+  if (m.config.mode === "indoor_outdoor") return <div className="card"><h2>Model</h2><p className="muted">Indoor or outdoor is decided by CLIP ViT-B/32 (OpenAI, MIT licence), installed with LanePulse. It finds no vehicles, so there is no detector to choose. See the <a href={`#/m/${m.id}/sort`}>Indoor and outdoor</a> tab.</p></div>;
   return (
     <div className="card">
       <h2>Detector</h2>
@@ -242,11 +291,13 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
       {video && usesSam(value) && <SamInterval value={every} onChange={setEvery} both={partsOf(value).fast !== null} disabled={busy} />}
       {video && <CameraChoice value={camera} onChange={setCamera} disabled={busy} />}
       {video && <ParallelChoice value={workers} onChange={setWorkers} disabled={busy} />}
+      {video && <TrackFrames value={minFrames || null} onChange={setMinFrames} disabled={busy}
+        step={value === "sam3" ? every : 0.2} auto={value === "sam3" ? 3 : 5} />}
       {value !== "sam3" && <ModelChoice saved={saved} value={m.config.vehicle_model ?? null} onChange={setModel} disabled={busy} rfdetr={partsOf(value).fast === "rfdetr"} />}
       {changed && <p className="muted">{video ? "Recordings" : "Images"} already processed keep their detections; the change applies to the next run. Each detection records the model that made it.</p>}
       {busy && <p className="muted">The detector can be changed when processing has finished.</p>}
-      {changed && <div className="row"><button className="primary" disabled={busy || saving} onClick={saveIt}>{saving ? "Saving…" : "Use this detector"}</button>
-        <button onClick={() => { setValue(m.config.detector ?? "standard"); setEvery(m.config.sam3_interval_s ?? 1); setCamera(m.config.camera ?? "fixed"); setWorkers(m.config.video_workers ?? 1); }}>Cancel</button></div>}
+      {changed && <div className="row"><button className="primary" disabled={busy || saving} onClick={saveIt}>{saving ? "Saving…" : value !== (m.config.detector ?? "standard") ? "Use this detector" : "Save"}</button>
+        <button onClick={() => { setValue(m.config.detector ?? "standard"); setEvery(m.config.sam3_interval_s ?? 1); setCamera(m.config.camera ?? "fixed"); setWorkers(m.config.video_workers ?? 1); setMinFrames(m.config.track_min_frames ?? 0); }}>Cancel</button></div>}
       {err && <div className="msg err" role="alert">{err}</div>}
       {!changed && sam?.vehicle_prompts && (
         <SamWords m={m} defaults={sam.vehicle_prompts} busy={busy} reload={reload} samOnly={m.config.detector === "sam3"} standardOnly={!usesSam(m.config.detector ?? "standard")} standardKnows={sam.standard_knows ?? []} />

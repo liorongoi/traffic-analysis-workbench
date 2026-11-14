@@ -27,7 +27,8 @@ TARGET_COUNTRIES = {"IR": "Iran", "LB": "Lebanon", "IL": "Israel", "LV": "Latvia
 COUNTRY_ZONES = {"IR": "Asia/Tehran", "LB": "Asia/Beirut", "IL": "Asia/Jerusalem", "LV": "Europe/Riga", "FI": "Europe/Helsinki"}
 INPUT_TYPES = {"images", "video"}
 MODES = {
-    "images": {"general_traffic", "object_search", "plate_recognition"},
+    # indoor_outdoor: sort a bundle of images into indoor and outdoor (scenes.py); capture times are not needed.
+    "images": {"general_traffic", "object_search", "plate_recognition", "indoor_outdoor"},
     "video": {"object_search", "plate_recognition"},
 }
 EXPORT_FORMATS = {"xlsx", "csv"}
@@ -1074,6 +1075,19 @@ CREATE TABLE camera_geo (                  -- a fixed camera on the map (video_g
   created_at TEXT NOT NULL
 );
 """,
+    26: """
+ALTER TABLE camera_geo ADD COLUMN dtm_path TEXT;          -- the terrain (ground heights) file picked, or NULL
+-- Platform data the operator typed for a recording (video_georeg): position, height, angles, lens, and a square on
+-- the map to search in when the video has no position. Newest row wins.
+CREATE TABLE video_platform (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  data TEXT NOT NULL,                      -- JSON (video_georeg.PLATFORM_FIELDS, search_box)
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_video_platform ON video_platform(source_version_id);
+""",
 }
 
 
@@ -1192,6 +1206,8 @@ class MissionConfig:
     crowd_alert: int | None = None   # video: list the periods with this many people or more in view at once
     analyse_new: bool = False        # video: new videos in the input folder are analysed with the mission's model
                                      # as they arrive (always so in full auto)
+    track_min_frames: int | None = None  # video: analysed frames a target must be seen on before it counts as a target
+                                         # (None: 5 with the standard detector, 3 with SAM 3.1 alone)
 
     def sources(self) -> list[str]:
         """Every source folder of the mission, the first being source_dir."""
@@ -1235,6 +1251,10 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         )
         if cfg.mode == "plate_recognition":
             v.errors.append("Plate recognition needs one of the supported countries.")
+    if cfg.mode == "indoor_outdoor":
+        from .scenes import available
+        if not available().get("installed"):
+            v.errors.append(available()["reason"])
     try:
         ZoneInfo(cfg.iana_zone)
     except (ZoneInfoNotFoundError, ValueError):
@@ -1263,6 +1283,8 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         v.errors.append(f"Camera must be one of {sorted(CAMERAS)}.")
     if cfg.sam3_interval_s is not None and not (0.2 <= cfg.sam3_interval_s <= 10):
         v.errors.append("SAM 3.1 in video runs every 0.2 to 10 seconds of the recording.")
+    if cfg.track_min_frames is not None and not (1 <= cfg.track_min_frames <= 30):
+        v.errors.append("Frames before a target counts must be 1 to 30.")
     if cfg.sam3_words is not None:
         from .sam3 import vehicle_prompts
         try:

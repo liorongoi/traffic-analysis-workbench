@@ -77,6 +77,11 @@ class MissionBody(BaseModel):
     camera: str = "fixed"                  # video: fixed | moving (PTZ, vehicle, drone, body-worn)
     video_workers: int | None = None       # video: segments analysed side by side (None: 1)
     run_mode: str = "manual"               # learning: manual decisions | auto
+    teacher: str = "none"                  # learning: none | sam3
+    auto_min_reviews: int = 20
+    auto_epochs: int = 30
+    analyse_new: bool = False              # video: new videos analysed as they arrive
+    track_min_frames: int | None = None    # video: analysed frames before a target counts (None: the default)
 
     def config(self) -> MissionConfig:
         d = self.model_dump()
@@ -91,6 +96,8 @@ class DetectorBody(BaseModel):
     sam3_interval_s: float | None = None   # video: seconds between SAM 3.1 frames; None leaves it as it is
     camera: str | None = None              # video: fixed | moving; None leaves it as it is
     video_workers: int | None = None       # video: segments analysed side by side; None leaves it as it is
+    track_min_frames: int | None = None    # video: analysed frames before a target counts; 0 back to the default,
+                                           # None leaves it as it is
 
 
 class SizeBody(BaseModel):
@@ -275,7 +282,38 @@ class GeoBody(BaseModel):
     points: list[list[float]] = Field(..., min_length=1, max_length=100)    # [x, y, lat, lon]
     map_path: str | None = None
     corners: list[float] | None = Field(None, min_length=4, max_length=4)
+    dtm_path: str | None = None
     check_only: bool = False
+
+
+class GeoregBody(BaseModel):
+    map_path: str
+    corners: list[float] | None = Field(None, min_length=4, max_length=4)
+    dtm_path: str | None = None
+
+
+class MapServerBody(BaseModel):
+    id: str | None = None
+    name: str = Field("", max_length=120)
+    role: str = "map"
+    kind: str = "wms"
+    url: str = Field("", max_length=2000)
+    layer: str | None = None
+    style: str | None = None
+    matrix_set: str | None = None
+    format: str | None = None
+    encoding: str | None = None
+    max_zoom: int | None = Field(None, ge=0, le=24)
+    auth: dict | None = None
+
+
+class MapFetchBody(BaseModel):
+    source_id: str | None = None
+    server: MapServerBody | None = None            # a server not saved yet (connect only)
+    lat: float = 0.0
+    lon: float = 0.0
+    side_m: float = Field(1000, ge=50, le=20000)
+    m_per_px: float = Field(0.3, gt=0, le=100)
 
 
 class CalibrationBody(BaseModel):
@@ -373,6 +411,14 @@ class PreviewBody(BaseModel):
 class QuickBody(BaseModel):
     source_dir: str
     include_subdirs: bool = True
+
+
+class LearnFormatBody(BaseModel):
+    folder: str
+    include_subdirs: bool = True
+    zone: str | None = None     # the time zone the names are in; None: UTC
+    save: bool = False
+    name: str | None = None
 
 
 class FolderBody(BaseModel):
@@ -497,21 +543,31 @@ def quick_start(source_dir: str, include_subdirs: bool, data_root: Path, limit: 
     name = " ".join(words) or "New mission"
     if first is not None:
         name += f", {first.day} {first:%b %Y}"
+    from .. import defaults
+    settings = defaults.load(data_root)
+    both = settings["both"]
     zone, country = "Asia/Jerusalem", "IL"
     zone_from = None
     dr = DataRoot(data_root)
     rows = sorted(dr.missions(), key=lambda r: r["created_at"])
-    if rows:
+    if both["iana_zone"]:
+        zone, zone_from = both["iana_zone"], "settings"
+        country = both["country"] or next((c for c, z in COUNTRY_ZONES.items() if z == zone), country)
+    elif rows:
         cfg = dr.open_mission(rows[-1]["id"]).config()
         zone, country, zone_from = cfg.iana_zone, cfg.country, rows[-1]["name"]
-    out = (root.parent if root.parent != root else root) / f"{root.name} LanePulse exports"
+    # Results go in the results folder chosen in Settings, or else in a new folder beside the input.
+    base = Path(both["results_folder"]).expanduser() if both["results_folder"] else (root.parent if root.parent != root else root)
+    out = base / f"{root.name} LanePulse exports"
+    input_type = "video" if videos > images else "images"
     return {
-        "source_dir": str(root), "name": name, "input_type": "video" if videos > images else "images",
+        "source_dir": str(root), "name": name, "input_type": input_type,
         "images": images, "videos": videos, "readable": readable, "more": more, "pattern": pattern,
         "first_utc": first.isoformat().replace("+00:00", "Z") if first else None,
         "last_utc": last.isoformat().replace("+00:00", "Z") if last else None,
         "unreadable": unreadable, "iana_zone": zone, "country": country, "zone_from": zone_from,
         "output_dir": str(out), "output_exists": out.is_dir(),
+        "settings": defaults.mission_fields(settings, input_type),
     }
 
 
@@ -871,6 +927,23 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def quick_start_get(body: QuickBody, _u: User = Depends(user)):
         return quick_start(body.source_dir, body.include_subdirs, data_root)
 
+    @app.get("/api/settings/missions")
+    def mission_defaults_get(_u: User = Depends(user)):
+        """What new missions take: for still images and video alike, for still images only, for video only."""
+        from .. import defaults
+        return defaults.load(data_root)
+
+    @app.put("/api/settings/missions")
+    def mission_defaults_put(body: dict[str, Any], u: User = Depends(user)):
+        from .. import defaults
+        try:
+            out = defaults.save(data_root, body)
+        except ValueError as exc:
+            raise ApiError(400, "invalid", str(exc)) from None
+        from ..admin import audit
+        audit(DataRoot(data_root), u.username, "settings_changed", parts=sorted(body))
+        return out
+
     @app.post("/api/quick-start/output")
     def quick_start_output(body: FolderBody, _u: User = Depends(user)):
         """Make the suggested exports folder: one new folder inside a folder that already exists, nothing deeper."""
@@ -928,6 +1001,56 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                 out["folder"] = {"checked": len(rows), "matched": len(rows) - len(bad),
                                  "not_matched_examples": [r["name"] for r in bad[:10]],
                                  "matched_examples": [r for r in rows if r["ok"]][:3]}
+        return out
+
+    @app.post("/api/name-formats/learn")
+    def name_formats_learn(body: LearnFormatBody, u: User = Depends(user)):
+        """A new kind of file name in an input folder: guess its format from the names that cannot be read now and
+        check it on all of them. With save, remember it with the other formats, so every mission reads such names
+        from then on."""
+        from ..inventory import IMAGE_EXT, VIDEO_EXT
+        from ..name_formats import load, save, try_format
+        from ..timeparse import FormatError, suggest_template
+        root = Path(body.folder.strip()).expanduser()
+        if not root.is_dir():
+            raise ApiError(400, "no_folder", f"{root} is not a folder on this workstation.")
+        unread: list[str] = []
+        for p in (root.rglob("*") if body.include_subdirs else root.glob("*")):
+            if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in IMAGE_EXT | VIDEO_EXT:
+                try:
+                    parse_capture_time(p.name)
+                except MalformedName:
+                    unread.append(p.name)
+                if len(unread) >= 2000:
+                    break
+        if not unread:
+            return {"template": None, "total": 0, "matched": 0, "examples": []}
+        template = suggest_template(unread[0])
+        if not template:
+            return {"template": None, "total": len(unread), "matched": 0, "examples": [],
+                    "reason": "No date and time could be found in names like " + unread[0] + "."}
+        zone = body.zone or "UTC"
+        rows = try_format(template, zone, unread)
+        good = [r for r in rows.get("results", []) if r.get("ok")]
+        out = {"template": template, "zone": zone, "total": len(unread), "matched": len(good),
+               "examples": [{"name": r["name"], "utc": r["utc"]} for r in good[:3]],
+               "not_matched": [r["name"] for r in rows.get("results", []) if not r.get("ok")][:3]}
+        if body.save:
+            if not good:
+                raise ApiError(400, "bad_format", "This format reads none of the names, so it was not kept.")
+            have = load(data_root)
+            if any(f.get("template") == template and (f.get("zone") or "UTC") == zone for f in have):
+                return out | {"saved": True}
+            names = {f.get("name") for f in have}
+            base = (body.name or "").strip() or f"Learned from {root.name}"
+            name, n = base, 2
+            while name in names:
+                name, n = f"{base} ({n})", n + 1
+            try:
+                save(DataRoot(data_root), [*have, {"name": name, "template": template, "zone": zone}], u.username)
+            except FormatError as exc:
+                raise ApiError(400, "bad_format", str(exc)) from None
+            out |= {"saved": True, "name": name}
         return out
 
     @app.put("/api/name-formats")
@@ -1061,6 +1184,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "invalid", "SAM 3.1 in video runs every 0.2 to 10 seconds of the recording.")
         if body.video_workers is not None and not (1 <= body.video_workers <= 32):
             raise ApiError(400, "invalid", "Segments side by side must be 1 to 32.")
+        if body.track_min_frames is not None and not (0 <= body.track_min_frames <= 30):
+            raise ApiError(400, "invalid", "Frames before a target counts must be 1 to 30.")
         if uses_sam(body.detector) and not sam_info()["installed"]:
             raise ApiError(400, "sam3_missing", "SAM 3.1 is not installed on this computer: " + (sam_info()["reason"] or ""))
         if fast_of(body.detector) == "rfdetr" and not cfg.vehicle_model and not rfdetr_info(data_root)["installed"]:
@@ -1076,9 +1201,13 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             m.update_config(u.username, f"camera set to {body.camera}", camera=body.camera)
         if body.video_workers is not None and body.video_workers != cfg.video_workers:
             m.update_config(u.username, f"{body.video_workers} segments side by side", video_workers=body.video_workers)
+        if body.track_min_frames is not None and (body.track_min_frames or None) != cfg.track_min_frames:
+            n = body.track_min_frames or None
+            m.update_config(u.username, f"a target counts after {n} analysed frames" if n else
+                            "frames before a target counts back to the default", track_min_frames=n)
         c2 = m.config()
         return {"detector": body.detector, "sam3_interval_s": c2.sam3_interval_s, "camera": c2.camera,
-                "video_workers": c2.video_workers}
+                "video_workers": c2.video_workers, "track_min_frames": c2.track_min_frames}
 
     @app.post("/api/missions/{mission_id}/sources")
     def sources_add(body: SourcesBody, m: Mission = Depends(mission), u: User = Depends(user)):
@@ -2206,7 +2335,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def _worker(code: str | None) -> int:
         if not jobs.hub.enabled:
             raise ApiError(403, "workers_off", "This server does not take help from other computers now. Turn it on "
-                                               "on the Workers screen.")
+                                               "in Settings, Other computers.")
         cid = Pairing(data_root).check(code)
         if cid is None:
             raise ApiError(401, "bad_code", "That pairing code is not valid (or was revoked). Make a new one on the "
@@ -2486,8 +2615,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         _video(m)
         cg = CameraGeo(m)
         if body.check_only:
-            return {"fit": _geo_call(lambda: cg.check(body.points))}
-        return {"geo": _geo_call(lambda: cg.set(version_id, body.points, body.map_path, body.corners, u.username))}
+            return {"fit": _geo_call(lambda: cg.check(body.points, body.dtm_path))}
+        return {"geo": _geo_call(lambda: cg.set(version_id, body.points, body.map_path, body.corners, u.username,
+                                                body.dtm_path))}
 
     @app.delete("/api/missions/{mission_id}/recordings/{version_id}/geo")
     def geo_clear(version_id: int, m: Mission = Depends(mission), u: User = Depends(user)):
@@ -2502,6 +2632,133 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         from ..video_geo import CameraGeo
         svc = _video(m)
         return {"paths": _geo_call(lambda: _video_call(lambda: CameraGeo(m).paths(svc, version_id)))}
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/footprint")
+    def geo_footprint(version_id: int, t: float = Query(0, ge=0), dtm: str | None = None, map: str | None = None,
+                      corners: str | None = None, m: Mission = Depends(mission)):
+        """Where the frame at ``t`` lies on the ground (lined up with ``map`` when only flight data places it)."""
+        from ..video_geo import footprint_of
+        svc = _video(m)
+        cs = [float(v) for v in corners.split(",")] if corners else None
+        return {"footprint": _geo_call(lambda: footprint_of(m, svc, version_id, t, dtm, map, cs))}
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/frame-on-map")
+    def geo_frame_on_map(version_id: int, t: float = Query(0, ge=0), dtm: str | None = None, map: str | None = None,
+                         corners: str | None = None, m: Mission = Depends(mission)):
+        """The frame at ``t`` laid on the ground (PNG, transparent where the frame does not reach)."""
+        from ..video_geo import frame_overlay
+        svc = _video(m)
+        cs = [float(v) for v in corners.split(",")] if corners else None
+        data = _geo_call(lambda: frame_overlay(m, svc, version_id, t, dtm, map, cs))
+        return Response(data, media_type="image/png", headers={"Cache-Control": "private, max-age=600"})
+
+    # ---------- drone video: typed platform data, and the whole video registered ahead (video_georeg) ----------
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/platform")
+    def platform_get_(version_id: int, m: Mission = Depends(mission)):
+        from ..video_georeg import platform_get
+        _video(m)
+        return {"platform": platform_get(m.con, version_id)}
+
+    @app.put("/api/missions/{mission_id}/recordings/{version_id}/platform")
+    def platform_put(version_id: int, body: dict, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Platform data typed by the operator (wins over the video's own), and a square to search in."""
+        from ..video_georeg import PlatformError, platform_set
+        _video(m)
+        try:
+            return {"platform": platform_set(m.con, version_id, body, u.username)}
+        except PlatformError as exc:
+            raise ApiError(400, "platform", str(exc)) from None
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/georeg")
+    def georeg_get(version_id: int, map: str | None = None, m: Mission = Depends(mission)):
+        """The preparation's progress, and the prepared outlines (with this map) for playing back."""
+        from ..video_georeg import job_status, load_track, track_outlines
+        _video(m)
+        tr = load_track(m, version_id, map) if map else None
+        return {"job": job_status(m.id, version_id),
+                "track": None if tr is None else {k: tr[k] for k in ("fps", "made_at", "seconds", "summary", "matcher")}
+                | {"outlines": track_outlines(tr)}}
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/georeg")
+    def georeg_start(version_id: int, body: GeoregBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Register the whole video to the map in the background (``map_path``, ``corners``, ``dtm_path``)."""
+        from ..video_geo import load_map
+        from ..video_georeg import start
+        _video(m)
+        _geo_call(lambda: load_map(body.map_path, body.corners))
+        mid = m.id
+        return {"job": start(lambda: DataRoot(data_root).open_mission(mid), mid, version_id, body.map_path,
+                             body.corners, body.dtm_path, u.username)}
+
+    # ---------- where maps and ground heights come from (map_sources, terrain) ----------
+    def _src_call(fn):
+        from ..map_sources import MapSourceError
+        from ..terrain import TerrainError
+        try:
+            return fn()
+        except (MapSourceError, TerrainError) as exc:
+            raise ApiError(400, "map_source", str(exc)) from None
+
+    @app.get("/api/map-sources")
+    def map_sources_get(_u: User = Depends(user)):
+        """Built-in online services, the servers on this network, and the folder fetched maps are kept in."""
+        from ..map_sources import catalogue
+        return catalogue(data_root)
+
+    @app.post("/api/map-sources/servers")
+    def map_server_save(body: MapServerBody, u: User = Depends(user)):
+        from ..map_sources import save_server
+        return {"server": _src_call(lambda: save_server(DataRoot(data_root), body.model_dump(), u.username))}
+
+    @app.delete("/api/map-sources/servers/{server_id}")
+    def map_server_delete(server_id: str, u: User = Depends(user)):
+        from ..map_sources import delete_server, servers
+        _src_call(lambda: delete_server(DataRoot(data_root), server_id, u.username))
+        return {"servers": servers(data_root)}
+
+    @app.post("/api/map-sources/connect")
+    def map_server_connect(body: MapFetchBody, _u: User = Depends(user)):
+        """Check a server (saved, or as typed) and list its layers."""
+        from ..map_sources import _load, clean_server, connect, find_source
+        def go():
+            if body.server is not None:
+                d = body.server.model_dump()
+                old = next((x for x in _load(data_root) if x["id"] == d.get("id")), None)
+                d["layer"] = d.get("layer") or "-"                 # a layer is picked after connecting
+                return connect(clean_server(d, old))
+            return connect(find_source(data_root, body.source_id or ""))
+        return _src_call(go)
+
+    @app.post("/api/map-sources/fetch")
+    def map_source_fetch(body: MapFetchBody, _u: User = Depends(user)):
+        """Fetch an area from a source and keep it on this computer as a GeoTIFF; returns its path."""
+        from ..map_sources import fetch, find_source
+        return _src_call(lambda: fetch(data_root, find_source(data_root, body.source_id or ""), body.lat, body.lon,
+                                       body.side_m, body.m_per_px))
+
+    @app.get("/api/terrain-files")
+    def terrain_files_get(folder: str, _u: User = Depends(user)):
+        from ..terrain import terrain_files
+        return {"files": _src_call(lambda: terrain_files(folder))}
+
+    @app.get("/api/terrain-info")
+    def terrain_info_get(path: str, _u: User = Depends(user)):
+        from ..terrain import load_terrain
+        return _src_call(lambda: load_terrain(path).info())
+
+    @app.get("/api/terrain-shade")
+    def terrain_shade_get(path: str, top: float, left: float, bottom: float, right: float,
+                          w: int = Query(1024, ge=16, le=4096), _u: User = Depends(user)):
+        """Shaded relief of a terrain file over a map's area (PNG with transparency), to draw over the map."""
+        from ..terrain import load_terrain, shade_over
+        from ..terrain import M_PER_DEG
+        import math
+        hm = (top - bottom) * M_PER_DEG
+        wm = (right - left) * M_PER_DEG * math.cos(math.radians((top + bottom) / 2))
+        h = max(16, round(w * hm / max(wm, 1e-9)))
+        img = _src_call(lambda: shade_over(load_terrain(path), (top, left, bottom, right), (w, min(h, 4096))))
+        ok, buf = cv2.imencode(".png", img)
+        return Response(buf.tobytes(), media_type="image/png", headers={"Cache-Control": "private, max-age=600"})
 
     @app.get("/api/missions/{mission_id}/recordings/{version_id}/telemetry")
     def telemetry_get(version_id: int, m: Mission = Depends(mission)):
@@ -2703,6 +2960,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(500, "export_failed", f"Export failed: {exc}",
                            "Check that the output folder exists, is writable and has free space.") from None
         return {"files": [str(p) for p in paths]}
+
+    from .scenes_api import register as register_scenes   # sorting still images into indoor and outdoor
+    register_scenes(app, data_root, mission, user, ApiError)
 
     # ---------- UI ----------
     if (STATIC_DIR / "index.html").is_file():

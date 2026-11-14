@@ -8,15 +8,12 @@ type M = { id: string; name: string; input_type: string; mode: string; processin
 export default function Missions() {
   const [list, setList] = useState<M[] | null>(null);
   const [loadError, setLoadError] = useState("");
+  // Setup lives in Settings; the home page only flags what needs the operator from there.
   const [sys, setSys] = useState<any>(null);
-  const [sysError, setSysError] = useState("");
-  const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
+  const [asking, setAsking] = useState(0);
   const loadSys = () => {
-    setSysError("");
-    return api("/system").then((result) => { setSys(result); return result; }).catch((e) => {
-      setSysError(e instanceof Error ? e.message : "Could not load system status.");
-      return null;
-    });
+    api("/system").then(setSys).catch(() => setSys(null));
+    api("/workers").then((w) => setAsking(w.asking?.length ?? 0)).catch(() => setAsking(0));
   };
   const refresh = () => api("/missions").then((r) => setList(r.missions)).catch((e) => {
     setList((l) => l ?? []);
@@ -64,10 +61,10 @@ export default function Missions() {
             <div><div className={`n${running ? "" : " zero"}`}>{running}</div><div className="l">Missions processing now</div></div>
             <div><div className={`n${damaged ? " attn" : " zero"}`}>{damaged}</div><div className="l">Unreadable or damaged files</div></div>
           </div>
-          <div className="home-grid">
+          <div className={`home-grid${notes.length > 0 || asking > 0 || sys?.backup?.last_error ? "" : " solo"}`}>
             <div className="mlist">{list.map((m) => <MissionCard key={m.id} m={m} reload={refresh} />)}</div>
             <div className="home-side">
-              {notes.length > 0 && (
+              {(notes.length > 0 || asking > 0 || sys?.backup?.last_error) && (
                 <div className="card">
                   <h2>Needs your attention</h2>
                   <div className="attention">
@@ -77,26 +74,21 @@ export default function Missions() {
                         <a className="btn" href={`#/m/${m.id}`}>Read them</a>
                       </div>
                     ))}
+                    {asking > 0 && <div className="item">
+                      <p>{asking} other computer{asking > 1 ? "s are" : " is"} asking to help with video.</p>
+                      <a className="btn" href="#/settings/workers">Answer</a>
+                    </div>}
+                    {sys?.backup?.last_error && <div className="item">
+                      <p>The last nightly backup failed.</p>
+                      <a className="btn" href="#/settings/computer">See why</a>
+                    </div>}
                   </div>
                 </div>
               )}
-              {sysError && <div className="card msg err" role="alert"><b>Could not load system status.</b><p>{sysError}</p><button onClick={loadSys}>Try again</button></div>}
-              {sys && <System sys={sys} msg={msg} backupNow={async () => {
-                setMsg(null);
-                try { const r = await post("/admin/backup"); setMsg({ kind: "ok", text: `Backed up to ${r.folder}` }); }
-                catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
-                loadSys();
-              }} />}
             </div>
           </div>
         </>
       )}
-      {list?.length === 0 && sys && <div style={{ marginTop: 20 }}><System sys={sys} msg={msg} backupNow={async () => {
-        setMsg(null);
-        try { const r = await post("/admin/backup"); setMsg({ kind: "ok", text: `Backed up to ${r.folder}` }); }
-        catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
-        loadSys();
-      }} /></div>}
     </div>
   );
 }
@@ -153,22 +145,3 @@ function MissionCard({ m, reload }: { m: M; reload: () => void }) {
   );
 }
 
-const ACCEL: Record<string, string> = { cuda: "NVIDIA GPU (CUDA)", directml: "GPU (DirectML)", cpu: "CPU" };
-
-function System({ sys, msg, backupNow }: { sys: any; msg: any; backupNow: () => void }) {
-  const b = sys.backup;
-  return (
-    <div className="card">
-      <h2>This workstation</h2>
-      <p style={{ margin: "4px 0" }}>Version {sys.version}. Models run on: {sys.runtime ? <>{ACCEL[sys.runtime.accelerator]}{sys.runtime.notes.length > 0 && <span className="muted"> ({sys.runtime.notes.join("; ")})</span>}</> : <span className="muted">decided when the first job loads the detector</span>}.</p>
-      <p style={{ margin: "4px 0" }}>
-        {b.folder ? <>Nightly database backup at {b.at} to <span className="mono">{b.folder}</span>. </> : <>No backup folder is set: start the server with <span className="mono">--backup-dir</span>. </>}
-        {b.last ? <>Last: {b.last.at} ({b.last.detail.folder ?? b.last.detail.error}).</> : "No backup yet."}
-        {b.last_error && <span className="msg err">Last scheduled backup failed: {b.last_error}</span>}
-      </p>
-      <div className="row"><button disabled={!b.folder} title={!b.folder ? "Set --backup-dir when starting the server to enable backups." : undefined} onClick={backupNow}>Back up now</button>{msg && <span className={`msg ${msg.kind}`} role={msg.kind === "err" ? "alert" : "status"} aria-live="polite">{msg.text}</span>}</div>
-      {sys.audit && sys.audit.length > 0 && <details style={{ marginTop: 8 }}><summary>Audit log</summary>
-        <ul className="muted">{sys.audit.map((e: any) => <li key={e.id}><span className="mono">{e.at}</span> {e.author}: {e.action.replace(/_/g, " ")}{e.detail.name ? ` “${e.detail.name}”` : ""}{e.detail.folder ? ` ${e.detail.folder}` : ""}</li>)}</ul></details>}
-    </div>
-  );
-}

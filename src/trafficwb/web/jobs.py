@@ -48,7 +48,7 @@ def scan_summary(m, res, queued: int) -> dict:
     """What a scan found, and in plain words why files were not queued, for the Processing card."""
     q = lambda sql: m.con.execute(sql).fetchone()[0]
     cur = "FROM source_version v JOIN source_file f ON f.id=v.source_file_id WHERE v.superseded_by IS NULL"
-    no_time = 0 if m.input_type == "video" else q(f"SELECT COUNT(*) {cur} AND v.parse_status='malformed'")
+    no_time = 0 if m.input_type == "video" or m.config().mode == "indoor_outdoor" else q(f"SELECT COUNT(*) {cur} AND v.parse_status='malformed'")
     examples = [r[0] for r in m.con.execute(
         f"SELECT f.rel_path {cur} AND v.parse_status='malformed' ORDER BY f.rel_path LIMIT 5")] if no_time else []
     damaged = q(f"SELECT COUNT(*) {cur} AND v.integrity IN ('corrupt','unsupported')")
@@ -146,6 +146,7 @@ class JobManager:
                  sam_factory: Callable[[], object] | None = None):
         self.data_root = Path(data_root)
         self.sam_factory = sam_factory          # the SAM 3.1 engine; tests pass a small stand-in
+        self.scene_factory = None               # the indoor/outdoor embedder (scenes.Embedder); tests set a stand-in
         self._sam_detector = None
         self.area_tasks: dict[str, AreaTask] = {}
         self.model_loader = model_loader
@@ -212,7 +213,7 @@ class JobManager:
         d = lib.get(name)
         if d is None:
             raise RuntimeError(f"The saved model \u201c{name}\u201d chosen for this mission is no longer saved. Choose "
-                               "another model on the mission's overview.")
+                               "another model on the mission's Settings tab.")
         key = (d["model_name"], d["model_version"], d["sha256"])
         with self._lock:
             hit = self._saved.get(key)
@@ -373,6 +374,9 @@ class JobManager:
                 if not job.params.get("only") else len(job.params["only"])
             if job.kind == "scan_and_process":
                 job.result["scan"] = scan_summary(m, res, job.total)
+            if m.config().mode == "indoor_outdoor":
+                self._sort_scenes(job, m)
+                return
             job.control.stage = "loading model"
             det, card = self.detector_for(m)
             if det.__class__.__name__ == "Sam3Detector":
@@ -414,6 +418,21 @@ class JobManager:
                 pass
         finally:
             job.finished = time.time()
+
+    def _sort_scenes(self, job: Job, m) -> None:
+        """A sorting mission: indoor or outdoor for each image (scenes.py), no detector."""
+        from ..scenes import Embedder, SceneProcessor
+
+        def progress(n, total):
+            job.done += 1
+            job.rate_done += 1
+            if job.rate_start is None:
+                job.rate_start = time.time()
+                job.rate_done = 0
+
+        factory = self.scene_factory or Embedder
+        job.report = SceneProcessor(m, factory, job.control).process_all(progress)
+        job.state = "cancelled" if job.control.cancelled else "finished"
 
     def _sam_if_available(self):
         """SAM 3.1 when it is installed and this computer can hold it; otherwise an error (callers carry on)."""

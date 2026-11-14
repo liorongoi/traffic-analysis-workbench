@@ -92,6 +92,17 @@ hr { border: 0; border-top: 1px solid var(--line); }
 .password-button.nudge { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(76, 215, 246, .25); }
 .build-version { color: var(--muted); font: 500 12px/1 "IBM Plex Mono", monospace; padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 4px; white-space: nowrap; }
 .brand-wordmark small { padding-left: 10px; border-left: 1px solid var(--line-strong); color: var(--muted); font-size: 12.5px; font-weight: 500; }
+/* Settings: a small cog beside the name and logo, on every page. */
+.gear { display: inline-grid; place-items: center; width: 34px; height: 34px; flex: none;
+  color: var(--muted); border: 1px solid transparent; border-radius: 4px; position: relative; }
+.gear:hover { color: var(--accent); border-color: var(--line-strong); text-decoration: none; }
+.gear svg { transition: transform .4s ease; }
+.gear:hover svg { transform: rotate(60deg); }
+.gear.on { color: var(--accent); border-color: var(--line-strong); background: rgba(76, 215, 246, .07); }
+.gear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .top .gear svg { transition: none; } }
+.home-grid.solo { grid-template-columns: minmax(0, 1fr); }
+.home-grid.solo .home-side { display: none; }
 .top-nav { display: flex; align-items: stretch; align-self: stretch; gap: 2px; }
 .top-nav a { display: flex; align-items: center; padding: 0 14px; color: var(--text-2); font-weight: 600; position: relative; }
 .top-nav a:hover { color: var(--text); text-decoration: none; background: linear-gradient(180deg, transparent, rgba(76, 215, 246, .06)); }
@@ -743,5 +754,96 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
 .chip-colour { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
 .chip-colour i { width: 11px; height: 11px; border-radius: 3px; border: 1px solid var(--line-strong, #666); display: inline-block; }
 .measure-line { pointer-events: none; }
+/* the player's tails and small target labels */
+.player label.check { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+.player .tlabel { font-family: var(--mono, ui-monospace, monospace); letter-spacing: -.02em; }
+.score-key { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-left: 6px; vertical-align: -1px; border: 1px solid var(--line-strong); }
+.score-key i { width: 44px; height: 6px; border-radius: 3px; display: inline-block; }
 .in-view .count-tile .small { overflow-wrap: anywhere; }
 .heat-scale { display: inline-block; width: 90px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, rgba(255, 140, 0, 0.05), rgba(255, 140, 0, 0.95)); border: 1px solid var(--line-strong, #666); }
+
+/* ---- Settings: three parts, cards that save as you change them ---- */
+.settings-parts a { display: flex; flex-direction: column; gap: 2px; padding: 10px 18px 12px; }
+.settings-parts a small { font-weight: 500; font-size: 12px; color: var(--muted); }
+.settings-note { align-self: center; }
+.set-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.set-grid > .set-wide, .set-grid > section.set-wide { grid-column: 1 / -1; }
+.set-grid .card h2 { margin-bottom: 6px; }
+.seg.two, .seg.col { display: grid; padding: 0; gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 0; }
+.seg.two { grid-template-columns: 1fr 1fr; }
+.seg.col { grid-template-columns: 1fr; }
+.seg.two button, .seg.col button { flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; min-height: 52px;
+  background: var(--field); color: var(--text-2); text-align: start; white-space: normal; border-radius: 0; }
+.seg.two button small, .seg.col button small { color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.seg.two button.on, .seg.col button.on, .seg.two button.on:hover:not(:disabled), .seg.col button.on:hover:not(:disabled) {
+  background: rgba(76, 215, 246, .12); color: var(--text); box-shadow: inset 3px 0 0 var(--accent); }
+@media (max-width: 900px) { .set-grid { grid-template-columns: minmax(0, 1fr); } .seg.two { grid-template-columns: 1fr; } }
+
+/* ---- New mission: a folder, a name, Start ---- */
+.newm { max-width: 980px; }
+.newm-hero { padding: 28px 0 18px; }
+.newm-hero h1 { margin: 0 0 4px; }
+.newm-hero p { margin: 0 0 16px; color: var(--text-2); }
+.newm-pick .folderpick input, .newm-pick input { font-size: 15px; min-height: 44px; }
+.newm-card { display: grid; gap: 14px; }
+.newm-figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.newm-figs > div { background: var(--field); padding: 12px 14px; display: grid; gap: 2px; }
+.newm-figs b { font-family: var(--display); font-size: 24px; }
+.newm-figs span { color: var(--muted); font-size: 12.5px; }
+.newm-name { display: grid; grid-template-columns: 90px minmax(0, 1fr); align-items: center; gap: 12px; }
+.newm-name > span { color: var(--text-2); }
+.newm-uses { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.newm-uses .chip { display: inline-flex; gap: 4px; padding: 3px 9px; border: 1px solid var(--line-strong); background: var(--panel-2); font-size: 12.5px; color: var(--text-2); }
+.newm-uses > .muted { margin-right: 4px; font-size: 12.5px; }
+.newm-go { display: flex; align-items: center; gap: 12px; }
+.newm-go .grow { flex: 1; }
+.msg.learn code { padding: 1px 6px; background: rgba(0, 0, 0, .3); }
+@media (max-width: 640px) { .newm-figs { grid-template-columns: 1fr; } .newm-name { grid-template-columns: 1fr; } }
+.top .gear { margin-left: -12px; }
+.mstrip .gear { margin-left: 0; }
+
+/* ---- Mission strip: name, state, tabs and the next step on one line ---- */
+.mstrip { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: -10px 0 16px; border-bottom: 1px solid var(--line); }
+.mstrip h1 { margin: 0; font-size: 20px; max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mstrip-back { display: inline-grid; place-items: center; width: 28px; height: 28px; font-size: 22px; color: var(--muted); text-decoration: none; }
+.mstrip-back:hover { color: var(--accent); text-decoration: none; }
+.mstrip-tabs { border-bottom: 0; margin: 0 0 0 8px; }
+.mstrip .grow { flex: 1; }
+.mstrip .btn { margin: 6px 0; }
+.runmode-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 14px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text-2); }
+.setup-facts dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 6px 14px; margin: 12px 0; }
+.setup-facts dt { color: var(--muted); }
+.setup-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+/* ---- Review workspace: the image takes the screen; one bar holds every action ---- */
+.page.workspace { max-width: none; padding: 10px 14px 0; }
+.workspace .inv { height: calc(100vh - 56px - 10px - 74px); margin-bottom: 8px; grid-template-columns: minmax(0, 1fr) 320px; gap: 10px; }
+.workspace .inv.no-panel { grid-template-columns: minmax(0, 1fr); }
+.workspace .ws-float { margin-bottom: 8px; }
+.ws-bar { position: sticky; bottom: 0; z-index: 3; padding: 8px 12px; gap: 8px; }
+.ws-back { color: var(--text-2); font-weight: 600; }
+.ws-pos { font-family: var(--mono); color: var(--text-2); font-size: 13px; }
+.ws-pos b { color: var(--text); }
+.ws-pos .attn { color: var(--lane); font-family: var(--sans); }
+.workspace .side details.legend summary { cursor: pointer; list-style: none; }
+.workspace .side details.legend summary::-webkit-details-marker { display: none; }
+.workspace .side details.legend summary::after { content: " ▸"; color: var(--muted); }
+.workspace .side details.legend[open] summary::after { content: " ▾"; }
+@media (max-width: 900px) { .workspace .inv { height: auto; } }
+.ws-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.ws-bar > * { flex: none; }
+.ws-bar .grow { flex: 1; }
+/* where the map and the ground heights come from (geo-registration) */
+.mapsrc-tabs { margin-bottom: 2px; }
+.mapsrc-tabs button { flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 12px; min-height: 46px; text-align: start; }
+.mapsrc-tabs button small { color: var(--muted); font-size: 12px; font-weight: 500; }
+.mapsrc label.small, .serverform label.small, .platform label.small { display: grid; gap: 4px; }
+.platform .grow { flex: 1 1 220px; }
+.serverform .grow { flex: 1 1 200px; }
+.serverform { background: transparent; }
+.maplayers label { cursor: pointer; }
+
+.plain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.plain-list li { padding: 6px 10px; background: var(--field); border: 1px solid var(--line); }
