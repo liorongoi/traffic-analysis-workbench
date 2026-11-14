@@ -250,7 +250,7 @@ fi
 
 IP="$( (hostname -I 2>/dev/null || true) | awk '{print $1}')"; IP="${IP:-$(hostname)}"
 say "Done"
-KEY="$(as_svc "$BASE/current/python/bin/python3" -c 'import sys; from trafficwb.web.app import main; sys.exit(main(sys.argv[1:]))' password --data "$DATA" --show)"
+KEY="$(as_svc "$BASE/current/python/bin/python3" -c 'import sys; from trafficwb.web.app import main; sys.exit(main(sys.argv[1:]))' password --data "$DATA" --show 2>/dev/null || echo "(could not be read; set one with: ${SUDO}lanepulse password)")"
 echo "LanePulse $VER is running ($GPU). Open it from another computer:  http://$IP:$PORT"
 echo "Password (the browser asks for it once):  $KEY"
 echo "  Choose your own in LanePulse (the key icon at the top), or here: ${SUDO}lanepulse password"

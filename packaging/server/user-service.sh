@@ -15,7 +15,8 @@ _cron_remove() {
   command -v crontab >/dev/null 2>&1 || return 0
   local cur; cur="$(crontab -l 2>/dev/null || true)"
   if printf '%s\n' "$cur" | grep -qF "$CRON_MARK"; then
-    printf '%s\n' "$cur" | grep -vF "$CRON_MARK" | crontab -
+    # grep finds nothing to keep (exit 1) when the crontab held only LanePulse's lines: not a failure.
+    printf '%s\n' "$cur" | { grep -vF "$CRON_MARK" || true; } | crontab -
   fi
 }
 
