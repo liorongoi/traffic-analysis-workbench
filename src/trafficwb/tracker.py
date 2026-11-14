@@ -19,6 +19,11 @@ Rules:
 - Occlusion: a track that is not matched keeps its predicted motion for up to
   `gap_s` seconds. If it is matched again within that time it is the same
   track. After that the track is closed.
+- Stop and go: a target that stops keeps its track while it stands (the
+  detector still sees it, so it keeps matching). A confirmed target that was
+  standing still when it was lost (hidden by a bus passing in front, say) is
+  kept for `still_hold_s` and taken up again where it stood if it looks
+  alike, so it moves on under the same ID.
 - Re-entry: a new track that starts within `reentry_s` of a closed track and
   near where that track was last predicted is flagged "possible duplicate" of
   it. The tracker never merges them silently; an operator decides.
@@ -71,6 +76,16 @@ class TrackerParams:
     # A box mostly inside a box a track holds on this frame (or holding one), of the same family, starts no track:
     # half a person, or two people in one box, next to a person already followed. 0 turns it off.
     nested_ioa: float = 0.8
+    # Stop and go ("byte" with re-linking only): a confirmed track that was standing still (its centre moving less
+    # than still_speed box heights a second) when it lost its target is kept this many seconds, instead of
+    # gap_s + relink_s, and re-linked where it stood. A car waiting at a light behind a passing truck stays one
+    # target. 0 turns it off.
+    still_hold_s: float = 6.0
+    still_speed: float = 0.25
+    # One box per target: on each frame, a box of the same family that is a part of a bigger one (this much inside
+    # it and lined up with it on two sides, or 90 % inside: half a van, its side, the top of a car) is left out; two of about the same place and size
+    # (IoU 0.6 or more, a "car" and a "truck" on one van) keep only the surer. 0 turns it off.
+    fuse_ioa: float = 0.7
 
 
 def appearance(img, box) -> list[float] | None:
@@ -108,6 +123,52 @@ def iou(a, b) -> float:
     if inter <= 0:
         return 0.0
     return inter / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter)
+
+
+def part_of(inner, outer, min_ioa: float, w: float = 0.0, h: float = 0.0) -> bool:
+    """Is box ``inner`` a part of the target in box ``outer`` (half a van, its side, its rear window)? Almost wholly
+    inside it (90 %), or mostly inside (``min_ioa``) and lined up with it on two sides or more, as a part is. A car
+    queued behind a truck overlaps the truck's box but lines up with it on one side at most, so it stays. Sides on
+    the frame's edge (``w``, ``h``) do not count: everything cut by the edge lines up there."""
+    a = ioa(inner, outer)
+    if a >= 0.9:
+        return True
+    if a < min_ioa:
+        return False
+    tol_x, tol_y = 0.06 * (outer[2] - outer[0]), 0.06 * (outer[3] - outer[1])
+    edge = lambda v, lim: lim > 0 and (v <= 2 or v >= lim - 2)
+    sides = [abs(inner[0] - outer[0]) <= tol_x and not edge(outer[0], w),
+             abs(inner[2] - outer[2]) <= tol_x and not edge(outer[2], w),
+             abs(inner[1] - outer[1]) <= tol_y and not edge(outer[1], h),
+             abs(inner[3] - outer[3]) <= tol_y and not edge(outer[3], h)]
+    return sum(sides) >= 2
+
+
+def fuse(dets: list, min_ioa: float, min_iou: float = 0.6, much_surer: float = 0.3, w: float = 0.0,
+         h: float = 0.0) -> list:
+    """One box per target on a frame, within a family. A box that is a part of a bigger one (``part_of``) is left
+    out; but when the inner one is much surer, it is the bigger one that goes (a weak box over two cars). Of two in
+    about the same place and size only the surer is kept. The boxes kept are the very ones given (callers key on
+    them)."""
+    area = lambda b: (b[2] - b[0]) * (b[3] - b[1])
+    out = set(range(len(dets)))
+    for j in sorted(range(len(dets)), key=lambda j: -area(dets[j][0])):     # bigger first
+        if j not in out:
+            continue
+        bj, cj, sj = dets[j]
+        for k in list(out):
+            if k == j or family(dets[k][1]) != family(cj):
+                continue
+            bk, _, sk = dets[k]
+            if area(bk) > area(bj) or (area(bk) == area(bj) and k < j):
+                continue                                # k is the smaller one here
+            if iou(bj, bk) >= min_iou:
+                out.discard(k if sk <= sj else j)
+            elif part_of(bk, bj, min_ioa, w, h):
+                out.discard(j if sk >= sj + much_surer else k)
+            if j not in out:
+                break
+    return [dets[j] for j in sorted(out)]
 
 
 @dataclass
@@ -170,6 +231,8 @@ class Tracker:
     def from_state(cls, s: dict) -> "Tracker":
         params = dict(s["params"])
         params.setdefault("algo", "iou")          # checkpoints written before the Kalman tracker resume as they began
+        params.setdefault("still_hold_s", 0.0)    # and those written before stop-and-go holding, without it
+        params.setdefault("fuse_ioa", 0.0)        # or before one box per target
         tr = cls(s["w"], s["h"], TrackerParams(**params))
         tr.counter = s["counter"]
         tr.tracks = [Track(**t) for t in s["tracks"]]
@@ -211,6 +274,8 @@ class Tracker:
         Returns (matched observations as (track, box, cls, score), closed tracks, newly created tracks).
         """
         byte = self.p.algo == "byte"
+        if self.p.fuse_ioa > 0:
+            dets = fuse(dets, self.p.fuse_ioa, w=self.w, h=self.h)
         if byte:
             for tr in self.tracks:            # every track advances to this frame, as in ByteTrack
                 if tr.mean is not None:
@@ -313,7 +378,7 @@ class Tracker:
             if i in used_t:
                 keep.append(tr)
                 continue
-            if t - tr.t > self.p.gap_s + (self.p.relink_s if byte and tr.state == "confirmed" else 0.0):
+            if t - tr.t > self._hold(tr):
                 closed.append(self._close(tr, "left_frame" if self._touches_edge(tr.box) else "lost"))
             else:
                 keep.append(tr)
@@ -349,6 +414,22 @@ class Tracker:
         self.tracks = keep
         self.recent = [r for r in self.recent if t - r["t"] <= self.p.reentry_s]
         return obs, closed, new
+
+    def _hold(self, tr: Track) -> float:
+        """How long a track that lost its target is kept: gap_s; a confirmed one relink_s longer, and one that was
+        standing still (stop and go) still_hold_s."""
+        if self.p.algo != "byte" or tr.state != "confirmed":
+            return self.p.gap_s
+        keep = self.p.gap_s + self.p.relink_s
+        if self.p.relink_s > 0 and self.p.still_hold_s > 0 and self.still(tr):
+            keep = max(keep, self.p.still_hold_s)
+        return keep
+
+    def still(self, tr: Track) -> bool:
+        """Standing still: its centre moved less than still_speed box heights a second when last seen."""
+        h = max(tr.box[3] - tr.box[1], 1.0)
+        vx, vy = (tr.v[0] + tr.v[2]) / 2, (tr.v[1] + tr.v[3]) / 2
+        return tr.hits > 1 and (vx * vx + vy * vy) ** 0.5 < self.p.still_speed * h
 
     @staticmethod
     def _look(tr: Track, look: list[float]) -> None:

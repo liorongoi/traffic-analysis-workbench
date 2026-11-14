@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, post } from "../api";
 import { fmtT } from "./Events";
 import { NamePick } from "../components/Pick";
+import { Labels, ScoreKey, Tails, TAILS, boxColourSetting, dotColourSetting, hueOf, scoreAt, type TailLen } from "../components/TrackMarks";
 
 // The player: a recording plays with every event's box drawn on it, and is reviewed and edited where it plays, as a
 // still image is. Click a box (or a bar on the timeline) to pick its event; drag on the paused picture to redraw the
@@ -11,6 +12,7 @@ type PBox = [number, number, number, number, number];          // t, x1, y1, x2,
 type PEvent = {
   id: number; key: string; first_t: number; last_t: number; cls: string; machine_cls: string; status: string;
   origin: "machine" | "human"; fixes: { t: number; box: number[] }[]; boxes: PBox[]; flags: string[];
+  scores?: (number | null)[];                                   // the detector's score beside each box (null: yours)
 };
 // A target the operator marked (one SAM 3.1 does not know): followed both ways from their boxes, then confirmed.
 type Marked = { id: number; cls: string; marks: { t: number; box: number[] }[]; steps: { t: number; box: number[]; score: number }[];
@@ -63,6 +65,14 @@ function lanes(evs: PEvent[]): PEvent[][] {
   return out;
 }
 
+// Tails and labels (components/TrackMarks): the box's look, and what pointing at a box says (all the small label
+// leaves out).
+const lookOfEv = (e: PEvent) => LOOK[e.status === "rejected" ? "rejected" : e.origin === "human" || e.fixes.length ? "human" : e.status] ?? LOOK.pending;
+function tip(e: PEvent, t: number): string {
+  const s = scoreAt(e, t);
+  return `${e.key} · ${e.cls} · ${STATUS_TEXT[e.status] ?? e.status}${s != null ? ` · score ${s.toFixed(2)}` : ""}`;
+}
+
 export default function Player({ missionId, versionId }: { missionId: string; versionId: number }) {
   const [ov, setOv] = useState<Overlay | null>(null);
   // The events panel folds away so the video can take the whole width; remembered on this computer.
@@ -79,6 +89,23 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [fallback, setFallback] = useState(false);
   const [help, setHelp] = useState(false);
+  // Tails and labels: how long a tail, and what the small label over each target says. Kept for next time.
+  const keep = <T,>(k: string, v: T) => { try { localStorage.setItem(`twb.player.${k}`, JSON.stringify(v)); } catch { /* not kept */ } };
+  const kept = <T,>(k: string, d: T): T => { try { const v = localStorage.getItem(`twb.player.${k}`); return v == null ? d : JSON.parse(v); } catch { return d; } };
+  const [tail, setTailRaw] = useState<TailLen>(() => kept("tail", "3" as TailLen));
+  const [showId, setShowIdRaw] = useState<boolean>(() => kept("ids", true));
+  const [showScore, setShowScoreRaw] = useState<boolean>(() => kept("scores", false));
+  const setTail = (v: TailLen) => { setTailRaw(v); keep("tail", v); };
+  // Colours of the boxes and the tail's dots: chosen in Settings, Video.
+  const [dotColour] = useState<string>(dotColourSetting);
+  const [boxColour] = useState<string>(boxColourSetting);
+  // The box's look with the chosen colour (the line style keeps telling the review state).
+  const lookFor = (e: PEvent) => {
+    const l = lookOfEv(e);
+    return boxColour === "state" ? l : { ...l, stroke: boxColour === "target" ? hueOf(e.id) : boxColour };
+  };
+  const setShowId = (v: boolean) => { setShowIdRaw(v); keep("ids", v); };
+  const setShowScore = (v: boolean) => { setShowScoreRaw(v); keep("scores", v); };
   // Measuring the camera: two points on the road and the real distance between them give km/h and metres.
   type Cal = { own: boolean; points: number[]; meters: number; m_per_px: number; from_version_id: number } | null;
   const [cal, setCal] = useState<Cal>(null);
@@ -286,6 +313,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
       else if (k === "m") { setMeasuring((v) => !v); setLine(null); setAdding(false); setSel(null); pause(); }
       else if (k === "a") approve();
       else if (k === "h") setShow((s) => (s === "none" ? "all" : "none"));
+      else if (k === "s") setShowScore(!showScore);
       else if (k === "]") setPanel((p) => { try { localStorage.setItem("twb.player-panel", p ? "off" : "on"); } catch { /* this visit only */ } return !p; });
       else if (k === "l") startZone(zoning === "line" ? "" : "line");
       else if (k === "enter" && zoning === "area" && zpts.length >= 3) saveZone(zpts);
@@ -335,10 +363,12 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             <svg ref={svg} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%", cursor: drawing ? "crosshair" : "default" }}
               onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}>
+              <Tails events={shown} now={now} len={tail} sel={sel} px={px} lookOf={lookFor} boxAt={boxAt}
+                fps={ov.recording.nominal_fps || 25} colour={dotColour} />
               {shown.map((e) => {
                 const b = boxAt(e, now);
                 if (!b) return null;
-                const look = LOOK[e.status === "rejected" ? "rejected" : e.origin === "human" || e.fixes.length ? "human" : e.status] ?? LOOK.pending;
+                const look = lookFor(e);
                 const on = e.id === sel;
                 return (
                   <g key={e.id} onPointerDown={(ev) => { if (!adding && !measuring && !zoning && e.id !== sel) { ev.stopPropagation(); pick(e); pause(); } }}
@@ -346,8 +376,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
                     <rect x={b[0]} y={b[1]} width={b[2] - b[0]} height={b[3] - b[1]} fill={on ? "rgba(255,255,255,0.06)" : "transparent"}
                       stroke={look.stroke} strokeDasharray={look.dash ? look.dash.split(" ").map((v) => Number(v) * sw / 2).join(" ") : undefined}
                       strokeWidth={on ? sw * 2 : sw} />
-                    <text x={b[0]} y={Math.max(fs, b[1] - 3)} fontSize={fs} fill={look.stroke} paintOrder="stroke" stroke="#000" strokeWidth={3 * px}>
-                      {e.origin === "human" ? "H" : "M"} {e.key} {e.cls}{e.status !== "pending" ? ` · ${STATUS_TEXT[e.status]}` : ""}</text>
+                    <title>{tip(e, now)}</title>
                   </g>
                 );
               })}
@@ -394,6 +423,8 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
                   <text x={b[0]} y={Math.max(fs, b[1] - 3)} fontSize={fs} fill="var(--accent, #4aa3ff)" paintOrder="stroke" stroke="#000" strokeWidth={3 * px}>
                     T{mk.id} {mk.cls}{st.score < SURE ? " · unsure" : ""}{mk.state === "confirmed" ? " · confirmed" : ""}</text></g>;
               })}
+              {show !== "none" && <Labels events={shown} now={now} sel={sel} px={px} showId={showId} showScore={showScore}
+                boxAt={boxAt} statusText={(e: PEvent) => e.status !== "pending" ? STATUS_TEXT[e.status] : ""} W={W} />}
               {drag && !measuring && !zoning && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)}
                 height={Math.abs(drag.y1 - drag.y0)} fill="none" stroke="var(--human)" strokeWidth={sw} strokeDasharray={`${4 * sw} ${2 * sw}`} />}
             </svg>
@@ -409,6 +440,16 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             <select aria-label="Boxes shown" value={show} onChange={(e) => setShow(e.target.value as keyof typeof SHOW)}>
               {Object.entries(SHOW).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
+            <select aria-label="Tail" value={tail} onChange={(e) => setTail(e.target.value as TailLen)}
+              title="A line behind each target showing where it has been; a ring where it stood still">
+              {Object.entries(TAILS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <a className="small" href="#/settings/video" title="Colours of the vehicle boxes and of the tail's dots">Colours…</a>
+            <label className="check small" title="A small ID over each target, coloured by how sure the detector was">
+              <input type="checkbox" checked={showId} onChange={(e) => setShowId(e.target.checked)} /> IDs</label>
+            <label className="check small" title="The detector's score (0 to 1) beside each ID (S)">
+              <input type="checkbox" checked={showScore} onChange={(e) => setShowScore(e.target.checked)} /> Score</label>
+            {(showId || showScore) && <ScoreKey />}
             <span style={{ flex: 1 }} />
             <button className={adding ? "primary" : ""} onClick={() => { setAdding(!adding); setSel(null); pause(); }}
               title="Draw a target the analysis missed (B)">+ Missed target</button>
@@ -458,7 +499,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             Space play or pause · ← → one frame (Shift: one second) · J / K next or previous event to review · C confirm ·
             X or Delete reject · 1–{classes.length} class ({classes.map((c, i) => `${i + 1} ${c}`).join(", ")}) ·
             B missed target · T teach a new target · M measure the camera · L counting line · drag on the paused picture to redraw the picked event's box · A approve for learning ·
-            H hide boxes · Esc let go</div>}
+            H hide boxes · S show scores · Esc let go</div>}
         </div>
         <div className="grid" style={{ gap: 10, alignContent: "start", display: panel ? undefined : "none" }}>
           <div className="card grid" style={{ gap: 8 }}>

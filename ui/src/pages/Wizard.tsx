@@ -424,6 +424,26 @@ export function ParallelChoice({ value, onChange, disabled }: { value: number | 
   );
 }
 
+/** Video: on how many analysed frames something must be seen before it counts as a target. Fewer finds targets seen
+ *  only briefly (and more false ones); more leaves out flickers and passing shadows. 0: the default. */
+export function TrackFrames({ value, onChange, step, auto, disabled }: {
+  value: number | null; onChange: (v: number) => void; step: number; auto: number; disabled?: boolean;
+}) {
+  const s = (n: number) => `${(n * step).toFixed(n * step < 2 ? 1 : 0)} s`;
+  return (
+    <label className="field"><span>A target counts after</span>
+      <select value={String(value ?? 0)} disabled={disabled} onChange={(e) => onChange(Number(e.target.value))}>
+        <option value={0}>{auto} analysed frames ({s(auto)}, the default)</option>
+        {[1, 2, 3, 4, 5, 6, 8, 10, 15, 20, 30].filter((k) => k !== auto).map((k) =>
+          <option key={k} value={k}>{k} analysed frame{k > 1 ? "s" : ""} ({s(k)})</option>)}
+      </select>
+      <small className="muted">Something seen on fewer frames is not followed as a target and makes no event. Fewer frames
+        keeps targets seen only briefly but lets through more false ones; more leaves out flickers and passing shadows.
+        Applies to the next analysis.</small>
+    </label>
+  );
+}
+
 /** Video: how often SAM 3.1 looks at the recording. Between those frames the tracker (and, with "Both", the
  *  standard detector) follows what it found. */
 export function SamInterval({ value, onChange, both, disabled }: { value: number | null; onChange: (v: number) => void; both: boolean; disabled?: boolean }) {

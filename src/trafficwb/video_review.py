@@ -510,7 +510,8 @@ class VideoService:
 
     def overlay(self, version_id: int) -> dict:
         """Everything the player draws over a recording: each event of the newest analysis with its boxes by time
-        ([t, x1, y1, x2, y2], the operator's box replacing the machine's on that frame), in one read."""
+        ([t, x1, y1, x2, y2], the operator's box replacing the machine's on that frame), in one read. ``scores``
+        runs beside ``boxes``: the detector's score on each frame (null for a box the operator drew)."""
         evs = self.events(version_id)
         tracks = {r[0]: r[1] for r in self.con.execute(
             "SELECT id, track_id FROM video_event WHERE source_version_id=?", (version_id,))}
@@ -518,15 +519,17 @@ class VideoService:
         if evs:
             q = ",".join("?" * len(evs))
             for r in self.con.execute(
-                    f"SELECT track_id, t, x1, y1, x2, y2 FROM track_observation WHERE track_id IN ({q}) ORDER BY t",
+                    f"SELECT track_id, t, x1, y1, x2, y2, score FROM track_observation WHERE track_id IN ({q}) ORDER BY t",
                     tuple(tracks[e.id] for e in evs)):
-                obs.setdefault(r[0], []).append([round(r[1], 4), *(round(float(v), 1) for v in r[2:6])])
+                obs.setdefault(r[0], []).append([round(r[1], 4), *(round(float(v), 1) for v in r[2:6]),
+                                                 None if r[6] is None else round(float(r[6]), 3)])
         out = []
         for e in evs:
             boxes = [b for b in obs.get(tracks[e.id], []) if not any(abs(b[0] - f["t"]) < 1e-3 for f in e.fixes)]
-            boxes += [[round(f["t"], 4), *f["box"]] for f in e.fixes]
+            boxes += [[round(f["t"], 4), *f["box"], None] for f in e.fixes]
+            boxes.sort(key=lambda b: b[0])
             d = {k: v for k, v in e.__dict__.items() if not k.startswith("_")}
-            out.append(d | {"parts": e.parts, "boxes": sorted(boxes)})
+            out.append(d | {"parts": e.parts, "boxes": [b[:5] for b in boxes], "scores": [b[5] for b in boxes]})
         rec = next((r for r in self.recordings() if r["id"] == version_id), None)
         if rec is None:
             raise VideoError("That recording does not exist in this mission.")
