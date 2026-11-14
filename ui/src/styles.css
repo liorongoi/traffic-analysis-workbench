@@ -88,6 +88,8 @@ hr { border: 0; border-top: 1px solid var(--line); }
 .top .brand:hover { text-decoration: none; }
 .brand-wordmark { display: flex; align-items: baseline; gap: 10px; line-height: 1; }
 .brand-wordmark strong { font-family: var(--display); font-size: 18px; font-weight: 700; letter-spacing: .03em; }
+.password-button { padding: 4px 8px; font-size: 13px; white-space: nowrap; }
+.password-button.nudge { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(76, 215, 246, .25); }
 .build-version { color: var(--muted); font: 500 12px/1 "IBM Plex Mono", monospace; padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 4px; white-space: nowrap; }
 .brand-wordmark small { padding-left: 10px; border-left: 1px solid var(--line-strong); color: var(--muted); font-size: 12.5px; font-weight: 500; }
 .top-nav { display: flex; align-items: stretch; align-self: stretch; gap: 2px; }
@@ -300,7 +302,17 @@ table.t th { font-weight: 600; letter-spacing: .01em; }
 @media (max-width: 1100px) {
   .home-grid, .qs { grid-template-columns: minmax(0, 1fr); }
   .jump { width: min(300px, 30vw); }
-  .clock { display: none; }
+}
+@media (max-width: 1360px) {
+  .clock { display: none; }              /* room for the version and, on a shared server, the password button */
+}
+@media (max-width: 1200px) {
+  .top-tools .status-dot { display: none; }
+  /* The tools (jump, version, password) keep their room; the links scroll sideways when the bar is too narrow. */
+  .top-nav { flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .top-nav a { white-space: nowrap; }
+  .top-tools { flex: none; }
+  .jump { width: min(240px, 24vw); }
 }
 @media (max-width: 760px) {
   .mcard { grid-template-columns: minmax(0, 1fr); }
@@ -515,7 +527,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 }
 @media (max-width: 640px) {
   .top { padding: 0 14px; gap: 12px; }
-  .top-nav { overflow-x: auto; scrollbar-width: none; }
+  .top-tools { gap: 8px; }
+  .build-version { padding: 3px 5px; font-size: 11px; }
+  .password-button { padding: 3px 6px; }
+  .top-nav { overflow-x: auto; scrollbar-width: none; flex: 1 1 auto; min-width: 0; }
   .top-nav a { padding: 0 9px; white-space: nowrap; }
   .page { padding: 16px 16px 40px; }
   .cols-2 { grid-template-columns: minmax(0, 1fr); }

@@ -40,22 +40,24 @@ def test_rebinding_request_is_refused(tmp_path):
 
 def test_no_key_on_this_computer(tmp_path):
     c = TestClient(_app(tmp_path, port=8765), base_url="http://127.0.0.1:8765")
-    assert c.get("/api/access").json() == {"required": False, "ok": True}
+    assert c.get("/api/access").json() == {"required": False, "ok": True, "generated": False}
     assert c.get("/api/missions").status_code == 200
-    assert not (tmp_path / "data" / "access-key").exists()
+    assert not (tmp_path / "data" / "access.json").exists()
 
 
 def test_network_needs_the_access_key(tmp_path):
     c = TestClient(_app(tmp_path, port=8765, lan=True, discovery=False), base_url="http://10.0.0.5:8765")
     key = access_key_for(tmp_path / "data")
     if os.name != "nt":                                            # Windows has no such mode bits (ACLs instead)
-        assert (tmp_path / "data" / "access-key").stat().st_mode & 0o077 == 0
+        assert (tmp_path / "data" / "access.json").stat().st_mode & 0o077 == 0
+    import json
+    assert key not in json.loads((tmp_path / "data" / "access.json").read_text())["hash"]   # stored hashed
     assert c.get("/api/health").status_code == 200                 # installers and supervisors
     assert c.get("/").status_code in (200, 404)                    # the screens load, to ask for the key
     assert c.get("/api/missions").status_code == 401
     assert c.post("/api/workers/codes", headers=H).status_code == 401
     assert c.get("/api/folders", params={"path": "/"}).status_code == 401
-    assert c.get("/api/access").json() == {"required": True, "ok": False}
+    assert c.get("/api/access").json() == {"required": True, "ok": False, "generated": False}
     assert c.post("/api/access", json={"key": "wrong"}, headers=H).status_code == 403
     assert c.get("/api/missions").status_code == 401
     r = c.post("/api/access", json={"key": key}, headers=H)
@@ -72,6 +74,38 @@ def test_new_key_replaces_the_old(tmp_path):
     assert access_key_for(tmp_path) == a
     b = access_key_for(tmp_path, new=True)
     assert b != a and access_key_for(tmp_path) == b
+
+
+def test_choose_change_and_reset_a_forgotten_password(tmp_path, monkeypatch, capsys):
+    import io
+    from trafficwb.web.app import main
+    app = _app(tmp_path, port=8765, lan=True, discovery=False)
+    c = TestClient(app, base_url="http://10.0.0.5:8765")
+    first = access_key_for(tmp_path / "data")
+    c.post("/api/access", json={"key": first}, headers=H)
+    assert c.get("/api/access").json()["generated"] is True              # the app asks to choose one
+    # Too short, or a wrong current one: nothing changes.
+    assert c.post("/api/access/password", json={"current": first, "new": "short"}, headers=H).status_code == 400
+    assert c.post("/api/access/password", json={"current": "nope", "new": "long enough"}, headers=H).status_code == 403
+    r = c.post("/api/access/password", json={"current": first, "new": "my own password"}, headers=H)
+    assert r.status_code == 200 and c.get("/api/missions").status_code == 200    # this browser stays signed in
+    assert access_key_for(tmp_path / "data") is None                       # a chosen one is never shown
+    other = TestClient(app, base_url="http://10.0.0.5:8765")
+    assert other.post("/api/access", json={"key": first}, headers=H).status_code == 403
+    assert other.post("/api/access", json={"key": "my own password"}, headers=H).status_code == 200
+    # Forgotten: set a new one on the server; every browser must enter it.
+    monkeypatch.setattr("sys.stdin", io.StringIO("brand new secret\n"))
+    assert main(["password", "--data", str(tmp_path / "data"), "--stdin"]) == 0
+    assert c.get("/api/missions").status_code == 401 and other.get("/api/missions").status_code == 401
+    assert c.post("/api/access", json={"key": "brand new secret"}, headers=H).status_code == 200
+    assert main(["password", "--data", str(tmp_path / "data"), "--show"]) == 0
+    assert "cannot be shown" in capsys.readouterr().out
+
+
+def test_an_older_access_key_still_opens(tmp_path):
+    (tmp_path / "access-key").write_text("3f9a1c-07be42-aaaaaa-bbbbbb-cccccc\n")
+    assert access_key_for(tmp_path) == "3f9a1c-07be42-aaaaaa-bbbbbb-cccccc"
+    assert not (tmp_path / "access-key").exists()
 
 
 @pytest.mark.parametrize("name", ["../x", "a/b", "a\\b", "\\\\host\\share\\pack", "C:pack", "/etc", "..", ""])

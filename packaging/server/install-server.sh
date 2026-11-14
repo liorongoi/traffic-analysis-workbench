@@ -3,7 +3,7 @@
 # AlmaLinux), x86_64. Run from the unpacked package:
 #   sudo ./install-server.sh [--data DIR] [--backups DIR] [--models DIR] [--port N] [--allow-from CIDR|any]
 # Nothing is downloaded. The web screens are then open to other computers at http://<this server>:<port>,
-# with the access key the installer prints (sudo lanepulse key). Keep the firewall on (see INSTALL.txt).
+# with the password the installer prints (change it with sudo lanepulse password). Keep the firewall on.
 set -euo pipefail
 PKG="$(cd "$(dirname "$0")" && pwd)"
 DATA=/srv/lanepulse/data
@@ -180,7 +180,9 @@ fi
 
 IP="$(hostname -I | awk '{print $1}')"
 say "Done"
-KEY="$(runuser -u lanepulse -- "$BASE/current/python/bin/python3" -c 'import sys; from trafficwb.web.app import main; sys.exit(main(sys.argv[1:]))' key --data "$DATA")"
+KEY="$(runuser -u lanepulse -- "$BASE/current/python/bin/python3" -c 'import sys; from trafficwb.web.app import main; sys.exit(main(sys.argv[1:]))' password --data "$DATA" --show)"
 echo "LanePulse $VER is running ($GPU). Open it from another computer:  http://$IP:$PORT"
-echo "Access key (the browser asks for it once):  $KEY      (show it again: sudo lanepulse key)"
+echo "Password (the browser asks for it once):  $KEY"
+echo "  Choose your own in LanePulse (the key icon at the top), or here: sudo lanepulse password"
+echo "  Forgotten later? sudo lanepulse password sets a new one."
 echo "Manage it with:  lanepulse status | logs | restart | stop | start | import-model <zip> | backup"

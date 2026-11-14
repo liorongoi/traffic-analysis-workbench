@@ -20,8 +20,9 @@ Install or update
   the port in firewalld (ufw on Ubuntu). The NVIDIA driver steps for Red Hat are in the PDF guide, section 18.
 
 Open it from other computers:  http://<server address>:8765
-  The browser asks once for the access key, which the installer prints at the end. Show it again with
-  sudo lanepulse key; make a new one (every browser must enter it again) with sudo lanepulse key --new.
+  The browser asks once for the password, which the installer prints at the end. Choose your own in LanePulse:
+  the key icon at the top right (it needs the current one). Forgotten? On the server: sudo lanepulse password
+  sets a new one (it asks twice). sudo lanepulse password --show prints the one from install until you change it.
   Open it by the server's IP address, or by its own name; to use another DNS name, add it to
   TWB_ALLOWED_HOSTS="name1,name2" in /etc/lanepulse/lanepulse.conf. Keep the firewall on: sudo lanepulse firewall
 

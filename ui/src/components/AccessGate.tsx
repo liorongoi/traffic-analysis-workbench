@@ -41,13 +41,14 @@ export default function AccessGate({ children }: { children: ReactNode }) {
   return (
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 16 }}>
       <form className="card" onSubmit={submit} style={{ width: "min(420px, 100%)" }}>
-        <h2>LanePulse access key</h2>
-        <p>This server is shared on the network. Enter the access key you were given. The server's administrator
-          can show it with <code>sudo lanepulse key</code>.</p>
-        <input autoFocus value={key} onChange={(e) => setKey(e.target.value)} aria-label="Access key"
+        <h2>LanePulse password</h2>
+        <p>This server is shared on the network. Enter its password.</p>
+        <input autoFocus value={key} onChange={(e) => setKey(e.target.value)} aria-label="Password"
           autoComplete="current-password" type="password" style={{ width: "100%", marginBottom: 12 }} />
         {error && <p role="alert" style={{ color: "var(--bad, #ff6b6b)" }}>{error}</p>}
         <button className="primary" type="submit" disabled={busy || !key.trim()}>Open LanePulse</button>
+        <p className="muted" style={{ marginTop: 14, fontSize: 13 }}>Forgot it? Whoever looks after the server can
+          set a new one there with <code>sudo lanepulse password</code>.</p>
       </form>
     </div>
   );
