@@ -823,3 +823,6 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
 .serverform .grow { flex: 1 1 200px; }
 .serverform { background: transparent; }
 .maplayers label { cursor: pointer; }
+
+.plain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.plain-list li { padding: 6px 10px; background: var(--field); border: 1px solid var(--line); }
