@@ -41,13 +41,13 @@ jobs:
         run: |
           $extra = "yolox-l", "yolox-x", "rf-detr-medium", "d-fine-large", "d-fine-xlarge", "rt-detr-r34", "rt-detr-r50", "rt-detr-r101"
           $det = "$env:RUNNER_TEMP\detectors"
-          New-Item -ItemType Directory -Force "$det\models", "$det	raining" | Out-Null
+          New-Item -ItemType Directory -Force "$det\models", "$det\training" | Out-Null
           foreach ($n in $extra) {
             if (-not (Test-Path "models\$n")) { throw "models\$n was not fetched" }
             Move-Item "models\$n" "$det\models\$n"
             $w = if ($n -like "yolox-*") { "yolox_$($n.Substring(6)).pth" } else { "$n-coco.pth" }
             if (-not (Test-Path "training_weights\$w")) { throw "training_weights\$w was not fetched" }
-            Move-Item "training_weights\$w" "$det	raining\$w"
+            Move-Item "training_weights\$w" "$det\training\$w"
           }
           Copy-Item packaging\install-detectors.ps1 $det
           Push-Location $det
