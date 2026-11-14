@@ -1074,6 +1074,9 @@ CREATE TABLE camera_geo (                  -- a fixed camera on the map (video_g
   created_at TEXT NOT NULL
 );
 """,
+    26: """
+ALTER TABLE camera_geo ADD COLUMN dtm_path TEXT;          -- the terrain (ground heights) file picked, or NULL
+""",
 }
 
 

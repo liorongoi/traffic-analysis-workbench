@@ -231,6 +231,115 @@ def footprint(G: np.ndarray, w: int, h: int) -> np.ndarray | None:
     return apply_h(G, [[0, 0], [w, 0], [w, h], [0, h]])
 
 
+def ground_parts(G: np.ndarray, w: int, h: int, max_range_m: float = 1500.0, far_share: float = 0.5,
+                 max_px_m: float | None = 1.5):
+    """The frame's footprint on the ground in two parts (metres): the near part (the lower rows of the frame) and the
+    far part (the upper rows that still show ground, toward the horizon), as quads ``[[e, n] x 4]``, plus the first
+    frame row used. Rows above the horizon, and rows whose ground is farther than ``max_range_m`` from the ground
+    under the bottom of the frame or where one frame pixel covers more than ``max_px_m`` of ground (too coarse to
+    show anything), are left out, so an oblique camera does not paint the map to the horizon.
+    Returns None when no row of the frame is on the ground."""
+    hz = horizon_row(G, w, h)
+    if hz >= h - 1:
+        return None
+    r0 = hz + (0.02 * h if hz > 0 else 0.0)                         # a little under the horizon: far rows explode
+    if r0 >= h - 1:
+        return None
+    base = apply_h(G, [[w / 2, h]])[0]
+
+    def too_far(r):
+        q = apply_h(G, [[0, r], [w / 2, r], [w, r], [w / 2, r + 1], [w / 2 + 1, r]])
+        if np.hypot(q[:3, 0] - base[0], q[:3, 1] - base[1]).max() > max_range_m:
+            return True
+        return max_px_m is not None and max(np.hypot(*(q[3] - q[1])), np.hypot(*(q[4] - q[1]))) > max_px_m
+
+    if too_far(r0):
+        lo, hi = r0, float(h)                                            # find the first row within the range
+        if too_far(hi - 1):
+            return None
+        for _ in range(30):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if too_far(mid) else (lo, mid)
+        r0 = hi
+    split = r0 + (h - r0) * far_share
+    far = apply_h(G, [[0, r0], [w, r0], [w, split], [0, split]])
+    near = apply_h(G, [[0, split], [w, split], [w, h], [0, h]])
+    return {"near": near, "far": far, "top_row": float(r0), "split_row": float(split)}
+
+
+def picture_mask(frame: np.ndarray, dark: int = 12) -> np.ndarray:
+    """255 where the frame shows picture, 0 on black bars and borders around it (dark areas touching the edge)."""
+    g = frame.max(axis=2) if frame.ndim == 3 else frame
+    darkm = (g <= dark).astype(np.uint8)
+    n, lab = cv2.connectedComponents(darkm, connectivity=4)
+    edge = np.unique(np.r_[lab[0], lab[-1], lab[:, 0], lab[:, -1]])
+    bar = np.isin(lab, edge[edge > 0]) & (darkm > 0)
+    # a dark car at the edge is not a bar: only areas that span a whole side, or most of one, count
+    keep = np.zeros_like(bar)
+    for k in edge[edge > 0]:
+        m = lab == k
+        ys, xs = np.nonzero(m)
+        if (xs.max() - xs.min() + 1) >= 0.8 * g.shape[1] or (ys.max() - ys.min() + 1) >= 0.8 * g.shape[0]:
+            keep |= m
+    return np.where(keep & bar, 0, 255).astype(np.uint8)
+
+
+def frame_on_ground(frame: np.ndarray, G: np.ndarray, frame_ll: "LocalFrame", bounds: tuple[float, float, float, float],
+                    size: tuple[int, int], max_range_m: float = 1500.0) -> np.ndarray:
+    """The frame laid on the ground, as a BGRA picture of the area ``bounds`` (top, left, bottom, right latitude and
+    longitude) of ``size`` (width, height) pixels. Transparent where the frame does not reach: outside its footprint,
+    above the horizon and on black bars, so only picture lands on the map."""
+    h, w = frame.shape[:2]
+    W, H = size
+    parts = ground_parts(G, w, h, max_range_m)
+    out = np.zeros((H, W, 4), np.uint8)
+    if parts is None:
+        return out
+    top, left, bottom, right = bounds
+    e0, n0 = frame_ll.to_en(top, left)
+    e1, n1 = frame_ll.to_en(bottom, right)
+    B = np.array([[(e1 - e0) / W, 0, e0], [0, (n1 - n0) / H, n0], [0, 0, 1]], np.float64)   # output pixel to metres
+    M = np.linalg.inv(G) @ B                                                                   # output pixel to frame
+    pic = cv2.warpPerspective(frame, M, (W, H), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                              borderMode=cv2.BORDER_REPLICATE)
+    mask = picture_mask(frame)
+    mask[: int(math.ceil(parts["top_row"]))] = 0
+    mask = cv2.erode(mask, np.ones((5, 5), np.uint8))           # no half-black pixel where a bar is blended in
+    a = cv2.warpPerspective(mask, M, (W, H), flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
+                            borderMode=cv2.BORDER_CONSTANT)
+    poly = np.r_[parts["far"][:2], parts["near"][2:]]                                          # the whole footprint
+    px = apply_h(np.linalg.inv(B), poly)
+    inside = np.zeros((H, W), np.uint8)
+    cv2.fillPoly(inside, [np.round(px * 8).astype(np.int32)], 255, shift=3)
+    out[:, :, :3] = pic
+    out[:, :, 3] = cv2.bitwise_and(a, inside)
+    return out
+
+
+REGISTERED_BGR = (60, 200, 60)        # green: placed by the map (or by points picked on the map)
+UNREGISTERED_BGR = (60, 60, 230)      # red: flight data only, or not placed
+FAR_BGR = {True: (200, 220, 40), False: (40, 140, 255)}   # the far part: teal when registered, orange when not
+
+
+def draw_footprint(img: np.ndarray, near_px: np.ndarray, far_px: np.ndarray, registered: bool,
+                   thickness: int = 2) -> np.ndarray:
+    """Draw a footprint (``ground_parts`` in the picture's pixels) on ``img``: the near part green when the frame is
+    registered and red when not, the far part in its own colour, each lightly filled."""
+    for poly, col in ((far_px, FAR_BGR[registered]), (near_px, REGISTERED_BGR if registered else UNREGISTERED_BGR)):
+        p = np.round(np.asarray(poly) * 8).astype(np.int32)
+        fill = img.copy()
+        cv2.fillPoly(fill, [p], col, lineType=cv2.LINE_AA, shift=3)
+        cv2.addWeighted(fill, 0.18, img, 0.82, 0, dst=img)
+        cv2.polylines(img, [p], True, col, thickness, cv2.LINE_AA, shift=3)
+    return img
+
+
+def is_registered(fix: "FrameFix", trust_s: float = 5.0) -> bool:
+    """Placed by the map: matched now, or chained from a match a few seconds ago. Flight data alone is not."""
+    return fix.G is not None and fix.source in ("map", "chain") and fix.since_map_s is not None \
+        and fix.since_map_s <= trust_s
+
+
 def pose_from_telemetry(s: dict, w: int, h: int, frame: LocalFrame, hfov_deg: float | None = None,
                         ground_alt: float | None = None) -> np.ndarray | None:
     """A first ground homography from one flight-data sample (``video_meta.Telemetry.at``), or None.
@@ -911,8 +1020,15 @@ def _drone(args) -> None:
     gmap = load_map(args.map, args.corners)
     matcher = Matcher(args.model_pack)
     tel = None if args.no_flight_data else find(Path(args.video))
-    reg = DroneRegistrar(gmap, matcher, snap_every_s=args.every, async_snap=not args.offline, hfov_deg=args.hfov)
-    out, writer = [], None
+    ground_alt = None
+    if args.dtm:
+        from .terrain import load_terrain
+        c = gmap.frame
+        ground_alt = load_terrain(args.dtm).height_at(c.lat0, c.lon0)
+        ground_alt = None if ground_alt is None or not np.isfinite(ground_alt) else float(ground_alt)
+    reg = DroneRegistrar(gmap, matcher, snap_every_s=args.every, async_snap=not args.offline, hfov_deg=args.hfov,
+                         ground_alt=ground_alt)
+    out, writer, map_writer = [], None, None
     first_G = None
     with av.open(args.video) as c:
         vs = c.streams.video[0]
@@ -938,7 +1054,8 @@ def _drone(args) -> None:
                     raise SystemExit(f"Could not find the first frame on the map ({s.reason}). Give --start.")
                 first_G = s.G
             fix = reg.start(img, first_G, sample, t) if not out else reg.step(img, t, sample)
-            rec = {"t": round(t, 3), "source": fix.source, "ms": round(fix.track_ms, 1)}
+            rec = {"t": round(t, 3), "source": fix.source, "ms": round(fix.track_ms, 1),
+                   "registered": is_registered(fix, reg.trust_flight_data_s)}
             if fix.G is not None:
                 fp = footprint(fix.G, w, h)
                 c0 = apply_h(fix.G, [[w / 2, h / 2]])[0] if horizon_row(fix.G, w, h) < h / 2 else None
@@ -961,9 +1078,16 @@ def _drone(args) -> None:
                     view[edges > 0] = (0, 255, 255)
                 cv2.putText(view, f"{t:6.1f}s {fix.source}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
                 writer.write(view[:, : w // 2 * 2])
+            if args.map_overlay:
+                side = 1024
+                if map_writer is None:
+                    map_writer = cv2.VideoWriter(args.map_overlay, cv2.VideoWriter_fourcc(*"mp4v"),
+                                                 float(vs.average_rate or 30), (side, side))
+                map_writer.write(map_view(gmap, img, fix.G, rec["registered"], side))
     reg.close()
-    if writer is not None:
-        writer.release()
+    for wr in (writer, map_writer):
+        if wr is not None:
+            wr.release()
     ms = [r["ms"] for r in out]
     summary = {"frames": len(out), "flight_data": tel.source if tel else None, "matcher": matcher.kind,
                "map_matches": len(reg.log), "map_matches_ok": sum(x["ok"] for x in reg.log),
@@ -972,6 +1096,35 @@ def _drone(args) -> None:
                "sources": {k: sum(r["source"] == k for r in out) for k in {r["source"] for r in out}}}
     Path(args.out).write_text(json.dumps({"summary": summary, "frames": out, "matches": reg.log}), encoding="utf-8")
     print(json.dumps(summary, indent=1))
+
+
+def map_view(gmap: GeoMap, frame: np.ndarray, G: np.ndarray | None, registered: bool, side: int = 1024,
+             view_m: float | None = None) -> np.ndarray:
+    """The map around the frame's footprint with the frame laid on it (no black edges) and the footprint drawn:
+    the near part green when registered and red when not, the far part in its own colour."""
+    h, w = frame.shape[:2]
+    parts = ground_parts(G, w, h) if G is not None else None
+    if parts is None:
+        img = gmap.level(0)
+        out = cv2.resize(img, (side, side), interpolation=cv2.INTER_AREA)
+        cv2.putText(out, "not on the map", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, UNREGISTERED_BGR, 2)
+        return out
+    poly = np.r_[parts["far"], parts["near"]]
+    c = (poly.min(axis=0) + poly.max(axis=0)) / 2
+    span = view_m or float(np.ptp(poly, axis=0).max() * 1.3 + 20)
+    k = span / side
+    V = np.array([[k, 0, c[0] - span / 2], [0, -k, c[1] + span / 2], [0, 0, 1]], np.float64)   # view px to metres
+    out = gmap.render(gmap.A_inv @ V, (side, side))
+    lat_t, lon_l = gmap.frame.to_latlon(c[0] - span / 2, c[1] + span / 2)
+    lat_b, lon_r = gmap.frame.to_latlon(c[0] + span / 2, c[1] - span / 2)
+    lay = frame_on_ground(frame, G, gmap.frame, (float(lat_t), float(lon_l), float(lat_b), float(lon_r)), (side, side))
+    a = lay[:, :, 3:4].astype(np.float32) / 255 * 0.85
+    out = (out * (1 - a) + lay[:, :, :3] * a).astype(np.uint8)
+    Vi = np.linalg.inv(V)
+    draw_footprint(out, apply_h(Vi, parts["near"]), apply_h(Vi, parts["far"]), registered)
+    cv2.putText(out, "registered on the map" if registered else "flight data only / not registered", (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, REGISTERED_BGR if registered else UNREGISTERED_BGR, 2)
+    return out
 
 
 def _fixed(args) -> None:
@@ -1012,6 +1165,10 @@ def main(argv=None) -> None:
     d.add_argument("--offline", action="store_true", help="Wait for every map match (not real time; a little better).")
     d.add_argument("--max-seconds", type=float)
     d.add_argument("--overlay", help="Write a video with the map's edges drawn over each frame.")
+    d.add_argument("--map-overlay", help="Write a video of the map with each frame laid on it and its footprint "
+                                         "(green: registered on the map; red: flight data only).")
+    d.add_argument("--dtm", help="Ground heights (DTM GeoTIFF in latitude/longitude, or SRTM .hgt): the ground under "
+                                 "the map is used for flight data that gives height above sea level.")
     d.add_argument("--out", default="georeg.json")
     f = sub.add_parser("fixed", help="A fixed camera from points picked on the frame and on the map.")
     f.add_argument("points", help="CSV: x,y,lat,lon per row (frame pixel, then map position); four or more.")

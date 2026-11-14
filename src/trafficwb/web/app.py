@@ -270,7 +270,32 @@ class GeoBody(BaseModel):
     points: list[list[float]] = Field(..., min_length=1, max_length=100)    # [x, y, lat, lon]
     map_path: str | None = None
     corners: list[float] | None = Field(None, min_length=4, max_length=4)
+    dtm_path: str | None = None
     check_only: bool = False
+
+
+class MapServerBody(BaseModel):
+    id: str | None = None
+    name: str = Field("", max_length=120)
+    role: str = "map"
+    kind: str = "wms"
+    url: str = Field("", max_length=2000)
+    layer: str | None = None
+    style: str | None = None
+    matrix_set: str | None = None
+    format: str | None = None
+    encoding: str | None = None
+    max_zoom: int | None = Field(None, ge=0, le=24)
+    auth: dict | None = None
+
+
+class MapFetchBody(BaseModel):
+    source_id: str | None = None
+    server: MapServerBody | None = None            # a server not saved yet (connect only)
+    lat: float = 0.0
+    lon: float = 0.0
+    side_m: float = Field(1000, ge=50, le=20000)
+    m_per_px: float = Field(0.3, gt=0, le=100)
 
 
 class CalibrationBody(BaseModel):
@@ -2300,8 +2325,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         _video(m)
         cg = CameraGeo(m)
         if body.check_only:
-            return {"fit": _geo_call(lambda: cg.check(body.points))}
-        return {"geo": _geo_call(lambda: cg.set(version_id, body.points, body.map_path, body.corners, u.username))}
+            return {"fit": _geo_call(lambda: cg.check(body.points, body.dtm_path))}
+        return {"geo": _geo_call(lambda: cg.set(version_id, body.points, body.map_path, body.corners, u.username,
+                                                body.dtm_path))}
 
     @app.delete("/api/missions/{mission_id}/recordings/{version_id}/geo")
     def geo_clear(version_id: int, m: Mission = Depends(mission), u: User = Depends(user)):
@@ -2316,6 +2342,92 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         from ..video_geo import CameraGeo
         svc = _video(m)
         return {"paths": _geo_call(lambda: _video_call(lambda: CameraGeo(m).paths(svc, version_id)))}
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/footprint")
+    def geo_footprint(version_id: int, t: float = Query(0, ge=0), dtm: str | None = None, m: Mission = Depends(mission)):
+        """Where the frame at ``t`` lies on the ground: near and far parts, and whether it is registered."""
+        from ..video_geo import footprint_of
+        svc = _video(m)
+        return {"footprint": _geo_call(lambda: footprint_of(m, svc, version_id, t, dtm))}
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/frame-on-map")
+    def geo_frame_on_map(version_id: int, t: float = Query(0, ge=0), dtm: str | None = None,
+                         m: Mission = Depends(mission)):
+        """The frame at ``t`` laid on the ground (PNG, transparent where the frame does not reach)."""
+        from ..video_geo import frame_overlay
+        svc = _video(m)
+        data = _geo_call(lambda: frame_overlay(m, svc, version_id, t, dtm))
+        return Response(data, media_type="image/png", headers={"Cache-Control": "private, max-age=600"})
+
+    # ---------- where maps and ground heights come from (map_sources, terrain) ----------
+    def _src_call(fn):
+        from ..map_sources import MapSourceError
+        from ..terrain import TerrainError
+        try:
+            return fn()
+        except (MapSourceError, TerrainError) as exc:
+            raise ApiError(400, "map_source", str(exc)) from None
+
+    @app.get("/api/map-sources")
+    def map_sources_get(_u: User = Depends(user)):
+        """Built-in online services, the servers on this network, and the folder fetched maps are kept in."""
+        from ..map_sources import catalogue
+        return catalogue(data_root)
+
+    @app.post("/api/map-sources/servers")
+    def map_server_save(body: MapServerBody, u: User = Depends(user)):
+        from ..map_sources import save_server
+        return {"server": _src_call(lambda: save_server(DataRoot(data_root), body.model_dump(), u.username))}
+
+    @app.delete("/api/map-sources/servers/{server_id}")
+    def map_server_delete(server_id: str, u: User = Depends(user)):
+        from ..map_sources import delete_server, servers
+        _src_call(lambda: delete_server(DataRoot(data_root), server_id, u.username))
+        return {"servers": servers(data_root)}
+
+    @app.post("/api/map-sources/connect")
+    def map_server_connect(body: MapFetchBody, _u: User = Depends(user)):
+        """Check a server (saved, or as typed) and list its layers."""
+        from ..map_sources import _load, clean_server, connect, find_source
+        def go():
+            if body.server is not None:
+                d = body.server.model_dump()
+                old = next((x for x in _load(data_root) if x["id"] == d.get("id")), None)
+                d["layer"] = d.get("layer") or "-"                 # a layer is picked after connecting
+                return connect(clean_server(d, old))
+            return connect(find_source(data_root, body.source_id or ""))
+        return _src_call(go)
+
+    @app.post("/api/map-sources/fetch")
+    def map_source_fetch(body: MapFetchBody, _u: User = Depends(user)):
+        """Fetch an area from a source and keep it on this computer as a GeoTIFF; returns its path."""
+        from ..map_sources import fetch, find_source
+        return _src_call(lambda: fetch(data_root, find_source(data_root, body.source_id or ""), body.lat, body.lon,
+                                       body.side_m, body.m_per_px))
+
+    @app.get("/api/terrain-files")
+    def terrain_files_get(folder: str, _u: User = Depends(user)):
+        from ..terrain import terrain_files
+        return {"files": _src_call(lambda: terrain_files(folder))}
+
+    @app.get("/api/terrain-info")
+    def terrain_info_get(path: str, _u: User = Depends(user)):
+        from ..terrain import load_terrain
+        return _src_call(lambda: load_terrain(path).info())
+
+    @app.get("/api/terrain-shade")
+    def terrain_shade_get(path: str, top: float, left: float, bottom: float, right: float,
+                          w: int = Query(1024, ge=16, le=4096), _u: User = Depends(user)):
+        """Shaded relief of a terrain file over a map's area (PNG with transparency), to draw over the map."""
+        from ..terrain import load_terrain, shade_over
+        from ..terrain import M_PER_DEG
+        import math
+        hm = (top - bottom) * M_PER_DEG
+        wm = (right - left) * M_PER_DEG * math.cos(math.radians((top + bottom) / 2))
+        h = max(16, round(w * hm / max(wm, 1e-9)))
+        img = _src_call(lambda: shade_over(load_terrain(path), (top, left, bottom, right), (w, min(h, 4096))))
+        ok, buf = cv2.imencode(".png", img)
+        return Response(buf.tobytes(), media_type="image/png", headers={"Cache-Control": "private, max-age=600"})
 
     @app.get("/api/missions/{mission_id}/recordings/{version_id}/telemetry")
     def telemetry_get(version_id: int, m: Mission = Depends(mission)):
