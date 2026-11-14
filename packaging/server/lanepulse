@@ -67,6 +67,12 @@ case "$cmd" in
   worker)
     # Help another LanePulse server analyse long videos (asks for its address and pairing code when left out).
     TWB_MODELS="$MODELS" "$PY" -m trafficwb.workers "$@";;
+  key)
+    # The access key browsers ask for (made at install). "sudo lanepulse key --new" replaces it.
+    need_root key
+    runuser -u lanepulse -- "$PY" -c 'import sys; from trafficwb.web.app import main; sys.exit(main(sys.argv[1:]))' \
+      key --data "$DATA" "$@"
+    [ "${1:-}" = "--new" ] && systemctl restart lanepulse.service && echo "Restarted: browsers must enter the new key." || true;;
   version) basename "$(readlink -f "$BASE/current")" | sed 's/^lanepulse-//';;
   *)
     cat <<HELP
@@ -75,6 +81,7 @@ sudo lanepulse start|stop|restart
 lanepulse logs [lines]           follow the server log (Ctrl+C to leave)
 sudo lanepulse import-model ZIP  add a trained model; then evaluate and promote it on the learning page
 lanepulse models                 installed models
+sudo lanepulse key [--new]       the access key the browser asks for (--new replaces it)
 sudo lanepulse backup [--with-evidence]
 sudo lanepulse speed-check [--images FOLDER]
 sudo lanepulse firewall          allow only $ALLOW to port $PORT (and SSH), turn the firewall on

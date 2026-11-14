@@ -5,13 +5,10 @@ Install
 1. Drag LanePulse onto the Applications folder in this window.
 2. Open Applications and double-click LanePulse. Its launch screen opens in your browser at once: it shows the
    version, what LanePulse is doing (setting up, starting) and moves on to LanePulse by itself when it is ready.
-3. The first time, a Terminal window opens and LanePulse sets itself up from the internet: its own Python, PyTorch,
-   the other packages and the models (about 2 GB; a few minutes on a fast connection). Keep the window open; the launch screen follows its
-   progress. When it
-   is done, LanePulse opens in your browser at http://127.0.0.1:8765. From then on it runs without the internet.
-   No administrator rights are needed, and no other Python on the Mac is used or changed. Every file it downloads
-   is checked against the exact file this version was tested with. If the setup stops (for example the internet
-   drops), open LanePulse again: it continues from where it stopped.
+3. The first time, a Terminal window opens and LanePulse sets itself up from what it carries: its own Python,
+   PyTorch, the other packages and every model (a few minutes). No internet is needed. Keep the window open; the
+   launch screen follows its progress. No administrator rights are needed, and no other Python on the Mac is used
+   or changed. If the setup stops, open LanePulse again: it continues.
 
 The first time, macOS may say it cannot check LanePulse for malicious software, because the app is not signed with
 an Apple developer account. To allow it, once:
@@ -38,8 +35,8 @@ Use
   window. Then evaluate it on the learning page and promote it if it is better.
 
 Update
-- Drag the new LanePulse onto Applications and replace the old one, then open it. It needs the internet once more
-  to update its runtime (usually only LanePulse itself is downloaded again; the models are kept). Your data and models are kept; an older version
+- Drag the new LanePulse onto Applications and replace the old one, then open it. It sets up its runtime again from
+  what it carries (no internet). Your data and models, including trained ones, are kept; an older version
   that is still running is stopped and the new one starts. The .dmg can be deleted afterwards.
 
 Remove

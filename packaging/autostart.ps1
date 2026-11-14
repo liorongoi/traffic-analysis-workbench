@@ -261,6 +261,22 @@ $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$Runner`"" 
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
   -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+# A task that runs as another account must not run files that a standard user can change: anyone who could edit
+# start.cmd or the bundled Python would then run code as that account (as SYSTEM with -System).
+$runAs = if ($System) { "SYSTEM" } elseif ($User) { $User } else { "$env:USERDOMAIN\$env:USERNAME" }
+$trusted = @("NT AUTHORITY\SYSTEM", "BUILTIN\Administrators", "NT SERVICE\TrustedInstaller", "CREATOR OWNER")
+# Only the bits that allow a change (write data, append, attributes, delete, permissions, owner, generic write/all).
+$writeRights = [int64]0x500D0156
+$writers = @((Get-Acl $Target).Access | Where-Object {
+  $_.AccessControlType -eq "Allow" -and (([int64]$_.FileSystemRights -band $writeRights) -ne 0) -and
+  ($trusted -notcontains $_.IdentityReference.Value) -and ($_.IdentityReference.Value -ne $runAs)
+} | ForEach-Object { $_.IdentityReference.Value } | Select-Object -Unique)
+if ($writers.Count -gt 0) {
+  Write-Host "Not set up: $Target can be changed by $($writers -join ', '), and the power-on task would run its files as $runAs."
+  Write-Host "Install LanePulse into a folder only administrators (and $runAs) can change, for example C:\Program Files\LanePulse,"
+  Write-Host "or run the task as the account that owns this folder (-User), or use -Mode signin."
+  exit 3
+}
 if ($System) {
   Write-Host "Running as SYSTEM: source folders on network shares will not be readable."
   $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Limited
