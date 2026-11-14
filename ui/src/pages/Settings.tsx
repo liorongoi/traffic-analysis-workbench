@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, post } from "../api";
 import FolderPicker from "../components/FolderPicker";
 import { ZonePick } from "../components/Pick";
+import { MapServers } from "../components/MapSources";
 import { CameraChoice, DetectorChoice, ModelChoice, ParallelChoice, SamInterval, usesSam, partsOf } from "./Wizard";
 import NameFormats from "./NameFormats";
 import Workers from "./Workers";
@@ -30,7 +31,7 @@ const PARTS: [string, string, string][] = [
   ["video", "Video", "Only for video missions"],
 ];
 // Older addresses of what is now a part of Settings.
-const LEGACY: Record<string, string> = { computer: "both", formats: "both", workers: "video" };
+const LEGACY: Record<string, string> = { computer: "both", formats: "both", workers: "video", maps: "video" };
 
 export default function Settings({ section }: { section?: string }) {
   const part = LEGACY[section ?? ""] ?? (PARTS.some(([k]) => k === section) ? section! : "both");
@@ -164,8 +165,8 @@ export default function Settings({ section }: { section?: string }) {
           </Card>
           <div id="set-colours"><PlayerColours /></div>
           <div className="set-wide" id="set-workers"><Workers embedded /></div>
-          <Card title="Map and ground heights" wide lead="Map and height servers for putting a camera on the map.">
-            <p className="muted" style={{ margin: 0 }}>Your map and height servers (files, online services and your own WMTS, WMS or REST server) are set up here once the map sources update is in.</p>
+          <Card title="Map and ground heights" wide id="set-maps" lead="Our own map and height servers, for putting a camera on the map. Set up once; then picked from a list.">
+            <MapServers />
           </Card>
         </div>}
       </>}
