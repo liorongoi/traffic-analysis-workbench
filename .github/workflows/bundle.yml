@@ -128,7 +128,7 @@ jobs:
             # Not Start-Process -Wait: PowerShell 7 would also wait for a server left running.
             $p = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/LOG=$env:RUNNER_TEMP\setup-$what.log"
             $done = $p.WaitForExit(15 * 60 * 1000)
-            Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 25
+            Get-Content "$dir\logs\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 25 | Out-Host
             if (-not $done) { Get-Content "$env:RUNNER_TEMP\setup-$what.log" | Select-Object -Last 40; throw "$what did not finish in 15 minutes" }
             if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\setup-$what.log" | Select-Object -Last 40; throw "$what exit code $($p.ExitCode)" }
             if (-not (Test-Path "$dir\current.txt")) { throw "$what did not install the app" }
