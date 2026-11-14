@@ -126,6 +126,12 @@ body.failed .state h2 { color: var(--bad); } body.ready .state h2 { color: var(-
   clip-path: polygon(0 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%); box-shadow: 0 0 22px rgba(76, 215, 246, .32); }
 .go:hover { background: #7fe3fa; }
 body.ready .go { display: inline-block; }
+/* Settings: one-time setup, also one click away inside LanePulse (the cog beside the name). */
+.set { display: none; margin: 16px 0 0 10px; padding: 9px 14px; font: 600 13.5px/1 var(--sans); color: var(--text-2); text-decoration: none;
+  border: 1px solid var(--line-strong); vertical-align: top; }
+.set:hover { color: var(--accent); border-color: var(--accent); }
+.set svg { width: 14px; height: 14px; margin-right: 7px; vertical-align: -2px; }
+body.ready .set { display: inline-block; }
 .foot { margin-top: 18px; font: 400 12px/1.5 var(--sans); color: var(--muted); }
 .foot code { font: 400 11.5px var(--mono); color: var(--text-2); }
 
@@ -170,7 +176,7 @@ body.ready .go { display: inline-block; }
     <div class="state"><h2 id="title">Getting ready</h2><span class="t" id="elapsed"></span></div>
     <p class="msg" id="msg">Checking this Mac and the LanePulse folder.</p>
     <div class="detail" id="detail"></div>
-    <a class="go" id="go" href="__LP_URL__">Open LanePulse</a>
+    <a class="go" id="go" href="__LP_URL__">Open LanePulse</a><a class="set" id="set" href="__LP_URL__/#/settings" title="One-time setup: backups, detector sizes, filename formats, other computers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Settings</a>
   </section>
   <p class="foot">Your missions, models and backups stay in <code>~/LanePulse</code>. Nothing leaves this Mac.</p>
 </main>
@@ -187,7 +193,7 @@ body.ready .go { display: inline-block; }
     failed: ["LanePulse did not start", ""]
   };
   var $ = function (id) { return document.getElementById(id); };
-  var t0 = Date.now(), opened = t0, state = "check", ranSetup = false, gotStatus = false, leaving = false;
+  var t0 = Date.now(), opened = t0, state = "check", ranSetup = false, gotStatus = false, leaving = false, leaveTimer = 0;
   if (BUILD.indexOf("__LP_") !== 0 && BUILD !== $("ver").textContent) $("build").textContent = BUILD.replace(/^[^-]*-/, "build ").slice(0, 30);
   $("hud-addr").textContent = URL0.indexOf("__LP_") === 0 ? "" : URL0.replace(/^https?:\/\//, "");
 
@@ -211,8 +217,10 @@ body.ready .go { display: inline-block; }
   function go(url) {
     if (leaving) return; leaving = true;
     // Let the screen be seen for a moment even when the server was already running.
-    setTimeout(function () { location.replace(url); }, Math.max(900, 1800 - (Date.now() - opened)));
+    leaveTimer = setTimeout(function () { location.replace(url); }, Math.max(900, 1800 - (Date.now() - opened)));
   }
+  // Going to Settings instead: do not move on to the home screen underneath it.
+  $("set").addEventListener("click", function () { clearTimeout(leaveTimer); });
   // status.js (written by the app) calls this.
   window.lpStatus = function (s) { gotStatus = true; render(s || {}); };
 

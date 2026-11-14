@@ -177,7 +177,7 @@ For learning, a box the operator drew is a reviewed label and its frame is alway
 
 ## Workers on other computers
 
-- Other computers can analyse segments of a long recording. The operator turns "Other computers may help" on (Workers screen). Off by default; while off, nothing is shared and workers are refused.
+- Other computers can analyse segments of a long recording. The operator turns "Other computers may help" on (Settings, Other computers). Off by default; while off, nothing is shared and workers are refused.
 - A helping computer has the same LanePulse install; nothing else is installed. Its launcher is "LanePulse - help another computer" (Windows Start menu), "Help another computer" in `~/LanePulse` (Mac), `lanepulse worker` (Linux server) or `trafficwb-worker` (pip).
 - With no address given, it finds the server: a server started with network access answers on UDP port 8766 with its id, name and port (`discovery.py`). Several servers: it asks which one. It then asks to help with its own key, made once and kept in `~/.lanepulse-worker`; the server keeps only the key's hash. The computer appears under "Asking to help"; the operator answers Allow or Refuse from a dropdown. An allowed computer is listed with the pairing codes and stopped the same way; after a stop it asks again. At most 20 computers wait for an answer at once.
 - After it is allowed, it offers to help by itself whenever the computer signs in (Windows Startup folder, Mac LaunchAgent, Linux systemd user service; `--start-at-signin off` undoes it). If the server's address changes, it finds it again.

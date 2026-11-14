@@ -27,14 +27,15 @@ const LAUNCHERS: Record<Os, { label: string; run: string; open: string }> = {
 };
 const guessOs = (): Os => /Mac/i.test(navigator.platform) ? "mac" : /Win/i.test(navigator.platform) ? "windows" : "server";
 
-export default function Workers() {
+/** Embedded on the Settings page, it drops its own page frame and title. */
+export default function Workers({ embedded = false }: { embedded?: boolean }) {
   const [st, setSt] = useState<Status | null>(null);
   const [fresh, setFresh] = useState<{ code: string; label: string } | null>(null);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   const [os, setOs] = useState<Os>(() => { try { return (localStorage.getItem("twb.worker-os") as Os) || guessOs(); } catch { return guessOs(); } });
   const load = useCallback(() => api("/workers").then(setSt).catch((e) => setMsg({ kind: "err", text: (e as ApiError).message })), []);
   useEffect(() => { load(); const t = setInterval(load, 3000); return () => clearInterval(t); }, [load]);
-  if (!st) return <div className="page muted">Loading…</div>;
+  if (!st) return <div className={embedded ? "muted" : "page muted"}>Loading…</div>;
 
   const act = async (fn: () => Promise<unknown>) => { setMsg(null); try { await fn(); await load(); } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); } };
   const host = st.addresses[0] ?? "<this computer's address>";
@@ -48,10 +49,10 @@ export default function Workers() {
   });
 
   return (
-    <div className="page grid workers" style={{ gap: 12 }}>
-      <div className="page-head"><h1>Workers</h1>
+    <div className={`${embedded ? "" : "page "}grid workers`} style={{ gap: 12 }}>
+      <div className="page-head"><div>{embedded ? <h2 style={{ margin: 0 }}>Other computers that help</h2> : <h1>Workers</h1>}
         <p>Other computers on your network can help analyse long videos. Each one takes a few minutes of a recording at a
-          time, runs the mission's exact model on it and sends back what it found, so an hour of video is done sooner.</p></div>
+          time, runs the mission's exact model on it and sends back what it found, so an hour of video is done sooner.</p></div></div>
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
 
       <div className="card grid" style={{ gap: 10 }}>
