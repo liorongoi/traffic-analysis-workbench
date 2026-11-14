@@ -1,14 +1,14 @@
 """Staging machine only: make src/trafficwb/scene_prompts.json, the two text embeddings the indoor/outdoor sorter
-compares each image with. Run once when the prompts or the CLIP model change; the app itself never needs the text
+compares each image with: indoor, outdoor seen from inside (through a window or door), and outdoor. Run once when the prompts or the CLIP model change; the app itself never needs the text
 model.
 
     pip install tokenizers onnxruntime numpy
     python scripts/scene_prompts.py --text-model text_model.onnx --tokenizer tokenizer.json
 
 text_model.onnx and tokenizer.json come from https://huggingface.co/Xenova/clip-vit-base-patch32 at the commit
-fetch_models.py pins (onnx/text_model.onnx, the full-precision text encoder). The bias is kept from the existing
-file unless --bias is given; it was chosen on half of a 1,074-image SUN397 sample and checked on the other half
-(docs/decisions/indoor-outdoor.md).
+fetch_models.py pins (onnx/text_model.onnx, the full-precision text encoder). The offsets are kept from the existing
+file unless --bias is given (three numbers: indoor, window, outdoor); they were chosen on half of the photos in
+docs/decisions/indoor-outdoor.md and checked on the other half.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--text-model", required=True)
     ap.add_argument("--tokenizer", required=True)
-    ap.add_argument("--bias", type=float)
+    ap.add_argument("--bias", type=float, nargs=3)
     a = ap.parse_args(argv)
     import onnxruntime as ort
     from tokenizers import Tokenizer
@@ -44,10 +44,11 @@ def main(argv=None) -> int:
         m = e.mean(0)
         return [round(float(v), 6) for v in m / np.linalg.norm(m)]
 
-    cur["indoor"] = embed(cur["indoor_prompts"])
-    cur["outdoor"] = embed(cur["outdoor_prompts"])
+    for c in cur["classes"]:
+        c["embedding"] = embed(c["prompts"])
     if a.bias is not None:
-        cur["bias"] = a.bias
+        for c, b in zip(cur["classes"], a.bias):
+            c["bias"] = b
     OUT.write_text(json.dumps(cur), encoding="utf-8")
     print(f"ok {OUT}")
     return 0

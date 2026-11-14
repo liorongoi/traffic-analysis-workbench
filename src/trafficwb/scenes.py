@@ -1,10 +1,14 @@
 """Sort still images into indoor and outdoor (the indoor_outdoor mission mode).
 
-Each image is turned into a CLIP ViT-B/32 image embedding (512 numbers; the model pack clip-vit-b32-image, MIT) and
-kept in the mission's database. Its side is decided against two text embeddings, "a photo taken indoors" and "a
-photo taken outdoors" (scene_prompts.json), so no training is needed to start.
+Two groups, as the operator defines them: indoor is a camera inside a location (a house, a store, a restaurant, a
+mosque) that sees only the inside; outdoor is a camera outside a building, or a camera inside that sees the outside
+(through a window or a door). The second kind of outdoor is marked apart: "seen from inside" (label "window").
 
-The operator can move any image to the other side. Those decisions are append-only (scene_decision): the newest
+Each image is turned into a CLIP ViT-B/32 image embedding (512 numbers; the model pack clip-vit-b32-image, MIT) and
+kept in the mission's database. Its label is decided against three text embeddings (scene_prompts.json), so no
+training is needed to start.
+
+The operator can move any image to another label. Those decisions are append-only (scene_decision): the newest
 for an image wins, and "back to LanePulse's choice" is a decision too. A decision always beats the machine.
 
 Learning: the images people placed, in every sorting mission on this workstation, become a memory. An image nobody
@@ -30,8 +34,11 @@ from .store import DataRoot, Mission, utcnow
 MODE = "indoor_outdoor"
 PACK_NAME = "clip-vit-b32-image"
 TASK = "scene_embedding"
-LABELS = ("indoor", "outdoor")
-UNSURE_BELOW = 0.8        # chance of the chosen side under which an image is shown as "not sure"
+LABELS = ("indoor", "window", "outdoor")     # window: outdoor, seen from inside
+GROUP = {"indoor": "indoor", "window": "outdoor", "outdoor": "outdoor"}
+TITLE = {"indoor": "indoor", "window": "outdoor, seen from inside", "outdoor": "outdoor"}
+FOLDER = {"indoor": "indoor", "window": "outdoor/seen from inside", "outdoor": "outdoor"}
+UNSURE_BELOW = 0.8        # chance of the chosen label under which an image is shown as "not sure"
 _PROMPTS = Path(__file__).with_name("scene_prompts.json")
 _MEAN = np.array([0.48145466, 0.4578275, 0.40821073], np.float32)
 _STD = np.array([0.26862954, 0.26130258, 0.27577711], np.float32)
@@ -47,7 +54,7 @@ CREATE TABLE IF NOT EXISTS scene_result (       -- one row per image: its CLIP e
 CREATE TABLE IF NOT EXISTS scene_decision (     -- the operator's choices, append-only; newest per image wins
   id INTEGER PRIMARY KEY,
   source_version_id INTEGER NOT NULL,
-  label TEXT,                                   -- indoor | outdoor | NULL (back to LanePulse's choice)
+  label TEXT,                                   -- indoor | window | outdoor | NULL (back to LanePulse's choice)
   author TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -63,11 +70,21 @@ def prompts() -> dict:
     return json.loads(_PROMPTS.read_text(encoding="utf-8"))
 
 
-def base_direction() -> tuple[np.ndarray, float]:
-    """The prompts as a direction and offset: score > 0 means outdoor."""
+def base_scores(x: np.ndarray) -> np.ndarray:
+    """Scores of embeddings x (n x 512) for each label in LABELS order (n x 3); the highest wins."""
     p = prompts()
-    w = p["logit_scale"] * (np.asarray(p["outdoor"], np.float64) - np.asarray(p["indoor"], np.float64))
-    return w, float(p.get("bias", 0.0))
+    by = {c["label"]: c for c in p["classes"]}
+    c = np.stack([np.asarray(by[k]["embedding"], np.float64) for k in LABELS])
+    b = np.asarray([float(by[k].get("bias", 0.0)) for k in LABELS])
+    return p["logit_scale"] * (np.atleast_2d(x) @ c.T) + b
+
+
+def base_labels(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """LanePulse's own label index for each embedding, and how sure it is (softmax of the scores, 1/3 to 1)."""
+    z = base_scores(x)
+    e = np.exp(z - z.max(axis=1, keepdims=True))
+    pr = e / e.sum(axis=1, keepdims=True)
+    return pr.argmax(axis=1), pr.max(axis=1)
 
 
 def available(root: Path | None = None) -> dict:
@@ -120,15 +137,14 @@ class Embedder:
 # ---------- what LanePulse learned (one memory per workstation, shared by every sorting mission) ----------
 #
 # Learning is a memory of the images people placed: an image nobody checked whose nearest images (CLIP similarity at
-# least NEAR, the K nearest) include one a person placed takes the side those neighbours are on, closer ones counting
-# for more. The neighbours
-# also include images nobody checked, at LanePulse's own side, so a single move does not pull a whole crowd over.
-# Measured on 1,074 SUN397 photos, a person correcting LanePulse's mistakes in one half and the other half checked:
-# 98.3% -> 98.4% right in general (never worse), and when the person's own rule differs from the usual one
-# (aquariums, hangars, ice rinks and stables called outdoor), 94.6% -> 97.5% overall and 10% -> 71% on those places.
+# least NEAR, the K nearest) include one a person placed takes the label those neighbours vote for, closer ones
+# counting for more and LanePulse's own label for the image counting a little (SELF). The neighbours also include
+# images nobody checked, at LanePulse's own label, so a single move does not pull a whole crowd over. Measured in
+# docs/decisions/indoor-outdoor.md.
 
-NEAR = 0.75
+NEAR = 0.8
 K = 5
+SELF = 0.1
 MAX_UNCHECKED = 3000      # images nobody checked kept in the memory, in all
 
 
@@ -154,11 +170,11 @@ def _save_state(data_root: Path, state: dict) -> None:
 @dataclass
 class Memory:
     emb: np.ndarray          # n x 512
-    outdoor: np.ndarray      # n, bool
-    human: np.ndarray        # n, bool: placed by a person (otherwise LanePulse's own side, unchecked)
+    label: np.ndarray        # n, index into LABELS
+    human: np.ndarray        # n, bool: placed by a person (otherwise LanePulse's own label, unchecked)
 
     def vote(self, x: np.ndarray, base: np.ndarray, skip_self: bool = True) -> tuple[np.ndarray, np.ndarray]:
-        """Sides for embeddings x (base: LanePulse's own sides). Returns (outdoor, changed by the memory)."""
+        """Labels for embeddings x (base: LanePulse's own). Returns (labels, changed by the memory)."""
         out = base.copy()
         hit = np.zeros(len(x), bool)
         if not len(self.emb) or not self.human.any() or not len(x):
@@ -173,9 +189,10 @@ class Memory:
                 if not len(nb) or not self.human[nb].any():
                     continue
                 # Closer neighbours count for more.
-                v = float((np.where(self.outdoor[nb], 1.0, -1.0) * (sim[i, nb] - NEAR + 0.05)).sum())
-                if v:
-                    out[s + i] = v > 0
+                v = np.bincount(self.label[nb], weights=sim[i, nb] - NEAR + 0.05, minlength=len(LABELS))
+                v[base[s + i]] += SELF
+                if (v == v.max()).sum() == 1:
+                    out[s + i] = int(v.argmax())
         hit = out != base
         return out, hit
 
@@ -187,13 +204,13 @@ def load_memory(data_root: Path) -> tuple[Memory | None, dict | None]:
         return None, None
     try:
         z = np.load(_learner_dir(data_root) / v["file"])
-        return Memory(z["emb"].astype(np.float64), z["outdoor"], z["human"]), v
+        return Memory(z["emb"].astype(np.float64), z["label"], z["human"]), v
     except (OSError, KeyError, ValueError):
         return None, None
 
 
 def _everything(data_root: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-    """Embeddings of every sorting mission here: (embeddings, the person's side or -1, unused, missions with
+    """Embeddings of every sorting mission here: (embeddings, the person's label index or -1, unused, missions with
     decisions)."""
     dr = DataRoot(data_root)
     xs, ys, missions = [], [], 0
@@ -207,7 +224,7 @@ def _everything(data_root: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, in
                 "SELECT s.embedding, d.label FROM scene_result s LEFT JOIN scene_decision d ON d.id=(SELECT MAX(id) "
                 "FROM scene_decision WHERE source_version_id=s.source_version_id)"):
             xs.append(np.frombuffer(r[0], np.float16).astype(np.float64))
-            ys.append(-1 if r[1] is None else int(r[1] == "outdoor"))
+            ys.append(-1 if r[1] not in LABELS else LABELS.index(r[1]))
             found = found or r[1] is not None
         missions += found
         m.con.close()
@@ -220,13 +237,12 @@ def learn(data_root: Path, author: str) -> dict:
     """Make a new memory from every image people placed on this workstation; keep it only if it does not do worse."""
     x, y, _, n_missions = _everything(data_root)
     placed = y >= 0
-    n_out, n_in = int((y == 1).sum()), int((y == 0).sum())
+    per = {k: int((y == i).sum()) for i, k in enumerate(LABELS)}
     if placed.sum() < 2:
-        return {"kept": False, "decisions": int(placed.sum()), "indoor": n_in, "outdoor": n_out,
+        return {"kept": False, "decisions": int(placed.sum()), **per,
                 "reason": "Move or mark at least two images first; LanePulse learns from the images you placed."}
-    w, b = base_direction()
-    base = x @ w + b > 0
-    hx, hy = x[placed], y[placed] == 1
+    base = base_labels(x)[0] if len(x) else np.zeros(0, int)
+    hx, hy = x[placed], y[placed]
     rest = np.where(~placed)[0]
     rest = np.random.default_rng(0).permutation(rest)[:MAX_UNCHECKED]
     ux, uy = x[rest], base[rest]
@@ -247,12 +263,12 @@ def learn(data_root: Path, author: str) -> dict:
     version = max([v["version"] for v in st["versions"]], default=0) + 1
     kept = learned_ok >= prompt_ok
     entry = {"version": version, "file": f"memory-{version}.npz", "created_at": utcnow(), "author": author,
-             "decisions": int(placed.sum()), "indoor": n_in, "outdoor": n_out, "missions": n_missions,
+             "decisions": int(placed.sum()), **per, "missions": n_missions,
              "right_before": prompt_ok, "right_after": learned_ok, "kept": kept, "unchecked_changed": changed}
     d = _learner_dir(data_root)
     d.mkdir(parents=True, exist_ok=True)
     with open(d / (entry["file"] + ".tmp"), "wb") as fh:
-        np.savez_compressed(fh, emb=mem.emb.astype(np.float16), outdoor=mem.outdoor, human=mem.human)
+        np.savez_compressed(fh, emb=mem.emb.astype(np.float16), label=mem.label.astype(np.int8), human=mem.human)
     os.replace(d / (entry["file"] + ".tmp"), d / entry["file"])
     st["versions"].append(entry)
     if kept:
@@ -272,8 +288,8 @@ def reset_learning(data_root: Path) -> dict:
 def learner_summary(data_root: Path) -> dict:
     st = learner_state(data_root)
     v = next((x for x in st["versions"] if x["version"] == st.get("current")), None)
-    return {"in_use": None if v is None else {k: v[k] for k in ("version", "created_at", "decisions", "indoor", "outdoor",
-                                                                 "missions", "right_before", "right_after")},
+    return {"in_use": None if v is None else {k: v.get(k, 0) for k in ("version", "created_at", "decisions", *LABELS,
+                                                                        "missions", "right_before", "right_after")},
             "versions": len(st["versions"])}
 
 
@@ -283,12 +299,13 @@ def learner_summary(data_root: Path) -> dict:
 class SceneItem:
     version_id: int
     file: str
-    label: str            # the final side: the operator's when they chose, otherwise LanePulse's
-    machine: str          # LanePulse's side (with what it learned)
-    sure: float           # how sure the prompts are of their own side, 0.5 to 1
-    decided: str | None   # the operator's side, when they chose one
+    label: str            # the final label: the operator's when they chose, otherwise LanePulse's
+    group: str            # indoor | outdoor (window is outdoor, seen from inside)
+    machine: str          # LanePulse's label (with what it learned)
+    sure: float           # how sure the prompts are of their own label, 1/3 to 1
+    decided: str | None   # the operator's label, when they chose one
     decided_by: str | None
-    learned: bool         # LanePulse's side comes from images people placed, not from the prompts
+    learned: bool         # LanePulse's label comes from images people placed, not from the prompts
 
 
 class SceneService:
@@ -298,7 +315,6 @@ class SceneService:
         ensure_schema(self.con)
 
     def items(self) -> list[SceneItem]:
-        w, b = base_direction()
         rows = self.con.execute(
             "SELECT s.source_version_id, s.embedding, f.rel_path, d.label, d.author FROM scene_result s "
             "JOIN source_version v ON v.id=s.source_version_id JOIN source_file f ON f.id=v.source_file_id "
@@ -307,22 +323,20 @@ class SceneService:
         if not rows:
             return []
         x = np.stack([np.frombuffer(r[1], np.float16).astype(np.float64) for r in rows])
-        z = x @ w + b
-        base = z > 0
+        base, sure = base_labels(x)
         mem, _ = load_memory(self.m.root.path)
-        side, learned = mem.vote(x, base) if mem is not None else (base, np.zeros(len(x), bool))
-        p = 1 / (1 + np.exp(-np.clip(z, -40, 40)))
+        lab, learned = mem.vote(x, base) if mem is not None else (base, np.zeros(len(x), bool))
         out = []
-        for r, s, lr, pi in zip(rows, side, learned, p):
-            machine = "outdoor" if s else "indoor"
-            out.append(SceneItem(r[0], r[2], r[3] or machine, machine, float(max(pi, 1 - pi)), r[3],
+        for r, li, lr, pi in zip(rows, lab, learned, sure):
+            machine = LABELS[int(li)]
+            label = r[3] if r[3] in LABELS else machine
+            out.append(SceneItem(r[0], r[2], label, GROUP[label], machine, float(pi), r[3],
                                  r[4] if r[3] else None, bool(lr)))
         return out
 
-
     def decide(self, version_ids: list[int], label: str | None, author: str) -> int:
         if label is not None and label not in LABELS:
-            raise ValueError("Choose indoor or outdoor.")
+            raise ValueError("Choose indoor, outdoor, or outdoor seen from inside (window).")
         known = {r[0] for r in self.con.execute("SELECT source_version_id FROM scene_result")}
         bad = [v for v in version_ids if v not in known]
         if bad:
@@ -336,32 +350,34 @@ class SceneService:
 
     def counts(self, items: list[SceneItem] | None = None) -> dict:
         items = self.items() if items is None else items
-        return {"indoor": sum(i.label == "indoor" for i in items), "outdoor": sum(i.label == "outdoor" for i in items),
+        return {"indoor": sum(i.group == "indoor" for i in items), "outdoor": sum(i.group == "outdoor" for i in items),
+                "window": sum(i.label == "window" for i in items),
                 "moved": sum(i.decided is not None and i.decided != i.machine for i in items),
                 "confirmed": sum(i.decided is not None and i.decided == i.machine for i in items),
                 "unsure": sum(i.decided is None and i.sure < UNSURE_BELOW for i in items)}
 
     def copy_out(self, dest: Path, progress: Callable[[int, int], None] | None = None) -> dict:
-        """Copy every sorted image into dest/indoor and dest/outdoor (keeping subfolders), with a list of them.
-        The source files are only read."""
+        """Copy every sorted image into dest/indoor and dest/outdoor, the outdoor ones seen from inside in
+        dest/outdoor/seen from inside (keeping subfolders), with a list of them. The source files are only read."""
         import csv
         from .views import ViewService
         items = self.items()
         vs = ViewService(self.m)
         dest = Path(dest)
-        for side in LABELS:
-            (dest / side).mkdir(parents=True, exist_ok=True)
+        for lab in LABELS:
+            (dest / FOLDER[lab]).mkdir(parents=True, exist_ok=True)
         copied = missing = 0
         listing = dest / "sorting.csv"
         with open(listing.with_suffix(".tmp"), "w", newline="", encoding="utf-8-sig") as fh:
             wr = csv.writer(fh)
-            wr.writerow(["file", "group", "decided_by", "lanepulse_choice", "lanepulse_sure_pct"])
+            wr.writerow(["file", "group", "seen_from_inside", "decided_by", "lanepulse_choice", "lanepulse_sure_pct"])
             for n, it in enumerate(items, 1):
                 src = vs._path(it.version_id)
-                target = dest / it.label / Path(it.file)
-                other = dest / ("outdoor" if it.label == "indoor" else "indoor") / Path(it.file)
-                if other.is_file():
-                    other.unlink()      # moved since the last copy
+                target = dest / FOLDER[it.label] / Path(it.file)
+                for lab in LABELS:      # moved since the last copy
+                    other = dest / FOLDER[lab] / Path(it.file)
+                    if lab != it.label and other.is_file():
+                        other.unlink()
                 if src.is_file():
                     target.parent.mkdir(parents=True, exist_ok=True)
                     if not (target.is_file() and target.stat().st_size == src.stat().st_size):
@@ -369,13 +385,14 @@ class SceneService:
                     copied += 1
                 else:
                     missing += 1
-                wr.writerow([it.file, it.label, it.decided_by or "LanePulse", it.machine, round(100 * it.sure)])
+                wr.writerow([it.file, it.group, "yes" if it.label == "window" else "", it.decided_by or "LanePulse",
+                             TITLE[it.machine], round(100 * it.sure)])
                 if progress:
                     progress(n, len(items))
         os.replace(listing.with_suffix(".tmp"), listing)
         c = self.counts(items)
         return {"folder": str(dest), "copied": copied, "missing": missing, "indoor": c["indoor"], "outdoor": c["outdoor"],
-                "list": str(listing)}
+                "window": c["window"], "list": str(listing)}
 
 
 class SceneProcessor:

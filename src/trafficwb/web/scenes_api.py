@@ -15,7 +15,7 @@ from ..store import Mission
 
 class DecideBody(BaseModel):
     version_ids: list[int]
-    label: str | None = None        # indoor | outdoor | None: back to LanePulse's choice
+    label: str | None = None        # indoor | window (outdoor, seen from inside) | outdoor | None: back to LanePulse's choice
 
 
 def sorted_folder(m: Mission) -> Path:

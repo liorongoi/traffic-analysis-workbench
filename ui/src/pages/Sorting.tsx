@@ -2,20 +2,31 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError, fmtDuration, post } from "../api";
 import "../sorting.css";
 
-// Sorting a bundle of still images into indoor and outdoor. LanePulse places every image; the operator moves any
-// image it got wrong (one at a time, or several picked together), can take a move back, and can teach LanePulse from
-// those moves so the rest of this bundle, and the next ones, are sorted better. "Copy into folders" writes the two
-// groups to the exports folder; the source images are never changed.
+// Sorting a bundle of still images into indoor and outdoor. Indoor: the camera is inside a place and shows the inside.
+// Outdoor: the camera is outside, or it is inside and the outside can be seen (through a window or glass front); that
+// second kind stays in the outdoor group but is marked "seen from inside". LanePulse places every image; the operator
+// moves any image it got wrong (one at a time, or several picked together), can take a move back, and can teach
+// LanePulse from those moves so the rest of this bundle, and the next ones, are sorted better. "Copy into folders"
+// writes the groups to the exports folder; the source images are never changed.
 
-type Item = { version_id: number; file: string; label: Side; machine: Side; sure: number; decided: Side | null; decided_by: string | null; learned: boolean };
+type Label = "indoor" | "window" | "outdoor";   // window: outdoor, seen from inside
 type Side = "indoor" | "outdoor";
-type Counts = { indoor: number; outdoor: number; moved: number; confirmed: number; unsure: number };
-type Learner = { in_use: null | { version: number; created_at: string; decisions: number; indoor: number; outdoor: number; missions: number; right_before: number; right_after: number }; versions: number };
+type Item = { version_id: number; file: string; label: Label; group: Side; machine: Label; sure: number; decided: Label | null; decided_by: string | null; learned: boolean };
+type Counts = { indoor: number; outdoor: number; window: number; moved: number; confirmed: number; unsure: number };
+type Learner = { in_use: null | { version: number; created_at: string; decisions: number; indoor: number; window: number; outdoor: number; missions: number; right_before: number; right_after: number }; versions: number };
 type Data = { items: Item[]; counts: Counts; learner: Learner; folder: string };
 
 const SIDES: Side[] = ["indoor", "outdoor"];
+const LABELS: Label[] = ["indoor", "outdoor", "window"];
 const TITLE: Record<Side, string> = { indoor: "Indoor", outdoor: "Outdoor" };
-const other = (s: Side): Side => (s === "indoor" ? "outdoor" : "indoor");
+const NAME: Record<Label, string> = { indoor: "indoor", outdoor: "outdoor, taken outside", window: "outdoor, seen from inside" };
+// The two moves offered on a card, from where it is now.
+const MOVES: Record<Label, [Label, string][]> = {
+  indoor: [["outdoor", "Outdoor →"], ["window", "Seen from inside →"]],
+  outdoor: [["indoor", "← Indoor"], ["window", "Mark seen from inside"]],
+  window: [["indoor", "← Indoor"], ["outdoor", "Mark taken outside"]],
+};
+const PICK_MOVE: Record<Label, string> = { indoor: "Move to indoor", outdoor: "Move to outdoor, taken outside", window: "Move to outdoor, seen from inside" };
 const PAGE = 48;
 const UNSURE = 0.8;
 
@@ -23,6 +34,7 @@ export default function SortingTab({ m, reload }: { m: any; reload: () => void }
   const [data, setData] = useState<Data | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [order, setOrder] = useState<"unsure" | "name">("unsure");
+  const [outShow, setOutShow] = useState<"all" | "outdoor" | "window">("all");
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [shown, setShown] = useState<Record<Side, number>>({ indoor: PAGE, outdoor: PAGE });
   const [note, setNote] = useState<{ kind: "ok" | "warn"; text: string; undo?: () => void } | null>(null);
@@ -38,12 +50,12 @@ export default function SortingTab({ m, reload }: { m: any; reload: () => void }
 
   const groups = useMemo(() => {
     const g: Record<Side, Item[]> = { indoor: [], outdoor: [] };
-    for (const it of data?.items ?? []) g[it.label].push(it);
+    for (const it of data?.items ?? []) if (it.group === "indoor" || outShow === "all" || it.label === outShow) g[it.group].push(it);
     if (order === "unsure") for (const s of SIDES) g[s].sort((a, b) => (a.decided ? 1 : 0) - (b.decided ? 1 : 0) || (b.learned ? 1 : 0) - (a.learned ? 1 : 0) || a.sure - b.sure);
     return g;
-  }, [data, order]);
+  }, [data, order, outShow]);
 
-  const decide = async (ids: number[], label: Side | null, quiet = false) => {
+  const decide = async (ids: number[], label: Label | null, quiet = false) => {
     if (!ids.length) return;
     setBusy("move");
     const before = new Map((data?.items ?? []).filter((i) => ids.includes(i.version_id)).map((i) => [i.version_id, i.decided]));
@@ -53,7 +65,7 @@ export default function SortingTab({ m, reload }: { m: any; reload: () => void }
       await load();
       if (!quiet) {
         const what = ids.length === 1 ? (data?.items.find((i) => i.version_id === ids[0])?.file ?? "1 image") : `${ids.length} images`;
-        setNote({ kind: "ok", text: label ? `Moved ${what} to ${TITLE[label].toLowerCase()}.` : `${what}: back to LanePulse's choice.`,
+        setNote({ kind: "ok", text: label ? `Moved ${what} to ${NAME[label]}.` : `${what}: back to LanePulse's choice.`,
           undo: async () => {
             // Put each image back as it was: grouped by its earlier decision.
             const by = new Map<string, number[]>();
@@ -76,7 +88,7 @@ export default function SortingTab({ m, reload }: { m: any; reload: () => void }
         const now: Data = await api(`/missions/${m.id}/scenes`);
         setData(now);
         const changed = now.items.filter((i) => !i.decided && before.find((b) => b.version_id === i.version_id)?.machine !== i.machine).length;
-        setNote({ kind: "ok", text: `Learned from ${r.decisions} image${r.decisions === 1 ? "" : "s"} you placed. ${changed ? `${changed} image${changed === 1 ? "" : "s"} you had not checked looked like them and moved side; they are marked "like images you placed".` : "No image you had not checked looked enough like them to change side."}` });
+        setNote({ kind: "ok", text: `Learned from ${r.decisions} image${r.decisions === 1 ? "" : "s"} you placed. ${changed ? `${changed} image${changed === 1 ? "" : "s"} you had not checked looked like them and moved; they are marked "like images you placed".` : "No image you had not checked looked enough like them to be moved."}` });
       } else {
         setNote({ kind: "warn", text: r.reason });
       }
@@ -95,7 +107,7 @@ export default function SortingTab({ m, reload }: { m: any; reload: () => void }
     setBusy("copy"); setNote(null);
     try {
       const r = await post(`/missions/${m.id}/scenes/copy`);
-      setNote({ kind: r.missing ? "warn" : "ok", text: `Copied ${r.copied} images: ${r.indoor} into indoor and ${r.outdoor} into outdoor, in ${r.folder}, with a list of them (sorting.csv).${r.missing ? ` ${r.missing} are no longer in the source folder.` : ""}` });
+      setNote({ kind: r.missing ? "warn" : "ok", text: `Copied ${r.copied} images: ${r.indoor} into indoor and ${r.outdoor} into outdoor${r.window ? ` (${r.window} of them seen from inside, in outdoor/seen from inside)` : ""}, in ${r.folder}, with a list of them (sorting.csv).${r.missing ? ` ${r.missing} are no longer in the source folder.` : ""}` });
     } catch (e) { setNote({ kind: "warn", text: (e as ApiError).message }); }
     finally { setBusy(null); }
   };
@@ -134,6 +146,7 @@ export default function SortingTab({ m, reload }: { m: any; reload: () => void }
           <div className="sort-figs">
             <div><b>{c.indoor}</b><span>Indoor</span></div>
             <div><b>{c.outdoor}</b><span>Outdoor</span></div>
+            <div className="win"><b>{c.window}</b><span>of them seen from inside</span></div>
             <div><b>{c.moved}</b><span>Moved by you</span></div>
             <div className={c.unsure ? "warn" : ""}><b>{c.unsure}</b><span>LanePulse not sure</span></div>
           </div>
@@ -155,8 +168,8 @@ export default function SortingTab({ m, reload }: { m: any; reload: () => void }
       {picked.size > 0 && (
         <div className="sort-picked" role="toolbar" aria-label="Picked images">
           <b>{picked.size} picked</b>
-          {SIDES.filter((s) => pickedItems.some((i) => i.label !== s)).map((s) =>
-            <button key={s} className="primary" disabled={!!busy} onClick={() => decide([...picked].filter((id) => pickedItems.find((i) => i.version_id === id)?.label !== s), s)}>Move to {TITLE[s].toLowerCase()}</button>)}
+          {LABELS.filter((s) => pickedItems.some((i) => i.label !== s)).map((s) =>
+            <button key={s} className="primary" disabled={!!busy} onClick={() => decide(pickedItems.filter((i) => i.label !== s).map((i) => i.version_id), s)}>{PICK_MOVE[s]}</button>)}
           {pickedItems.some((i) => !i.decided) && pickedSides.size === 1 &&
             <button disabled={!!busy} onClick={() => decide(pickedItems.filter((i) => !i.decided).map((i) => i.version_id), [...pickedSides][0], true)}>Mark as right</button>}
           {pickedItems.some((i) => i.decided) && <button disabled={!!busy} onClick={() => decide(pickedItems.filter((i) => i.decided).map((i) => i.version_id), null)}>Back to LanePulse's choice</button>}
@@ -170,16 +183,28 @@ export default function SortingTab({ m, reload }: { m: any; reload: () => void }
             <section key={s} className="card sort-col" aria-label={TITLE[s]}>
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <h2>{TITLE[s]} <span className="muted">{groups[s].length}</span></h2>
+                {s === "outdoor" && c.window > 0 && (
+                  <div className="seg compact" role="group" aria-label="Show">
+                    <button className={outShow === "all" ? "on" : ""} onClick={() => setOutShow("all")}>All</button>
+                    <button className={outShow === "outdoor" ? "on" : ""} onClick={() => setOutShow("outdoor")}>Taken outside</button>
+                    <button className={outShow === "window" ? "on" : ""} onClick={() => setOutShow("window")}>Seen from inside</button>
+                  </div>
+                )}
                 {groups[s].some((i) => !i.decided) &&
                   <button className="linkish" disabled={!!busy} title="Tell LanePulse every image shown here is in the right place; it learns from these too"
-                    onClick={() => decide(groups[s].slice(0, shown[s]).filter((i) => !i.decided).map((i) => i.version_id), s, true)}>All shown are right</button>}
+                    onClick={async () => {
+                      // Each image is confirmed where it is: indoor, outdoor, or outdoor seen from inside.
+                      const todo = groups[s].slice(0, shown[s]).filter((i) => !i.decided);
+                      for (const l of LABELS) { const ids = todo.filter((i) => i.label === l).map((i) => i.version_id); if (ids.length) await decide(ids, l, true); }
+                    }}>All shown are right</button>}
               </div>
               <div className="sort-grid">
                 {groups[s].slice(0, shown[s]).map((it) => (
-                  <figure key={it.version_id} className={`sort-card${picked.has(it.version_id) ? " on" : ""}${it.decided ? " yours" : ""}${!it.decided && it.learned ? " learned" : !it.decided && it.sure < UNSURE ? " unsure" : ""}`}>
+                  <figure key={it.version_id} className={`sort-card${picked.has(it.version_id) ? " on" : ""}${it.decided ? " yours" : ""}${it.label === "window" ? " window" : ""}${!it.decided && it.learned ? " learned" : !it.decided && it.sure < UNSURE ? " unsure" : ""}`}>
                     <button className="sort-pick" aria-pressed={picked.has(it.version_id)} onClick={() => toggle(it.version_id)} title="Pick, to move several together">
                       <img loading="lazy" src={`/api/missions/${m.id}/thumbs/${it.version_id}?w=320`} alt={it.file} />
                       <span className="tick" aria-hidden="true">{picked.has(it.version_id) ? "✓" : ""}</span>
+                      {it.label === "window" && <span className="win-badge">Seen from inside</span>}
                     </button>
                     <figcaption>
                       <span className="name mono bidi" title={it.file}>{it.file.split(/[\\/]/).pop()}</span>
@@ -187,7 +212,8 @@ export default function SortingTab({ m, reload }: { m: any; reload: () => void }
                         ? (it.decided !== it.machine ? <>Moved by you <button className="linkish" onClick={() => decide([it.version_id], null)}>undo</button></> : "You marked it right")
                         : it.learned ? "LanePulse, like images you placed" : `LanePulse, ${Math.round(it.sure * 100)}% sure`}</span>
                       <span className="acts">
-                        <button disabled={!!busy} onClick={() => decide([it.version_id], other(s))}>Move to {other(s)} {s === "indoor" ? "→" : "←"}</button>
+                        <span className="moves">{MOVES[it.label].map(([to, text]) =>
+                          <button key={to} disabled={!!busy} title={`Move to ${NAME[to]}`} onClick={() => decide([it.version_id], to)}>{text}</button>)}</span>
                         <a href={`/api/missions/${m.id}/images/${it.version_id}`} target="_blank" rel="noreferrer" title="Open the full image in a new tab" aria-label={`Open ${it.file} full size`}>{"\u2197"}</a>
                       </span>
                     </figcaption>
@@ -206,11 +232,11 @@ export default function SortingTab({ m, reload }: { m: any; reload: () => void }
           <h2>What LanePulse has learned</h2>
           {data.learner.in_use ? (
             <>
-              <p>LanePulse sorts with what it learned from {data.learner.in_use.decisions} images people placed ({data.learner.in_use.indoor} indoor, {data.learner.in_use.outdoor} outdoor) in {data.learner.in_use.missions} sorting mission{data.learner.in_use.missions === 1 ? "" : "s"} on this computer. Images that look like those follow their side.</p>
+              <p>LanePulse sorts with what it learned from {data.learner.in_use.decisions} images people placed ({data.learner.in_use.indoor} indoor, {data.learner.in_use.outdoor} outdoor taken outside, {data.learner.in_use.window} outdoor seen from inside) in {data.learner.in_use.missions} sorting mission{data.learner.in_use.missions === 1 ? "" : "s"} on this computer. Images that look like those follow them.</p>
               <button disabled={!!busy} onClick={forget}>Go back to sorting without what it learned</button>
             </>
           ) : (
-            <p className="muted">Nothing learned yet: LanePulse sorts by comparing each image with the words "indoors" and "outdoors". Move the images it got wrong, then press Learn: images that look like the ones you placed then follow your choice, in this mission and in every later sorting mission on this computer. It is used only if it gets your images right at least as often as before.</p>
+            <p className="muted">Nothing learned yet: LanePulse sorts by comparing each image with descriptions of a room, of a room with the outside showing through windows, and of an outdoor scene. Move the images it got wrong, then press Learn: images that look like the ones you placed then follow your choice, in this mission and in every later sorting mission on this computer. It is used only if it gets your images right at least as often as before.</p>
           )}
           <p className="muted" style={{ marginBottom: 0 }}>Copies go to <span className="mono bidi">{data.folder}</span>. The images in the source folder are never changed.</p>
         </div>

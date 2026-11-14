@@ -221,13 +221,13 @@ def main(argv=None) -> int:
     step("vehicle detector")
     _, info = make_session(find("yolox-s").weights)
     step("indoor/outdoor sorter")
-    from trafficwb.scenes import Embedder, base_direction
+    from trafficwb.scenes import LABELS, Embedder, base_labels
     import numpy as np
-    w, b = base_direction()
     sky = np.zeros((240, 320, 3), np.uint8)
     sky[:150] = (235, 180, 120)                    # BGR: blue sky over green grass
     sky[150:] = (60, 150, 70)
-    assert float(Embedder().embed([sky])[0] @ w + b) > 0, "the indoor/outdoor sorter did not call sky and grass outdoor"
+    got = LABELS[int(base_labels(Embedder().embed([sky]))[0][0])]
+    assert got == "outdoor", f"the indoor/outdoor sorter called sky and grass {got}"
     step("SAM 3.1")
     sam = sam_check()
     from trafficwb.store import DataRoot as _DR

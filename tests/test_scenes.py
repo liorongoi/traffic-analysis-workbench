@@ -26,8 +26,8 @@ class FakeEmbedder:
         name, version, sha256 = "fake", "1", "0" * 64
 
     def __init__(self):
-        p = scenes.prompts()
-        self.i, self.o = np.asarray(p["indoor"]), np.asarray(p["outdoor"])
+        by = {c["label"]: np.asarray(c["embedding"]) for c in scenes.prompts()["classes"]}
+        self.i, self.w, self.o = by["indoor"], by["window"], by["outdoor"]
         rng = np.random.default_rng(3)
         self.tricky = rng.normal(size=512)
         self.tricky /= np.linalg.norm(self.tricky)
@@ -39,8 +39,10 @@ class FakeEmbedder:
             noise = np.random.default_rng(int(m * 10)).normal(scale=0.02, size=512)
             if 110 < m < 150:          # tricky: looks a little indoor to the prompts, but the operator says outdoor
                 v = 0.75 * self.i + 0.25 * self.o + 0.5 * self.tricky + noise
+            elif 160 <= m < 190:       # a room with the street in its window
+                v = self.w + noise
             else:
-                v = (self.o if m >= 150 else self.i) + noise
+                v = (self.o if m >= 190 else self.i) + noise
             out.append(v / np.linalg.norm(v))
         return np.stack(out)
 
@@ -56,11 +58,12 @@ def models_dir(tmp_path, monkeypatch):
     return d
 
 
-def photos(src, n_in=4, n_out=4, n_tricky=3):
+def photos(src, n_in=4, n_out=4, n_tricky=3, n_window=0):
     src.mkdir()
     names = []
-    for k in range(n_in + n_out + n_tricky):
-        kind, val = ("in", 40 + k) if k < n_in else ("out", 200 + k) if k < n_in + n_out else ("tricky", 125 + k)
+    for k in range(n_in + n_out + n_tricky + n_window):
+        kind, val = (("in", 40 + k) if k < n_in else ("out", 200 + k) if k < n_in + n_out else
+                     ("tricky", 125 + k) if k < n_in + n_out + n_tricky else ("window", 160 + k))
         p = src / f"holiday {kind} {k}.jpg"           # no capture time in the name: sorting does not need one
         cv2.imwrite(str(p), np.full((90, 160, 3), val, np.uint8))
         os.utime(p, (OLD, OLD))
@@ -109,22 +112,26 @@ def test_sort_correct_learn_and_copy(tmp_path, models_dir):
     c = app_client(tmp_path)
     src, out = tmp_path / "src", tmp_path / "out"
     out.mkdir()
-    photos(src)
+    photos(src, n_window=2)
     mid = make_mission(c, src, out)
 
     r = c.get(f"/api/missions/{mid}/scenes").json()
     items = {i["file"]: i for i in r["items"]}
-    assert len(items) == 11                                  # names without a capture time are sorted too
+    assert len(items) == 13                                  # names without a capture time are sorted too
+    # Outdoor seen from inside: in the outdoor group, marked apart.
+    win = [i for f, i in items.items() if "window" in f]
+    assert all(i["label"] == "window" and i["group"] == "outdoor" for i in win), win
     assert all(items[f"holiday in {k}.jpg"]["label"] == "indoor" for k in range(4))
     assert all(items[f"holiday out {k}.jpg"]["label"] == "outdoor" for k in range(4, 8))
     tricky = [i for f, i in items.items() if "tricky" in f]
     assert all(i["machine"] == "indoor" for i in tricky)     # LanePulse gets these wrong
-    assert r["counts"] == {"indoor": 7, "outdoor": 4, "moved": 0, "confirmed": 0, "unsure": r["counts"]["unsure"]}
+    assert r["counts"] == {"indoor": 7, "outdoor": 6, "window": 2, "moved": 0, "confirmed": 0,
+                           "unsure": r["counts"]["unsure"]}
 
     # The operator moves two of the three tricky ones; the decision wins over LanePulse's choice.
     moved = [tricky[0]["version_id"], tricky[1]["version_id"]]
     d = c.post(f"/api/missions/{mid}/scenes/decide", json={"version_ids": moved, "label": "outdoor"}, headers=H1).json()
-    assert d["counts"]["outdoor"] == 6 and d["counts"]["moved"] == 2
+    assert d["counts"]["outdoor"] == 8 and d["counts"]["moved"] == 2
     # ... and can take a decision back.
     c.post(f"/api/missions/{mid}/scenes/decide", json={"version_ids": [moved[1]], "label": None}, headers=H1)
     after = {i["version_id"]: i for i in c.get(f"/api/missions/{mid}/scenes").json()["items"]}
@@ -165,8 +172,15 @@ def test_sort_correct_learn_and_copy(tmp_path, models_dir):
     before = {p.name: p.stat().st_mtime for p in src.iterdir()}
     cp = c.post(f"/api/missions/{mid}/scenes/copy", headers=H1).json()
     dest = out / "Bundle - indoor and outdoor"
-    assert cp["copied"] == 11 and cp["folder"] == str(dest)
-    assert len(list((dest / "indoor").iterdir())) == cp["indoor"] and len(list((dest / "outdoor").iterdir())) == cp["outdoor"]
+    assert cp["copied"] == 13 and cp["folder"] == str(dest)
+    files = lambda d: [p for p in d.iterdir() if p.is_file()]  # noqa: E731
+    assert len(files(dest / "indoor")) == cp["indoor"]
+    assert len(files(dest / "outdoor")) + len(files(dest / "outdoor" / "seen from inside")) == cp["outdoor"]
+    assert len(files(dest / "outdoor" / "seen from inside")) == cp["window"] == 2
+    # A seen-from-inside image moved to plain outdoor leaves its subfolder at the next copy.
+    c.post(f"/api/missions/{mid}/scenes/decide", json={"version_ids": [win[0]["version_id"]], "label": "outdoor"}, headers=H1)
+    c.post(f"/api/missions/{mid}/scenes/copy", headers=H1)
+    assert (dest / "outdoor" / win[0]["file"]).is_file() and not (dest / "outdoor" / "seen from inside" / win[0]["file"]).exists()
     assert (dest / "outdoor" / f"holiday tricky {tricky[0]['file'].split()[-1]}").is_file()
     assert "decided_by" in (dest / "sorting.csv").read_text(encoding="utf-8-sig").splitlines()[0]
     # A later move takes the copy out of the other folder.
