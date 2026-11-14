@@ -299,7 +299,6 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
           <li key={h.id}>{h.created_at}: {h.action === "promote" ? "promoted" : "rolled back from"} {h.name} {h.version} by {h.author}{h.note ? ` (${h.note})` : ""}</li>)}</ul>}
       </div>
 
-      <SizesCard />
       <div className="card">
         <h2 style={{ marginTop: 0 }}>What can learn</h2>
         <table className="t"><tbody>{s.adapters.map((a: any) => <tr key={a.algorithm}><td>{a.algorithm}</td><td>{a.adapter}</td><td>{a.status.replace("_", " ")}</td></tr>)}</tbody></table>
@@ -412,42 +411,6 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
               <tbody>{r.history.map((h: any) => <tr key={h.epoch}><td>{h.epoch}</td><td>{h.train_loss}</td><td>{h.val_loss ?? "–"}</td></tr>)}</tbody></table>
           </details></div>}
       </div>}
-    </div>
-  );
-}
-
-/** Which size of each fast detector runs here: chosen from this computer's hardware, or by the operator. */
-function SizesCard() {
-  const [h, setH] = useState<any>(null);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api("/hardware").then(setH).catch((e) => setErr(String(e?.message ?? e))); }, []);
-  const choose = (family: string, size: string) =>
-    api("/hardware/sizes", { method: "PUT", body: { family, size: size || null } }).then((r) => { setH(r); setErr(null); })
-      .catch((e) => setErr(e instanceof ApiError ? e.message : String(e)));
-  if (!h) return err ? <div className="card"><div className="msg err">{err}</div></div> : null;
-  const hw = h.hardware;
-  const gpus = (hw.nvidia ?? []).map((g: any) => `${g.name} (${g.memory_gb} GB)`).join(", ");
-  return (
-    <div className="card">
-      <h2 style={{ marginTop: 0 }}>Detector sizes on this computer</h2>
-      <p style={{ marginTop: 0 }}>This computer: {hw.cpu_threads} processor threads, {hw.memory_gb ?? "?"} GB memory
-        {gpus ? `, ${gpus}` : hw.apple_silicon ? ", Apple GPU" : ", no NVIDIA GPU"}. Detection runs on <b>{h.run_on}</b>;
-        training on <b>{h.train_on}</b>. Larger sizes find more but are slower.</p>
-      <table className="t">
-        <thead><tr><th>Detector</th><th>Size for detection</th><th>Recommended for training</th><th>Installed</th></tr></thead>
-        <tbody>{Object.entries(h.families).map(([f, d]: [string, any]) => (
-          <tr key={f}><td>{d.title}</td>
-            <td>{d.installed.length === 0 ? <span className="muted">not installed</span> :
-              <select value={d.chosen && d.installed.includes(d.chosen) ? d.chosen : ""} onChange={(ev) => choose(f, ev.target.value)}>
-                <option value="">Automatic ({d.auto} for this computer)</option>
-                {d.installed.map((sz: string) => <option key={sz} value={sz}>{sz}</option>)}
-              </select>}</td>
-            <td>{d.train_auto ?? <span className="muted">–</span>}</td>
-            <td className="muted">{d.installed.join(", ") || "–"}</td></tr>))}</tbody>
-      </table>
-      <p className="muted" style={{ marginBottom: 0 }}>YOLOX runs in missions with the standard detector, and RF-DETR in missions that choose
-        it, unless a model is promoted. A promoted or saved model always runs as it is.</p>
-      {err && <div className="msg err">{err}</div>}
     </div>
   );
 }

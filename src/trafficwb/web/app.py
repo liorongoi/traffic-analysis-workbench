@@ -2075,7 +2075,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     def _worker(code: str | None) -> int:
         if not jobs.hub.enabled:
             raise ApiError(403, "workers_off", "This server does not take help from other computers now. Turn it on "
-                                               "on the Workers screen.")
+                                               "in Settings, Other computers.")
         cid = Pairing(data_root).check(code)
         if cid is None:
             raise ApiError(401, "bad_code", "That pairing code is not valid (or was revoked). Make a new one on the "

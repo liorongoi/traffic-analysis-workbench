@@ -134,7 +134,7 @@ export default function QuickStart() {
           {g && !reading && files > 0 && g.readable < files && (
             <div className="msg warn">
               {files - g.readable} of {files} file names have no capture time LanePulse can read{g.unreadable[0] ? <>, for example <span className="mono bidi">{g.unreadable[0].file}</span></> : null}. Those files would be skipped.{" "}
-              <a href="#/formats" target="_blank" rel="noreferrer">Show the app how this camera names its files</a> (opens in a new tab), then choose the folder again.
+              <a href="#/settings/formats" target="_blank" rel="noreferrer">Show the app how this camera names its files</a> (opens in a new tab), then choose the folder again.
             </div>
           )}
         </div>

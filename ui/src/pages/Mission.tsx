@@ -42,7 +42,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   const isVideo = m.config.input_type === "video";
   const tabs = [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
     ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []),
-    ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"]]), ["learning", "Learning"]];
+    ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"]]), ["learning", "Learning"], ["settings", "Settings"]];
   return (
     <div className="page">
       <div className="page-head">
@@ -65,6 +65,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
       {tab === "results" && !isVideo && <Results missionId={missionId} />}
       {tab === "night" && !isVideo && <NightReviewTab missionId={missionId} />}
       {tab === "views" && !isVideo && <Views missionId={missionId} />}
+      {tab === "settings" && <MissionSettings m={m} reload={load} />}
       {tab === "learning" && <LearningTab missionId={missionId} job={m.job} reload={load} />}
       {tab === "plates" && m.config.mode === "plate_recognition" && <PlatesTab missionId={missionId} />}
       {tab === "events" && isVideo && <EventsTab missionId={missionId} extra={extra ?? null} />}
@@ -101,7 +102,7 @@ function JobCard({ job, mid, reload, unit }: { job: Job | null; mid: string; rel
             <div className={job.result.scan.queued ? "muted" : "msg err"}>
               <b>Scan: {job.result.scan.queued} file(s) queued.</b>
               <ul style={{ margin: "4px 0 0" }}>{job.result.scan.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
-              {!!job.result.scan.no_capture_time && <a className="btn" href="#/formats">Show the app how your files are named</a>}
+              {!!job.result.scan.no_capture_time && <a className="btn" href="#/settings/formats">Show the app how your files are named</a>}
             </div>
           )}
         </>
@@ -153,8 +154,6 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
             </>
           ) : <p className="muted">One-time mission: it processes the files present at its first scan.</p>}
         </div>
-        <DetectorCard m={m} reload={reload} />
-        <SourcesCard m={m} reload={reload} />
       </div>
       <div className="grid cols-2">
         <div className="card">
@@ -174,6 +173,20 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
             ))}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** What is chosen once for a mission and seldom changed: where its files come from, which detector runs, and
+ *  deleting it. Kept off the Overview so that page shows only the work. */
+function MissionSettings({ m, reload }: { m: any; reload: () => void }) {
+  return (
+    <div className="grid" style={{ gap: 14 }}>
+      <p className="muted" style={{ margin: 0 }}>Set once for this mission. Setup for the whole workstation is in <a href="#/settings">Settings</a>.</p>
+      <div className="grid cols-2" style={{ alignItems: "start" }}>
+        <DetectorCard m={m} reload={reload} />
+        <SourcesCard m={m} reload={reload} />
       </div>
       <DeleteMission m={m} />
     </div>
