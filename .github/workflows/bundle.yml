@@ -208,6 +208,16 @@ jobs:
           pattern: LanePulse-Setup-*
           path: setup
           merge-multiple: true
+      # The runner's C: has little room left once two versions with every detector size are installed; tools this
+      # test never uses (Android SDK, older .NET and Java, Haskell) make room, so "Setup after freeing space" has it.
+      - name: Make room on drive C
+        shell: pwsh
+        run: |
+          Write-Host ("C: before: {0:N1} GB free" -f ((Get-PSDrive C).Free / 1GB))
+          foreach ($d in "C:\Android", "C:\ghcup", "C:\hostedtoolcache\windows\Java_Temurin-Hotspot_jdk", "C:\Program Files\dotnet\sdk\6*") {
+            Get-Item $d -ErrorAction SilentlyContinue | ForEach-Object { cmd /c rmdir /s /q "$($_.FullName)" }
+          }
+          Write-Host ("C: after: {0:N1} GB free" -f ((Get-PSDrive C).Free / 1GB))
       - name: Install with things going wrong
         shell: pwsh
         env:
