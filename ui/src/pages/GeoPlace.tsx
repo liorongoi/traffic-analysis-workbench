@@ -19,7 +19,7 @@ type Geo = { points: Pt[]; map_path: string | null; corners: number[] | null; dt
 type DtmInfo = { name: string; min_m: number | null; max_m: number | null; m_per_sample: number; top: number; left: number; bottom: number; right: number };
 export type Footprint = { how: "points" | "points-poor" | "flight-data" | "map-match"; registered: boolean; note?: string | null;
   near: LatLon[] | null; far: LatLon[] | null; bounds: [number, number, number, number] | null;
-  top_row?: number; cut?: boolean; frame_w?: number; frame_h?: number };
+  view_bounds?: [number, number, number, number]; horizon?: boolean; beyond?: boolean; frame_w?: number; frame_h?: number };
 type MPath = { event_id: number; key: string; cls: string; first_t: number; last_t: number; path: [number, number, number][]; length_m: number };
 
 const CLS_COLOUR: Record<string, string> = { car: "#4aa3e8", truck: "#e8a34a", bus: "#c86ae8", motorcycle: "#e84a6a",
@@ -157,7 +157,7 @@ export default function GeoPlace({ missionId, versionId }: { missionId: string; 
           Spread them across the road, near and far. Six or more is better than four.</div>
         <div className="row" style={{ gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 420px", minWidth: 300 }}>
-            {rec && <FramePanel missionId={missionId} versionId={versionId} rec={rec} t={t} pts={pts} half={half} fit={fit} fp={layers.footprint ? fp : null}
+            {rec && <FramePanel missionId={missionId} versionId={versionId} rec={rec} t={t} pts={pts} half={half} fit={fit}
               paths={[]} onPick={onFrame} />}
             {rec && <label className="small row" style={{ gap: 8 }}>Frame at {fmtT(t)}
               <input type="range" min={0} max={Math.max(0.1, rec.duration - 0.1)} step={0.1} value={t} onChange={(e) => setT(Number(e.target.value))} style={{ flex: 1 }} /></label>}
@@ -207,8 +207,7 @@ export default function GeoPlace({ missionId, versionId }: { missionId: string; 
 
 const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : 0; };
 
-function FramePanel({ missionId, versionId, rec, t, pts, half, fit, fp, onPick }: {
-  fp?: Footprint | null;
+function FramePanel({ missionId, versionId, rec, t, pts, half, fit, onPick }: {
   missionId: string; versionId: number; rec: { width: number; height: number }; t: number; pts: Pt[];
   half: [number, number] | null; fit: Fit | null; paths: MPath[]; onPick: (x: number, y: number) => void;
 }) {
@@ -224,14 +223,6 @@ function FramePanel({ missionId, versionId, rec, t, pts, half, fit, fp, onPick }
     <svg ref={svg} viewBox={`0 0 ${rec.width} ${rec.height}`} style={{ width: "100%", cursor: "crosshair", background: "#000" }} onClick={click}
       role="img" aria-label="Frame of the camera: click a spot on the ground">
       <image href={`/api/missions/${missionId}/videos/${versionId}/frame?t=${t.toFixed(1)}&w=1920`} width={rec.width} height={rec.height} />
-      {fp?.cut && fp.top_row != null && <g>
-        <rect x={0} y={0} width={rec.width} height={fp.top_row * rec.height / (fp.frame_h ?? rec.height)} fill="#000" fillOpacity={0.35} />
-        <line x1={0} x2={rec.width} y1={fp.top_row * rec.height / (fp.frame_h ?? rec.height)} y2={fp.top_row * rec.height / (fp.frame_h ?? rec.height)}
-          stroke={TOP} strokeWidth={r / 3} strokeDasharray={`${r * 1.5} ${r}`} />
-        <text x={r} y={fp.top_row * rec.height / (fp.frame_h ?? rec.height) - r * 0.8} fill={TOP} fontSize={r * 2} fontWeight={600}>
-          Above this line: sky, or too far to place on the map</text>
-      </g>}
-      {fp && !fp.cut && <line x1={0} x2={rec.width} y1={r / 4} y2={r / 4} stroke={TOP} strokeWidth={r / 2} />}
       {pts.map((p, i) => <Mark key={i} x={p[0]} y={p[1]} r={r} n={i + 1} bad={fit?.suspect === i} />)}
       {half && <Mark x={half[0]} y={half[1]} r={r} n={pts.length + 1} pending />}
     </svg>
@@ -258,9 +249,16 @@ function MapPanel({ src, info, pts, fit, paths, onPick, waiting, fp, frameSrc, s
   useEffect(() => setVb({ x: 0, y: 0, w: W, h: H }), [W, H, src]);
   // Start on the frame's footprint, the points already picked, or the targets.
   const hasFp = !!fp?.bounds;
+  // the whole view, but not farther out than half the map's size again around the map
+  const clip = (b: [number, number, number, number]) => {
+    const dl = (info.top - info.bottom) / 2, dw = (info.right - info.left) / 2;
+    const c = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+    return [[c(b[0], info.bottom - dl, info.top + dl), c(b[1], info.left - dw, info.right + dw)],
+      [c(b[2], info.bottom - dl, info.top + dl), c(b[3], info.left - dw, info.right + dw)]];
+  };
   useEffect(() => {
     const ll = [...pts.map((p) => [p[2], p[3]]), ...paths.flatMap((p) => p.path.map((q) => [q[1], q[2]])),
-      ...(fp?.bounds ? [[fp.bounds[0], fp.bounds[1]], [fp.bounds[2], fp.bounds[3]]] : [])];
+      ...(fp?.view_bounds ? clip(fp.view_bounds) : fp?.bounds ? [[fp.bounds[0], fp.bounds[1]], [fp.bounds[2], fp.bounds[3]]] : [])];
     if (!ll.length) return;
     const xs = ll.map((q) => toX(q[1])), ys = ll.map((q) => toY(q[0]));
     const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
@@ -324,15 +322,10 @@ function MapPanel({ src, info, pts, fit, paths, onPick, waiting, fp, frameSrc, s
           fill={TOP} fillOpacity={0.14} stroke="none"><title>The upper part of the image (toward the horizon)</title></polygon>}
         {fp?.near && fp.far && <polygon points={[fp.far[0], fp.far[1], fp.near[2], fp.near[3]].map((q) => `${toX(q[1]).toFixed(1)},${toY(q[0]).toFixed(1)}`).join(" ")}
           fill="none" stroke={fpColour(fp)} strokeWidth={r / 2.5} strokeLinejoin="round"><title>{fpTitle(fp)}</title></polygon>}
-        {fp?.far && fp.near && fp.cut && [[fp.near[3], fp.far[0]], [fp.near[2], fp.far[1]]].map(([a, b], i) => {
-          // the picture goes on beyond the cut, toward the horizon: the sides, carried on faintly
-          const x0 = toX(b[1]), y0 = toY(b[0]), dx = x0 - toX(a[1]), dy = y0 - toY(a[0]);
-          return <line key={i} x1={x0} y1={y0} x2={x0 + dx * 0.8} y2={y0 + dy * 0.8} stroke={fpColour(fp)} strokeOpacity={0.45}
-            strokeWidth={r / 3} strokeDasharray={`${r} ${r}`}><title>The view goes on toward the horizon</title></line>;
-        })}
         {fp?.far && <line x1={toX(fp.far[0][1])} y1={toY(fp.far[0][0])} x2={toX(fp.far[1][1])} y2={toY(fp.far[1][0])}
-          stroke={TOP} strokeWidth={r / (fp.cut ? 1.8 : 1.2)} strokeLinecap="round" strokeDasharray={fp.cut ? `${r * 1.5} ${r}` : undefined}>
-          <title>{fp.cut ? "Where the map part stops: the line marked on the frame. Above it the picture shows sky or ground too far away to place." : "The top edge of the image"}</title></line>}
+          stroke={TOP} strokeWidth={r / 1.2} strokeLinecap="round">
+          <title>{fp.horizon ? (fp.beyond ? "The far edge of the view (5 km): the camera sees on toward the horizon" : "The horizon: above it the camera sees sky")
+            : "The top edge of the image"}</title></line>}
         {lines.map((l, i) => <path key={i} d={l.d} fill="none" stroke={colour(l.cls)} strokeWidth={r / 2.5} strokeOpacity={0.85}>
           <title>{l.key} · {l.cls}</title></path>)}
         {pts.map((p, i) => <Mark key={i} x={toX(p[3])} y={toY(p[2])} r={r} n={i + 1} bad={fit?.suspect === i} />)}
@@ -353,9 +346,8 @@ function FootprintKey({ fp, aligning }: { fp: Footprint | null; aligning: boolea
   if (!fp) return <span className="muted">Not on the map yet: pick four points, or a recording with flight data.</span>;
   return <span className="row" style={{ gap: 10, flexWrap: "wrap" }}>
     <span><span style={{ color: fpColour(fp) }}>▭</span> Outline: {fpTitle(fp)}</span>
-    {fp.cut ? <span><span style={{ color: TOP }}>╍</span> the line marked on the frame: above it is sky or ground too far to place, so the map shows the picture up to there</span>
-      : <span><span style={{ color: TOP }}>━</span> top edge of the image</span>}
-    <span><span style={{ color: TOP, opacity: 0.6 }}>■</span> upper part of what is on the map</span>
+    <span><span style={{ color: TOP }}>━</span> {fp.horizon ? (fp.beyond ? "far edge of the view, toward the horizon" : "the horizon: above it the camera sees sky") : "top edge of the image"}</span>
+    <span><span style={{ color: TOP, opacity: 0.6 }}>■</span> upper part of the image</span>
     {fp.note && <span className="muted">{fp.note}</span>}
   </span>;
 }

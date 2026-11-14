@@ -23,7 +23,8 @@ from pathlib import Path, PurePosixPath
 import cv2
 import numpy as np
 
-from .georeg import GeoMap, LocalFrame, apply_h, fit_points, frame_on_ground, ground_parts, pose_from_telemetry
+from .georeg import (GeoMap, LocalFrame, apply_h, fit_points, frame_on_ground, ground_parts, horizon_row,
+                     pose_from_telemetry)
 from .store import utcnow
 
 MAP_SUFFIXES = {".tif", ".tiff", ".jpg", ".jpeg", ".png"}
@@ -346,19 +347,32 @@ def footprint_of(m, svc, version_id: int, t: float, dtm_path: str | None = None,
     if p is None:
         return None
     G, frame, w, h, how, ok, note = p
-    parts = ground_parts(G, w, h)
-    if parts is None:
+    # the outline is everything the camera sees on the ground, out to the horizon (or VIEW_RANGE_M); the frame laid
+    # on the map stops sooner, where a pixel covers more than IMAGE_PX_M of ground
+    view = ground_parts(G, w, h, VIEW_RANGE_M, max_px_m=None)
+    image = ground_parts(G, w, h, IMAGE_RANGE_M, max_px_m=IMAGE_PX_M)
+    if view is None or image is None:
         return {"how": how, "registered": ok, "note": note, "near": None, "far": None, "bounds": None}
 
     def ll(q):
         lat, lon = frame.to_latlon(q[:, 0], q[:, 1])
         return [[round(float(a), 7), round(float(b), 7)] for a, b in zip(lat, lon)]
 
-    near, far = ll(parts["near"]), ll(parts["far"])
-    a = np.array(near + far)
+    def box(q):
+        a = np.array(q)
+        return [float(a[:, 0].max()), float(a[:, 1].min()), float(a[:, 0].min()), float(a[:, 1].max())]
+
+    near, far = ll(view["near"]), ll(view["far"])
+    hz = horizon_row(G, w, h)
     return {"how": how, "registered": ok, "note": note, "near": near, "far": far, "top_edge": far[:2],
-            "top_row": round(parts["top_row"], 1), "cut": parts["top_row"] > 0, "frame_w": w, "frame_h": h,
-            "bounds": [float(a[:, 0].max()), float(a[:, 1].min()), float(a[:, 0].min()), float(a[:, 1].max())]}
+            "horizon": hz > 0, "beyond": bool(view["top_row"] > hz + 0.021 * h) if hz > 0 else False,
+            "frame_w": w, "frame_h": h, "view_bounds": box(near + far),
+            "bounds": box(ll(image["far"]) + ll(image["near"]))}
+
+
+VIEW_RANGE_M = 5000.0
+IMAGE_RANGE_M = 2500.0
+IMAGE_PX_M = 3.0
 
 
 def frame_overlay(m, svc, version_id: int, t: float, dtm_path: str | None = None, map_path: str | None = None,
@@ -381,6 +395,6 @@ def frame_overlay(m, svc, version_id: int, t: float, dtm_path: str | None = None
     hm = frame.distance(top, left, bottom, left)
     k = max(wm, hm) / side
     size = (max(8, round(wm / k)), max(8, round(hm / k)))
-    lay = frame_on_ground(img, G, frame, (top, left, bottom, right), size)
+    lay = frame_on_ground(img, G, frame, (top, left, bottom, right), size, IMAGE_RANGE_M, IMAGE_PX_M)
     ok, buf = cv2.imencode(".png", lay)
     return buf.tobytes()

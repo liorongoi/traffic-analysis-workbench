@@ -285,13 +285,13 @@ def picture_mask(frame: np.ndarray, dark: int = 12) -> np.ndarray:
 
 
 def frame_on_ground(frame: np.ndarray, G: np.ndarray, frame_ll: "LocalFrame", bounds: tuple[float, float, float, float],
-                    size: tuple[int, int], max_range_m: float = 1500.0) -> np.ndarray:
+                    size: tuple[int, int], max_range_m: float = 1500.0, max_px_m: float | None = 1.5) -> np.ndarray:
     """The frame laid on the ground, as a BGRA picture of the area ``bounds`` (top, left, bottom, right latitude and
     longitude) of ``size`` (width, height) pixels. Transparent where the frame does not reach: outside its footprint,
     above the horizon and on black bars, so only picture lands on the map."""
     h, w = frame.shape[:2]
     W, H = size
-    parts = ground_parts(G, w, h, max_range_m)
+    parts = ground_parts(G, w, h, max_range_m, max_px_m=max_px_m)
     out = np.zeros((H, W, 4), np.uint8)
     if parts is None:
         return out
