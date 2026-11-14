@@ -66,8 +66,9 @@ def test_update_backs_up_before_migrating_and_rollback_restores_old_schema(env):
     m.con.close()
     # Make the mission look like it was written by the previous version (one migration behind).
     con = sqlite3.connect(db)
-    assert newest == 25, "update this test to undo the newest migration"
-    con.execute("DROP TABLE camera_geo")
+    assert newest == 26, "update this test to undo the newest migration"
+    con.execute("ALTER TABLE camera_geo DROP COLUMN dtm_path")
+    con.execute("DROP TABLE video_platform")
     con.execute("DELETE FROM schema_version WHERE version=?", (newest,))
     con.commit()
     con.close()
@@ -115,12 +116,12 @@ def test_scheduler_records_scheduled_backup(env):
     from datetime import datetime
     from trafficwb.admin import BackupScheduler
     tmp, root, _, _ = env
-    # due at 00:00, so the backup made now (whatever the hour) counts for today; at "02:00" a run between midnight and
-    # 02:00 made its backup before that day's slot and the second check rightly found it due again
+    # Due from 00:00, so the backup's own time (the real clock) is always after today's slot, whatever the hour the
+    # test runs at (a 23:59 "now" with a 02:00 slot failed between midnight and 02:00).
     s = BackupScheduler(root.path, tmp / "nightly", "00:00")
-    p = s.run_if_due(datetime.now().replace(hour=23, minute=59))
+    p = s.run_if_due(datetime.now())
     assert p is not None and verify(p) == []
-    assert s.run_if_due(datetime.now().replace(hour=23, minute=59)) is None   # already done today
+    assert s.run_if_due(datetime.now()) is None   # already done today
 
 
 def test_speed_check_reports_each_backend(tmp_path, capsys):

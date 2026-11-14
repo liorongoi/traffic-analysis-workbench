@@ -65,6 +65,8 @@ function lanes(evs: PEvent[]): PEvent[][] {
 
 export default function Player({ missionId, versionId }: { missionId: string; versionId: number }) {
   const [ov, setOv] = useState<Overlay | null>(null);
+  // The events panel folds away so the video can take the whole width; remembered on this computer.
+  const [panel, setPanel] = useState<boolean>(() => { try { return localStorage.getItem("twb.player-panel") !== "off"; } catch { return true; } });
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   const [now, setNow] = useState(0);
@@ -284,6 +286,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
       else if (k === "m") { setMeasuring((v) => !v); setLine(null); setAdding(false); setSel(null); pause(); }
       else if (k === "a") approve();
       else if (k === "h") setShow((s) => (s === "none" ? "all" : "none"));
+      else if (k === "]") setPanel((p) => { try { localStorage.setItem("twb.player-panel", p ? "off" : "on"); } catch { /* this visit only */ } return !p; });
       else if (k === "l") startZone(zoning === "line" ? "" : "line");
       else if (k === "enter" && zoning === "area" && zpts.length >= 3) saveZone(zpts);
       else if (k === "escape") { setDrag(null); setAdding(false); setMarking(false); setSelMark(null); setMeasuring(false); setLine(null); setZoning(""); setZpts([]); setSel(null); setHelp(false); }
@@ -299,6 +302,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   if (err) return <div className="msg err">{err}</div>;
   if (!ov) return <div className="muted">Loading…</div>;
   const rec = ov.recording;
+  const togglePanel = () => setPanel((p) => { try { localStorage.setItem("twb.player-panel", p ? "off" : "on"); } catch { /* this visit only */ } return !p; });
   // Lines and labels keep their size on screen whatever the video's resolution.
   const cw = svg.current?.clientWidth || W, ch = svg.current?.clientHeight || H;
   const px = Math.max(W / cw, H / ch);              // video pixels per screen pixel
@@ -314,13 +318,14 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
         <span className={`badge ${rec.approved ? "approved" : ""}`}>{REVIEW_TEXT[rec.review] ?? rec.review}</span>
         <span className="muted">{toReview.length ? `${toReview.length} of ${evs.length} events to review` : `all ${evs.length} events reviewed`}</span>
         <span style={{ flex: 1 }} />
+        <button className="iconbtn" aria-pressed={panel} onClick={togglePanel} title="Show or hide the events panel, so the video can take the whole width">{panel ? "Hide events" : "Events"}</button>
         <button className={rec.approved ? "" : "primary"} onClick={approve}
           title="Say every target in this video is marked and every box is right; it then teaches the detector (A)">
           {rec.approved ? "Reopen" : rec.pending ? `Confirm ${rec.pending} left and approve for learning` : "Approve for learning"}</button>
       </div>
-      <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1fr) 340px", gap: 10 }}>
+      <div className="grid" style={{ gridTemplateColumns: panel ? "minmax(0, 1fr) 320px" : "minmax(0, 1fr)", gap: 10 }}>
         <div className="card" style={{ padding: 8 }}>
-          <div className="stage" style={{ position: "relative", background: "#000", aspectRatio: `${W} / ${H}`, maxHeight: "56vh" }}>
+          <div className="stage" style={{ position: "relative", background: "#000", aspectRatio: `${W} / ${H}`, maxHeight: "calc(100vh - 330px)", minHeight: 240 }}>
             {!fallback && <video ref={video} src={`/api/missions/${missionId}/videos/${versionId}`} preload="auto"
               style={{ width: "100%", height: "100%", display: "block", objectFit: "contain" }}
               onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)}
@@ -455,7 +460,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             B missed target · T teach a new target · M measure the camera · L counting line · drag on the paused picture to redraw the picked event's box · A approve for learning ·
             H hide boxes · Esc let go</div>}
         </div>
-        <div className="grid" style={{ gap: 10, alignContent: "start" }}>
+        <div className="grid" style={{ gap: 10, alignContent: "start", display: panel ? undefined : "none" }}>
           <div className="card grid" style={{ gap: 8 }}>
             {selEv ? <>
               <div className="row" style={{ justifyContent: "space-between" }}>

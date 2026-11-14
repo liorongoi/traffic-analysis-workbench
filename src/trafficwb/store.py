@@ -1075,6 +1075,19 @@ CREATE TABLE camera_geo (                  -- a fixed camera on the map (video_g
   created_at TEXT NOT NULL
 );
 """,
+    26: """
+ALTER TABLE camera_geo ADD COLUMN dtm_path TEXT;          -- the terrain (ground heights) file picked, or NULL
+-- Platform data the operator typed for a recording (video_georeg): position, height, angles, lens, and a square on
+-- the map to search in when the video has no position. Newest row wins.
+CREATE TABLE video_platform (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  data TEXT NOT NULL,                      -- JSON (video_georeg.PLATFORM_FIELDS, search_box)
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_video_platform ON video_platform(source_version_id);
+""",
 }
 
 
@@ -1107,6 +1120,32 @@ def migrate(db_path: Path, con: sqlite3.Connection) -> int:
             con.execute("ROLLBACK")
             raise
     return pending[-1]
+
+
+# Lookups the screens and the pipeline make on every image, video and view. They are not numbered migrations, so they
+# never clash with one: each is created once, when a mission is first opened by a build that knows it.
+LOOKUP_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS ix_run_item_version ON run_item(source_version_id, id)",
+    "CREATE INDEX IF NOT EXISTS ix_detection_item ON detection(run_item_id)",
+    "CREATE INDEX IF NOT EXISTS ix_light_item ON light_component(run_item_id)",
+    "CREATE INDEX IF NOT EXISTS ix_video_event_version ON video_event(source_version_id)",
+    "CREATE INDEX IF NOT EXISTS ix_region_view ON region_revision(view_id)",
+    "CREATE INDEX IF NOT EXISTS ix_assign_view ON view_assignment(view_id) WHERE superseded_by IS NULL",
+    "CREATE INDEX IF NOT EXISTS ix_hit_decision ON search_hit_decision(search_hit_id)",
+    "CREATE INDEX IF NOT EXISTS ix_calibration_version ON video_calibration(source_version_id)",
+)
+_indexed: set[str] = set()
+
+
+def ensure_indexes(db_path: Path, con: sqlite3.Connection) -> None:
+    key = str(db_path)
+    if key in _indexed:
+        return
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for stmt in LOOKUP_INDEXES:
+        if stmt.split(" ON ", 1)[1].split("(", 1)[0] in tables:
+            con.execute(stmt)
+    _indexed.add(key)
 
 
 def utcnow() -> str:
@@ -1376,6 +1415,7 @@ class Mission:
         db_path = root.path / row["db_path"]
         self.con = connect(db_path)
         migrate(db_path, self.con)
+        ensure_indexes(db_path, self.con)
 
     # --- configuration ---
     def config(self) -> MissionConfig:

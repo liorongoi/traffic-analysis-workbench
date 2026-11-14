@@ -20,6 +20,8 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
     /* empty body */
   }
   if (!res.ok) {
+    // The access key was changed on the server (or the cookie expired): ask for it again.
+    if (res.status === 401 && data?.error === "need_key") window.location.reload();
     const err = new ApiError(res.status, data?.error ?? "error", data?.message ?? res.statusText, data?.action);
     throw err;
   }
