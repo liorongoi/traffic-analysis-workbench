@@ -31,7 +31,11 @@ OutputBaseFilename=LanePulse-Setup-{#AppVersion}
 ; The bundle is mostly compressed wheels already; fast compression keeps the build and the install quick.
 Compression=lzma2/fast
 SolidCompression=no
-DiskSpanning=no
+; Every detector size makes the installer larger than the 4.2 GB one Setup.exe can hold, so Setup comes with its
+; data in LanePulse-Setup-<version>-1.bin, -2.bin, ... beside it (each under 2 GB, the most a release file may be).
+; Double-clicking Setup.exe finds them in its own folder.
+DiskSpanning=yes
+DiskSliceSize=1900000000
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible

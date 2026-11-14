@@ -4,7 +4,8 @@ LanePulse: offline install and update
 This folder contains everything the workstation needs. Nothing is downloaded during install or use.
 
 Easiest: the setup wizard (Windows)
-- Run the single LanePulse-Setup-<version>.exe and choose the install, data and backup folders.
+- Copy LanePulse-Setup-<version>.exe together with its LanePulse-Setup-<version>-*.bin files into one folder,
+  run the .exe and choose the install, data and backup folders.
   No administrator rights are needed, nothing is downloaded, and no account or sign-in is needed. LanePulse brings
   its own Python (in <install folder>\python-<version>) and PyTorch for training; it never uses or changes another
   Python on the computer.
