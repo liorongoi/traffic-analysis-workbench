@@ -216,3 +216,46 @@ def test_command_line_registers_a_klv_video(tmp_path, gmap):
     e_true = -50 + 4 * 14
     lat, lon = f.to_latlon(e_true, 0)
     assert f.distance(*last["center"], float(lat), float(lon)) < 3.0
+
+
+def _sky_frame(gmap, w, h):
+    """A near-level view: light blue sky over the top part, ground below."""
+    G = pose_homography(w, h, 60, 0, 0, 200, 0, -60)
+    img = gmap.render(gmap.A_inv @ G, (w, h))
+    sky = np.linspace(235, 200, int(h * 0.4))[:, None, None] * np.array([1.0, 0.9, 0.75])
+    img[: int(h * 0.4)] = np.broadcast_to(sky, (int(h * 0.4), w, 3)).astype(np.uint8)
+    return img
+
+
+def test_sky_in_picture(gmap):
+    from trafficwb.georeg import sky_in_picture
+    w, h = 640, 360
+    ground = gmap.render(gmap.A_inv @ pose_homography(w, h, 60, 0, 0, 200, 0, -90), (w, h))
+    assert not sky_in_picture(ground)
+    assert sky_in_picture(_sky_frame(gmap, w, h))
+    assert not sky_in_picture(np.full((h, w, 3), (120, 160, 40), np.uint8))   # a plain field is not sky
+
+
+def test_drone_pauses_while_it_sees_the_sky_and_starts_again_on_ground(gmap):
+    w, h, fps = 640, 360, 10
+    reg = DroneRegistrar(gmap, Matcher(), snap_every_s=1.0, async_snap=False)
+    f = gmap.frame
+    out = []
+    for i in range(24):
+        t = i / fps
+        e, n = -100 + 8 * t, -50 + 5 * t
+        lat, lon = f.to_latlon(e + 6, n - 4)
+        if 8 <= i < 14:                                     # the gimbal comes up to level: sky in the picture
+            s = {"lat": float(lat), "lon": float(lon), "rel_alt": 200, "heading": 0, "pitch": -2, "hfov": 60}
+            fix = reg.step(_sky_frame(gmap, w, h), t, s)
+            out.append((fix.source, None))
+            continue
+        Gt = pose_homography(w, h, 60, e, n, 200, 0, -85)
+        s = {"lat": float(lat), "lon": float(lon), "rel_alt": 200, "heading": 0, "pitch": -85, "hfov": 60}
+        fix = reg.step(gmap.render(gmap.A_inv @ Gt, (w, h)), t, s)
+        err = None if fix.G is None else float(np.linalg.norm(apply_h(fix.G, [[w / 2, h / 2]])
+                                                               - apply_h(Gt, [[w / 2, h / 2]])))
+        out.append((fix.source, err))
+    reg.close()
+    assert all(src == "sky" for src, _ in out[8:14]), out
+    assert all(err is not None and err < 3 for _, err in out[14:]), out[14:]     # back on the map, lined up

@@ -75,7 +75,26 @@ def test_a_camera_on_the_map_through_the_api(tmp_path):
     p0 = paths[0]["path"][0]
     assert abs(p0[1] - 32.0765) < 0.01 and abs(p0[2] - 34.7835) < 0.01
     assert all(p["length_m"] > 0 for p in paths)
+    # the frame on the ground: footprint (near and far) green from the points, and the frame as a transparent PNG
+    fp = c.get(f"/api/missions/{m.id}/recordings/{vid}/footprint", params={"t": 1}, headers=h).json()["footprint"]
+    assert fp["registered"] and fp["how"] == "points" and len(fp["near"]) == len(fp["far"]) == 4
+    assert fp["bounds"][0] > fp["bounds"][2] and fp["bounds"][3] > fp["bounds"][1]
+    png = c.get(f"/api/missions/{m.id}/recordings/{vid}/frame-on-map", params={"t": 1}, headers=h)
+    assert png.status_code == 200 and png.headers["content-type"] == "image/png"
+    lay = cv2.imdecode(np.frombuffer(png.content, np.uint8), cv2.IMREAD_UNCHANGED)
+    assert lay.shape[2] == 4 and 0 < (lay[..., 3] > 0).mean() < 1
+    # ground heights: a terrain file gives each point its height, and a slope bigger than a few metres is named
+    from trafficwb.terrain import write_geotiff
+    dem = np.tile(np.linspace(0, 40, 200, dtype=np.float32), (200, 1))   # 40 m from west to east
+    write_geotiff(maps / "dtm.tif", dem, (32.0805, 34.7795, 32.0725, 34.7875))
+    chk = c.put(url, json={"points": pts, "check_only": True, "dtm_path": str(maps / "dtm.tif")}, headers=h).json()
+    assert all(v is not None for v in chk["fit"]["heights_m"]) and chk["fit"]["not_flat"] is not None
+    r = c.put(url, json={"points": pts, "map_path": str(maps / "ortho.tif"), "dtm_path": str(maps / "dtm.tif")},
+              headers=h)
+    assert r.json()["geo"]["dtm_path"].endswith("dtm.tif")
     assert c.delete(url, headers=h).json()["geo"] is None
+    # no points and no flight data: not on the map
+    assert c.get(f"/api/missions/{m.id}/recordings/{vid}/footprint", headers=h).json()["footprint"] is None
     assert c.get(url, headers=h).json()["geo"] is None and c.get(
         f"/api/missions/{m.id}/recordings/{vid}/map-paths", headers=h).json()["paths"] == []
 

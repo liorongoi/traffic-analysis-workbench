@@ -23,7 +23,7 @@ export default function App() {
   // Older links: these pages now live in Settings.
   else if (section === "formats" || section === "workers") body = <Settings section={section} />;
   else if (section === "m" && id && sub === "i" && extra) body = <Investigate missionId={id} versionId={Number(extra)} />;
-  else if (section === "m" && id && sub === "map" && extra) body = <GeoPlace missionId={id} versionId={Number(extra)} />;
+  else if (section === "m" && id && sub === "map" && extra) body = <GeoPlace key={`${id}-${extra}`} missionId={id} versionId={Number(extra)} />;
   else if (section === "m" && id && sub === "regions" && extra) body = <RegionEditor missionId={id} viewId={Number(extra)} />;
   else if (section === "m" && id) body = <MissionPage missionId={id} tab={sub ?? "overview"} extra={extra} />;
   else body = <Missions />;
