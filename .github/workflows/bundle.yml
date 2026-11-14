@@ -209,9 +209,12 @@ jobs:
           function Uninstall-App([string]$id, [string]$what) {
             $k = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{$id}_is1"
             $exe = $k.UninstallString.Trim('"')
+            # The uninstaller hands over to a copy of itself in TEMP and exits (its exit code says nothing then);
+            # it is done when its .exe is gone.
             $p = Start-Process -PassThru $exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES"
-            if (-not $p.WaitForExit(10 * 60 * 1000) -or $p.ExitCode -ne 0) { throw "$($what): uninstall failed" }
-            Start-Sleep -Seconds 5    # the uninstaller finishes in a copy of itself
+            $null = $p.WaitForExit(5 * 60 * 1000)
+            for ($i = 0; $i -lt 120 -and (Test-Path $exe); $i++) { Start-Sleep -Seconds 2 }
+            if (Test-Path $exe) { throw "$($what): the uninstaller did not finish" }
           }
           # Without LanePulse it refuses, and adds nothing.
           $det = (Get-ChildItem detectors-setup -Filter *.exe | Select-Object -First 1).FullName
@@ -236,7 +239,9 @@ jobs:
           if ($left -match "yolox-x") { throw "uninstalling the detectors left YOLOX-x" }
           if ($left -notmatch "yolox-s") { throw "uninstalling the detectors removed LanePulse's own YOLOX-s" }
           if (-not (Test-Path "$dir\current.txt")) { throw "uninstalling the detectors removed LanePulse" }
-          Uninstall-App "6C1E3F0A-7A51-4E0B-9C8E-1F2B7D9A4E21" "LanePulse"
+          . "$PWD\.github\scripts\uninstall_check.ps1"
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\TrafficData\keep-me" | Out-Null
+          Test-Uninstall -Dir $dir -Data "$env:USERPROFILE\TrafficData"
       - uses: actions/upload-artifact@v4
         with:
           name: LanePulse-Detectors-${{ steps.py.outputs.version }}
