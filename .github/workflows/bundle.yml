@@ -691,6 +691,34 @@ jobs:
           sudo "$P/install-server.sh" --allow-from any --skip-check
           up
           sudo /opt/lanepulse/uninstall-server.sh
+      - name: Try it without root (an ordinary user, no sudo anywhere)
+        run: |
+          set -x
+          P="$RUNNER_TEMP/pkg/${{ steps.srv.outputs.name }}"
+          h() { curl -fsS -m 2 http://127.0.0.1:8765/api/health; }
+          up() { for i in $(seq 120); do h && return 0; sleep 1; done; tail -40 ~/lanepulse/logs/server.log; return 1; }
+          "$P/install-server.sh"                              # with the offline install check
+          h
+          test ! -e /opt/lanepulse && test -d ~/lanepulse/data
+          export PATH="$HOME/.local/bin:$PATH"
+          lanepulse status
+          test -n "$(lanepulse password --show)"
+          grep -E '^SERVICE="(systemd-user|cron)"' ~/lanepulse/lanepulse.conf
+          lanepulse stop
+          if h; then echo "still answering after lanepulse stop"; exit 1; fi
+          sleep 70                                            # a stop on purpose stays stopped
+          if h; then echo "started again after lanepulse stop"; exit 1; fi
+          lanepulse start && up
+          # It comes back by itself after a crash.
+          kill -9 "$(cat ~/lanepulse/logs/server.pid)"
+          sleep 2; up
+          mkdir -p ~/lanepulse/data/keep-me
+          "$P/install-server.sh" --skip-check                 # repair: the same version again
+          up && test -d ~/lanepulse/data/keep-me
+          lanepulse uninstall
+          if h; then echo "still running after uninstall"; exit 1; fi
+          test -d ~/lanepulse/data/keep-me && test ! -e ~/.local/bin/lanepulse
+          if crontab -l 2>/dev/null | grep -q LanePulse; then echo "cron entry left behind"; exit 1; fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.srv.outputs.name }}
