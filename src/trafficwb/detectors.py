@@ -1,9 +1,9 @@
 """The vehicle detectors a mission can choose, and how each one scored on the public benchmarks.
 
-- "standard": YOLOX-s, or the model promoted on the learning page (fast; trainable).
+- "standard": YOLOX (the size that suits this computer, hardware.py), or the model promoted on the learning page.
 - "rfdetr": RF-DETR (Roboflow, Apache-2.0), a transformer detector; more accurate than YOLOX-s, a little slower;
   trainable on the learning page as well. The mission uses the RF-DETR model promoted for RF-DETR missions if there is
-  one, else the released RF-DETR model installed here (Small first, then Medium, then Nano).
+  one, else the released RF-DETR size that suits this computer or that the operator chose (hardware.py).
 - "sam3": SAM 3.1, which finds objects by name; much slower, strongest from the air and in thermal.
 - "both": the standard detector and SAM 3.1, merged; "rfdetr+sam3": RF-DETR and SAM 3.1, merged. The picker shows
   these as tick boxes: one fast detector (YOLOX-s or RF-DETR), SAM 3.1, or a fast one together with SAM 3.1.
@@ -53,6 +53,10 @@ def rfdetr_pack(data_root: Path | str | None = None, models_root: Path | None = 
                     return pack
             except models.ModelPackError:
                 pass
+    from .hardware import run_pack
+    chosen = run_pack("rf-detr", data_root, models_root)       # the size for this computer, or the operator's
+    if chosen is not None:
+        return chosen
     for name in RFDETR_PREFERENCE:
         try:
             return models.find(name, root=models_root)
