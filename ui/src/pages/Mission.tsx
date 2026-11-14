@@ -40,13 +40,12 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
 
   if (err) return <div className="page"><div className="msg err">{err}</div></div>;
   if (!m) return <div className="page muted">Loading…</div>;
+  // Sorting indoor from outdoor finds no vehicles: its own tab replaces the vehicle tabs.
+  const sorting = m.config.mode === "indoor_outdoor";
   const isVideo = m.config.input_type === "video";
   const tabs = [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
     ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []),
     ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"]]), ["learning", "Learning"]];
-  // Sorting indoor from outdoor finds no vehicles: its own tab replaces the vehicle tabs.
-  const sorting = m.config.mode === "indoor_outdoor";
-  const shown = sorting ? [tabs[0], ["sort", "Indoor and outdoor"], ...tabs.filter(([k]) => k === "settings")] : tabs;
   return (
     <div className="page">
       <div className="page-head">
@@ -63,7 +62,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
         </div>
       </div>
       <nav className="tabs">
-        {shown.map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""}>{l}</a>)}
+        {(sorting ? [tabs[0], ["sort", "Indoor and outdoor"], ...tabs.filter(([k]) => k === "settings")] : tabs).map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""}>{l}</a>)}
       </nav>
       {tab === "overview" && <Overview m={m} reload={load} />}
       {tab === "sort" && sorting && <SortingTab m={m} reload={load} />}
