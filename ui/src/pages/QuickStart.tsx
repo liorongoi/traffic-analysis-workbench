@@ -21,6 +21,7 @@ const MODE_TEXT: Record<string, string> = {
   object_search: "Object search: find vehicles that match a description",
   plate_recognition: "Plate recognition: read licence plates",
   unique_targets: "Unique vehicles: each vehicle counted once",
+  indoor_outdoor: "Sort into indoor and outdoor: two groups of images",
 };
 const modeText = (m: string) => MODE_TEXT[m] ?? m.replace(/_/g, " ");
 
@@ -82,6 +83,7 @@ export default function QuickStart() {
   const video = g?.input_type === "video";
   const samOk = !!ref?.sam3?.installed;
   const rfOk = !!ref?.rfdetr?.installed;
+  const sorting = mode === "indoor_outdoor";      // needs no capture time and no detector
 
   const create = async () => {
     if (!g) return;
@@ -97,7 +99,7 @@ export default function QuickStart() {
       const r = await post("/missions", body);
       await post(`/missions/${r.id}/job`);
       if (watch) await api(`/missions/${r.id}/monitoring`, { method: "PUT", body: { enabled: true } }).catch(() => undefined);
-      go(`/m/${r.id}`);
+      go(mode === "indoor_outdoor" ? `/m/${r.id}/sort` : `/m/${r.id}`);
     } catch (e) {
       setErr([(e as ApiError).message]);
     } finally { setBusy(false); }
@@ -131,7 +133,7 @@ export default function QuickStart() {
           {g && !reading && files === 0 && <div className="msg warn">There are no images or videos in this folder or its subfolders.</div>}
           {g && !reading && files > 0 && g.readable === files && g.pattern &&
             <div className="msg ok">Every file name gives its capture time, so each {video ? "recording" : "image"} is placed in time to the second.</div>}
-          {g && !reading && files > 0 && g.readable < files && (
+          {g && !reading && files > 0 && g.readable < files && !sorting && (
             <div className="msg warn">
               {files - g.readable} of {files} file names have no capture time LanePulse can read{g.unreadable[0] ? <>, for example <span className="mono bidi">{g.unreadable[0].file}</span></> : null}. Those files would be skipped.{" "}
               <a href="#/formats" target="_blank" rel="noreferrer">Show the app how this camera names its files</a> (opens in a new tab), then choose the folder again.
@@ -156,7 +158,7 @@ export default function QuickStart() {
             <span><select value={mode} disabled={!g || !ref} onChange={(e) => setMode(e.target.value)} aria-label="What to find">
                 {(ref && g ? ref.modes[g.input_type] ?? [] : []).map((m) => <option key={m} value={m}>{modeText(m)}</option>)}
               </select>
-              <span className="why">{g ? `The usual choice for ${video ? "video" : "still images"}; it cannot change later` : " "}</span></span><span /></div>
+              <span className="why">{g ? (sorting ? "Two groups, indoor and outdoor; it cannot change later" : `The usual choice for ${video ? "video" : "still images"}; it cannot change later`) : " "}</span></span><span /></div>
           <div className="guess"><span>Exports</span>
             <span>{changeOut
               ? <FolderPicker label="Exports folder" value={out} onChange={setOut} placeholder="Folder for Excel and CSV files" />
@@ -164,6 +166,7 @@ export default function QuickStart() {
                 <span className="why">{g ? `Excel and CSV, ${g.output_exists ? "in this folder" : "in a new folder beside the source"}` : " "}</span></>}</span>
             {g && !changeOut ? <button className="linkish" onClick={() => setChangeOut(true)}>Change</button> : <span />}</div>
 
+          {sorting ? <p className="muted" style={{ marginTop: 16 }}>Each image is placed in indoor or outdoor. You can move any of them afterwards, and LanePulse learns from your moves. File names need no capture time.</p> :
           <div style={{ marginTop: 16 }}>
             <div>
               <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>Detector</div>
@@ -179,13 +182,13 @@ export default function QuickStart() {
               </div>
               <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Runs: {DETECTOR_LABEL[detector] ?? detector}</div>
             </div>
-          </div>
+          </div>}
 
           {err.map((e) => <div key={e} className="msg err" role="alert">{e}</div>)}
           <div className="qs-go">
             <label className="row" style={{ color: "var(--text-2)" }}><input type="checkbox" checked={watch} disabled={!g} onChange={(e) => setWatch(e.target.checked)} /> Keep watching the folder for new files</label>
             <span className="grow" />
-            <button className="primary big" disabled={!g || busy || files === 0 || g.readable === 0 || !mode} onClick={create}>{busy ? "Creating…" : "Create and start"}</button>
+            <button className="primary big" disabled={!g || busy || files === 0 || (g.readable === 0 && !sorting) || !mode} onClick={create}>{busy ? "Creating…" : "Create and start"}</button>
           </div>
         </div>
       </div>

@@ -27,7 +27,8 @@ TARGET_COUNTRIES = {"IR": "Iran", "LB": "Lebanon", "IL": "Israel", "LV": "Latvia
 COUNTRY_ZONES = {"IR": "Asia/Tehran", "LB": "Asia/Beirut", "IL": "Asia/Jerusalem", "LV": "Europe/Riga", "FI": "Europe/Helsinki"}
 INPUT_TYPES = {"images", "video"}
 MODES = {
-    "images": {"general_traffic", "object_search", "plate_recognition"},
+    # indoor_outdoor: sort a bundle of images into indoor and outdoor (scenes.py); capture times are not needed.
+    "images": {"general_traffic", "object_search", "plate_recognition", "indoor_outdoor"},
     "video": {"object_search", "plate_recognition"},
 }
 EXPORT_FORMATS = {"xlsx", "csv"}
@@ -1209,6 +1210,10 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         )
         if cfg.mode == "plate_recognition":
             v.errors.append("Plate recognition needs one of the supported countries.")
+    if cfg.mode == "indoor_outdoor":
+        from .scenes import available
+        if not available().get("installed"):
+            v.errors.append(available()["reason"])
     try:
         ZoneInfo(cfg.iana_zone)
     except (ZoneInfoNotFoundError, ValueError):

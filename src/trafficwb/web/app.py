@@ -2573,6 +2573,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                            "Check that the output folder exists, is writable and has free space.") from None
         return {"files": [str(p) for p in paths]}
 
+    from .scenes_api import register as register_scenes   # sorting still images into indoor and outdoor
+    register_scenes(app, data_root, mission, user, ApiError)
+
     # ---------- UI ----------
     if (STATIC_DIR / "index.html").is_file():
         app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")

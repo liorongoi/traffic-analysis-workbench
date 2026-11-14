@@ -7,6 +7,7 @@ import EventsTab from "./Events";
 import PlatesTab from "./Plates";
 import LearningTab from "./Learning";
 import NightReviewTab from "./NightReview";
+import SortingTab from "./Sorting";
 import { CameraChoice, DETECTOR_LABEL, DetectorChoice, ModelChoice, ParallelChoice, SamInterval, partsOf, usesSam } from "./Wizard";
 import FolderPicker from "../components/FolderPicker";
 import { Choice, NamePick } from "../components/Pick";
@@ -43,6 +44,9 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   const tabs = [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
     ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []),
     ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"]]), ["learning", "Learning"]];
+  // Sorting indoor from outdoor finds no vehicles: its own tab replaces the vehicle tabs.
+  const sorting = m.config.mode === "indoor_outdoor";
+  const shown = sorting ? [tabs[0], ["sort", "Indoor and outdoor"], ...tabs.filter(([k]) => k === "settings")] : tabs;
   return (
     <div className="page">
       <div className="page-head">
@@ -51,17 +55,18 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
           <h1 className="bidi">{m.config.name}</h1>
           <div className="meta">
             <span>{isVideo ? "Video" : "Still images"}</span>
-            <span>{cap(m.config.mode.replace(/_/g, " "))}</span>
+            <span>{sorting ? "Indoor and outdoor" : cap(m.config.mode.replace(/_/g, " "))}</span>
             <span>{m.config.iana_zone}</span>
             <span>{m.config.processing === "continuous" ? `Continuous, monitoring ${m.config.monitoring_enabled ? "on" : "off"}` : "One-time"}</span>
-            {<span>{DETECTOR_LABEL[m.config.detector ?? "standard"] ?? "Standard detector"}{m.config.detector !== "sam3" && m.config.vehicle_model ? ` · ${m.config.vehicle_model}` : ""}</span>}
+            {!sorting && <span>{DETECTOR_LABEL[m.config.detector ?? "standard"] ?? "Standard detector"}{m.config.detector !== "sam3" && m.config.vehicle_model ? ` · ${m.config.vehicle_model}` : ""}</span>}
           </div>
         </div>
       </div>
       <nav className="tabs">
-        {tabs.map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""}>{l}</a>)}
+        {shown.map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""}>{l}</a>)}
       </nav>
       {tab === "overview" && <Overview m={m} reload={load} />}
+      {tab === "sort" && sorting && <SortingTab m={m} reload={load} />}
       {tab === "results" && !isVideo && <Results missionId={missionId} />}
       {tab === "night" && !isVideo && <NightReviewTab missionId={missionId} />}
       {tab === "views" && !isVideo && <Views missionId={missionId} />}
@@ -235,6 +240,7 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
     catch (e) { setErr((e as ApiError).message); }
     finally { setSaving(false); }
   };
+  if (m.config.mode === "indoor_outdoor") return <div className="card"><h2>Model</h2><p className="muted">Indoor or outdoor is decided by CLIP ViT-B/32 (OpenAI, MIT licence), installed with LanePulse. It finds no vehicles, so there is no detector to choose. See the <a href={`#/m/${m.id}/sort`}>Indoor and outdoor</a> tab.</p></div>;
   return (
     <div className="card">
       <h2>Detector</h2>

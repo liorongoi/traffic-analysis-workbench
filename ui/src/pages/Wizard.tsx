@@ -14,7 +14,9 @@ const MODE_HELP: Record<string, string> = {
   general_traffic: "Vehicles per image, within the view's regions. Never presented as unique vehicles or traffic flow.",
   object_search: "Find vehicles matching a description.",
   plate_recognition: "Read licence plates, country by country. In video, each vehicle's plate is read on several frames.",
+  indoor_outdoor: "Split a bundle of images into two groups, indoor and outdoor. You can move any image LanePulse placed wrongly, and it learns from your moves. File names need no capture time.",
 };
+export const MODE_NAME: Record<string, string> = { indoor_outdoor: "Sort into indoor and outdoor" };
 
 export default function Wizard() {
   const [ref, setRef] = useState<Ref | null>(null);
@@ -45,7 +47,7 @@ export default function Wizard() {
   const set = (k: string, v: unknown) => setCfg((c) => ({ ...c, [k]: v }));
   // Names to choose from: what the mission looks at, where and when. The first is used unless another is chosen.
   const nameIdeas = useMemo(() => {
-    const what = { general_traffic: "Traffic", object_search: "Vehicle search", plate_recognition: "Plates" }[cfg.mode] ?? "Mission";
+    const what = { general_traffic: "Traffic", object_search: "Vehicle search", plate_recognition: "Plates", indoor_outdoor: "Indoor and outdoor" }[cfg.mode] ?? "Mission";
     const place = ref?.countries[cfg.country] ?? "";
     const city = cfg.iana_zone.split("/").pop()?.replace(/_/g, " ") ?? "";
     const folders = cfg.source_dirs.map((d) => d.split(/[\\/]/).filter(Boolean).pop() ?? "");
@@ -94,7 +96,7 @@ export default function Wizard() {
     setErr(null);
     try {
       const r = await post("/missions", cfg);
-      go(`/m/${r.id}`);
+      go(cfg.mode === "indoor_outdoor" ? `/m/${r.id}/sort` : `/m/${r.id}`);
     } catch (e) {
       setErr((e as ApiError).message);
     } finally {
@@ -127,15 +129,15 @@ export default function Wizard() {
             </label>
             <label className="field"><span>Analysis mode (cannot change later)</span>
               <select value={cfg.mode} onChange={(e) => set("mode", e.target.value)}>
-                {ref.modes[cfg.input_type].map((m) => <option key={m} value={m}>{m.replace(/_/g, " ")}</option>)}
+                {ref.modes[cfg.input_type].map((m) => <option key={m} value={m}>{MODE_NAME[m] ?? m.replace(/_/g, " ")}</option>)}
               </select>
             </label>
             <p className="muted">{MODE_HELP[cfg.mode]}</p>
-            <DetectorChoice value={cfg.detector} onChange={(d) => set("detector", d)} sam={ref.sam3} video={cfg.input_type === "video"} />
+            {cfg.mode !== "indoor_outdoor" && <DetectorChoice value={cfg.detector} onChange={(d) => set("detector", d)} sam={ref.sam3} video={cfg.input_type === "video"} />}
             {cfg.input_type === "video" && <CameraChoice value={cfg.camera} onChange={(v) => set("camera", v)} />}
             {cfg.input_type === "video" && <ParallelChoice value={cfg.video_workers} onChange={(v) => set("video_workers", v)} />}
             {cfg.input_type === "video" && usesSam(cfg.detector) && <SamInterval value={cfg.sam3_interval_s} onChange={(v) => set("sam3_interval_s", v)} both={partsOf(cfg.detector).fast !== null} />}
-            {cfg.detector !== "sam3" && <ModelChoice saved={saved} value={cfg.vehicle_model} onChange={(v) => set("vehicle_model", v)} rfdetr={partsOf(cfg.detector).fast === "rfdetr"} />}
+            {cfg.detector !== "sam3" && cfg.mode !== "indoor_outdoor" && <ModelChoice saved={saved} value={cfg.vehicle_model} onChange={(v) => set("vehicle_model", v)} rfdetr={partsOf(cfg.detector).fast === "rfdetr"} />}
           </>
         )}
         {step === 1 && (
@@ -176,8 +178,9 @@ export default function Wizard() {
                 <option value="continuous">Continuous: keep watching for new files</option>
               </select>
             </label>
-            <div className="row"><button onClick={loadPreview} disabled={cfg.source_dirs.length === 0}>Preview file names</button>
+            {cfg.mode !== "indoor_outdoor" ? <div className="row"><button onClick={loadPreview} disabled={cfg.source_dirs.length === 0}>Preview file names</button>
               <span className="muted">Capture time comes from the file name in UTC. File dates are never used.</span></div>
+              : <p className="muted">Every image in the folder is sorted, whatever its name.</p>}
             {preview && (
               <div className="tablewrap" style={{ marginTop: 10, maxHeight: 260, overflowY: "auto" }}>
                 <table className="t">

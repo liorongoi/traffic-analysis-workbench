@@ -19,6 +19,7 @@ Status: **still images (phases 0 to 4), web screens, object search, video part 1
 | `trafficwb.sam3` | SAM 3.1 (Meta, SAM License) on OpenVINO's CPU: vehicles found by name as an alternative detector for still images, and scan areas ("road", "parking lot") outlined by name on the region editor; see `docs/decisions/sam3.md` |
 | `trafficwb.night`, `trafficwb.night_service` | Day/dusk/night from image content, headlights and glare, learned background lights (always, often or sometimes lit at each place), distance bands, vehicle candidates at night |
 | `trafficwb.night_review`, `trafficwb.night_learn` | Night review queue across images (most uncertain first), accuracy of night candidates from operator answers, and learned scoring per view from those answers |
+| `trafficwb.scenes` | Sorting a bundle of still images into indoor and outdoor (CLIP ViT-B/32, MIT): the operator moves any image placed wrongly, similar images follow those moves, and the two groups are copied into folders; see `docs/decisions/indoor-outdoor.md` |
 | `trafficwb.process` | Resumable processing runs |
 | `trafficwb.speedcheck` | Speed check on the workstation: model speed on each backend (CUDA, DirectML, CPU), images per day, video time |
 | `trafficwb.interpret`, `trafficwb.attributes`, `trafficwb.search` | Typed object search: request to confirmed spec, vehicle colour with "not observable", match/possible results |
