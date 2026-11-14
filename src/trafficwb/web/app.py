@@ -2344,19 +2344,22 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         return {"paths": _geo_call(lambda: _video_call(lambda: CameraGeo(m).paths(svc, version_id)))}
 
     @app.get("/api/missions/{mission_id}/recordings/{version_id}/footprint")
-    def geo_footprint(version_id: int, t: float = Query(0, ge=0), dtm: str | None = None, m: Mission = Depends(mission)):
-        """Where the frame at ``t`` lies on the ground: near and far parts, and whether it is registered."""
+    def geo_footprint(version_id: int, t: float = Query(0, ge=0), dtm: str | None = None, map: str | None = None,
+                      corners: str | None = None, m: Mission = Depends(mission)):
+        """Where the frame at ``t`` lies on the ground (lined up with ``map`` when only flight data places it)."""
         from ..video_geo import footprint_of
         svc = _video(m)
-        return {"footprint": _geo_call(lambda: footprint_of(m, svc, version_id, t, dtm))}
+        cs = [float(v) for v in corners.split(",")] if corners else None
+        return {"footprint": _geo_call(lambda: footprint_of(m, svc, version_id, t, dtm, map, cs))}
 
     @app.get("/api/missions/{mission_id}/recordings/{version_id}/frame-on-map")
-    def geo_frame_on_map(version_id: int, t: float = Query(0, ge=0), dtm: str | None = None,
-                         m: Mission = Depends(mission)):
+    def geo_frame_on_map(version_id: int, t: float = Query(0, ge=0), dtm: str | None = None, map: str | None = None,
+                         corners: str | None = None, m: Mission = Depends(mission)):
         """The frame at ``t`` laid on the ground (PNG, transparent where the frame does not reach)."""
         from ..video_geo import frame_overlay
         svc = _video(m)
-        data = _geo_call(lambda: frame_overlay(m, svc, version_id, t, dtm))
+        cs = [float(v) for v in corners.split(",")] if corners else None
+        data = _geo_call(lambda: frame_overlay(m, svc, version_id, t, dtm, map, cs))
         return Response(data, media_type="image/png", headers={"Cache-Control": "private, max-age=600"})
 
     # ---------- where maps and ground heights come from (map_sources, terrain) ----------

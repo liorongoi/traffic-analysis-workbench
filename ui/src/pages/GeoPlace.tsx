@@ -17,8 +17,8 @@ type Fit = { residual_m: number[]; leave_one_out_m: number[]; suspect: number | 
   heights_m?: (number | null)[]; height_span_m?: number | null; not_flat?: boolean };
 type Geo = { points: Pt[]; map_path: string | null; corners: number[] | null; dtm_path: string | null; fit: Fit; author: string; created_at: string };
 type DtmInfo = { name: string; min_m: number | null; max_m: number | null; m_per_sample: number; top: number; left: number; bottom: number; right: number };
-export type Footprint = { how: "points" | "points-poor" | "flight-data"; registered: boolean; near: LatLon[] | null; far: LatLon[] | null;
-  bounds: [number, number, number, number] | null };
+export type Footprint = { how: "points" | "points-poor" | "flight-data" | "map-match"; registered: boolean; note?: string | null;
+  near: LatLon[] | null; far: LatLon[] | null; bounds: [number, number, number, number] | null };
 type MPath = { event_id: number; key: string; cls: string; first_t: number; last_t: number; path: [number, number, number][]; length_m: number };
 
 const CLS_COLOUR: Record<string, string> = { car: "#4aa3e8", truck: "#e8a34a", bus: "#c86ae8", motorcycle: "#e84a6a",
@@ -35,6 +35,7 @@ export default function GeoPlace({ missionId, versionId }: { missionId: string; 
   const [dtm, setDtm] = useState<DtmInfo | null>(null);
   const [fp, setFp] = useState<Footprint | null>(null);
   const [layers, setLayers] = useState({ frame: true, footprint: true, shade: true });
+  const [aligning, setAligning] = useState(false);
   const [corners, setCorners] = useState("");
   const [info, setInfo] = useState<MapInfo | null>(null);
   const [pts, setPts] = useState<Pt[]>([]);
@@ -67,12 +68,13 @@ export default function GeoPlace({ missionId, versionId }: { missionId: string; 
     api(`/terrain-info?path=${encodeURIComponent(dtmPath)}`).then(setDtm).catch((e) => setMsg({ kind: "err", text: (e as ApiError).message }));
   }, [dtmPath]);
   // Where the frame at the slider's time lies on the ground (points, or the recording's flight data).
-  const dtmQ = dtmPath ? `&dtm=${encodeURIComponent(dtmPath)}` : "";
+  const dtmQ = (dtmPath ? `&dtm=${encodeURIComponent(dtmPath)}` : "") + (mapPath && info ? `&map=${encodeURIComponent(mapPath)}${corners.trim() ? `&corners=${encodeURIComponent(corners.trim())}` : ""}` : "");
   useEffect(() => {
     const id = setTimeout(() => api(`/missions/${missionId}/recordings/${versionId}/footprint?t=${t.toFixed(1)}${dtmQ}`)
-      .then((r) => setFp(r.footprint)).catch(() => setFp(null)), 250);
+      .then((r) => setFp(r.footprint)).catch(() => setFp(null)).finally(() => setAligning(false)), 250);
     return () => clearTimeout(id);
   }, [t, saved, dtmQ]);
+  useEffect(() => { setAligning(!!mapPath); }, [t, dtmQ]);
   const loadPaths = () => api(`/missions/${missionId}/recordings/${versionId}/map-paths`).then((r) => setPaths(r.paths)).catch(() => setPaths([]));
   useEffect(() => { if (saved) loadPaths(); else setPaths([]); }, [saved]);
 
@@ -169,7 +171,7 @@ export default function GeoPlace({ missionId, versionId }: { missionId: string; 
               <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={layers.frame} onChange={(e) => setLayers({ ...layers, frame: e.target.checked })} />The frame on the map</label>
               <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={layers.footprint} onChange={(e) => setLayers({ ...layers, footprint: e.target.checked })} />Footprint</label>
               {dtmPath && <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={layers.shade} onChange={(e) => setLayers({ ...layers, shade: e.target.checked })} />Hill shading</label>}
-              <FootprintKey fp={fp} />
+              <FootprintKey fp={fp} aligning={aligning} />
             </div>}
           </div>
         </div>
@@ -309,11 +311,11 @@ function MapPanel({ src, info, pts, fit, paths, onPick, waiting, fp, frameSrc, s
         {frameSrc && fp?.bounds && <image href={frameSrc} x={toX(fp.bounds[1])} y={toY(fp.bounds[0])} preserveAspectRatio="none"
           width={toX(fp.bounds[3]) - toX(fp.bounds[1])} height={toY(fp.bounds[2]) - toY(fp.bounds[0])} opacity={0.85} />}
         {fp?.far && <polygon points={fp.far.map((q) => `${toX(q[1]).toFixed(1)},${toY(q[0]).toFixed(1)}`).join(" ")}
-          fill={fpColour(fp, true)} fillOpacity={0.1} stroke={fpColour(fp, true)} strokeWidth={r / 3} strokeDasharray={`${r * 1.5} ${r}`}>
-          <title>The far part of the frame (its upper rows, toward the horizon)</title></polygon>}
-        {fp?.near && <polygon points={fp.near.map((q) => `${toX(q[1]).toFixed(1)},${toY(q[0]).toFixed(1)}`).join(" ")}
-          fill={fpColour(fp, false)} fillOpacity={0.1} stroke={fpColour(fp, false)} strokeWidth={r / 2.5}>
-          <title>{fpTitle(fp)}</title></polygon>}
+          fill={TOP} fillOpacity={0.14} stroke="none"><title>The upper part of the image (toward the horizon)</title></polygon>}
+        {fp?.near && fp.far && <polygon points={[fp.far[0], fp.far[1], fp.near[2], fp.near[3]].map((q) => `${toX(q[1]).toFixed(1)},${toY(q[0]).toFixed(1)}`).join(" ")}
+          fill="none" stroke={fpColour(fp)} strokeWidth={r / 2.5} strokeLinejoin="round"><title>{fpTitle(fp)}</title></polygon>}
+        {fp?.far && <line x1={toX(fp.far[0][1])} y1={toY(fp.far[0][0])} x2={toX(fp.far[1][1])} y2={toY(fp.far[1][0])}
+          stroke={TOP} strokeWidth={r / 1.2} strokeLinecap="round"><title>The top edge of the image</title></line>}
         {lines.map((l, i) => <path key={i} d={l.d} fill="none" stroke={colour(l.cls)} strokeWidth={r / 2.5} strokeOpacity={0.85}>
           <title>{l.key} · {l.cls}</title></path>)}
         {pts.map((p, i) => <Mark key={i} x={toX(p[3])} y={toY(p[2])} r={r} n={i + 1} bad={fit?.suspect === i} />)}
@@ -323,15 +325,18 @@ function MapPanel({ src, info, pts, fit, paths, onPick, waiting, fp, frameSrc, s
   );
 }
 
-const GREEN = "#3fe08a", RED = "#ff4d5e", TEAL = "#3fd6e0", ORANGE = "#ffa040";
-const fpColour = (fp: Footprint, far: boolean) => far ? (fp.registered ? TEAL : ORANGE) : (fp.registered ? GREEN : RED);
+const GREEN = "#3fe08a", RED = "#ff4d5e", TOP = "#ffd23f";
+const fpColour = (fp: Footprint) => (fp.registered ? GREEN : RED);
 const fpTitle = (fp: Footprint) => fp.how === "points" ? "Registered: placed by the points on the map"
+  : fp.how === "map-match" ? "Registered: lined up with the map by matching"
   : fp.how === "points-poor" ? "Not registered well: the points disagree by more than 3 m" : "Not registered: placed by the flight data only";
 
-function FootprintKey({ fp }: { fp: Footprint | null }) {
+function FootprintKey({ fp, aligning }: { fp: Footprint | null; aligning: boolean }) {
+  if (aligning) return <span className="muted">Lining the frame up with the map…</span>;
   if (!fp) return <span className="muted">Not on the map yet: pick four points, or a recording with flight data.</span>;
   return <span className="row" style={{ gap: 10, flexWrap: "wrap" }}>
-    <span><span style={{ color: fpColour(fp, false) }}>■</span> {fpTitle(fp)}</span>
-    <span><span style={{ color: fpColour(fp, true) }}>▬ ▬</span> upper part of the frame</span>
+    <span><span style={{ color: fpColour(fp) }}>▭</span> Outline: {fpTitle(fp)}</span>
+    <span><span style={{ color: TOP }}>━</span> top edge and upper part of the image</span>
+    {fp.note && <span className="muted">{fp.note}</span>}
   </span>;
 }

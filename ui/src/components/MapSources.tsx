@@ -136,7 +136,7 @@ export default function MapSource({ role, cat, path, onPath, centres, onCatalogu
 const AUTH: [string, string][] = [["none", "No sign-in"], ["basic", "User name and password"], ["header", "API key in a header"], ["query", "API key in the address"]];
 
 /** Add or change a server on our network: kind, address, sign-in; connect to list its layers, then pick one. */
-function ServerForm({ cat, start, onClose, onSaved }: { cat: Catalogue; start: Partial<Source>; onClose: () => void; onSaved: (s: Source) => void }) {
+export function ServerForm({ cat, start, onClose, onSaved }: { cat: Catalogue; start: Partial<Source>; onClose: () => void; onSaved: (s: Source) => void }) {
   const [s, setS] = useState<Partial<Source>>({ auth: { type: "none" }, ...start });
   const [layers, setLayers] = useState<{ name: string; title: string; ok?: boolean; matrix_sets?: string[] }[] | null>(null);
   const [formats, setFormats] = useState<string[]>([]);

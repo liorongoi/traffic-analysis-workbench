@@ -318,19 +318,22 @@ def frame_on_ground(frame: np.ndarray, G: np.ndarray, frame_ll: "LocalFrame", bo
 
 REGISTERED_BGR = (60, 200, 60)        # green: placed by the map (or by points picked on the map)
 UNREGISTERED_BGR = (60, 60, 230)      # red: flight data only, or not placed
-FAR_BGR = {True: (200, 220, 40), False: (40, 140, 255)}   # the far part: teal when registered, orange when not
+TOP_EDGE_BGR = (40, 215, 255)         # yellow: the top edge of the image (its far side) and the upper part
 
 
 def draw_footprint(img: np.ndarray, near_px: np.ndarray, far_px: np.ndarray, registered: bool,
                    thickness: int = 2) -> np.ndarray:
-    """Draw a footprint (``ground_parts`` in the picture's pixels) on ``img``: the near part green when the frame is
-    registered and red when not, the far part in its own colour, each lightly filled."""
-    for poly, col in ((far_px, FAR_BGR[registered]), (near_px, REGISTERED_BGR if registered else UNREGISTERED_BGR)):
-        p = np.round(np.asarray(poly) * 8).astype(np.int32)
-        fill = img.copy()
-        cv2.fillPoly(fill, [p], col, lineType=cv2.LINE_AA, shift=3)
-        cv2.addWeighted(fill, 0.18, img, 0.82, 0, dst=img)
-        cv2.polylines(img, [p], True, col, thickness, cv2.LINE_AA, shift=3)
+    """Draw a footprint (``ground_parts`` in the picture's pixels) on ``img``: its outline green when the frame is
+    registered and red when not, the upper part of the image tinted yellow and its top edge a thick yellow line."""
+    col = REGISTERED_BGR if registered else UNREGISTERED_BGR
+    far = np.round(np.asarray(far_px) * 8).astype(np.int32)
+    whole = np.round(np.r_[np.asarray(far_px)[:2], np.asarray(near_px)[2:]] * 8).astype(np.int32)
+    fill = img.copy()
+    cv2.fillPoly(fill, [whole], col, lineType=cv2.LINE_AA, shift=3)
+    cv2.fillPoly(fill, [far], TOP_EDGE_BGR, lineType=cv2.LINE_AA, shift=3)
+    cv2.addWeighted(fill, 0.15, img, 0.85, 0, dst=img)
+    cv2.polylines(img, [whole], True, col, thickness, cv2.LINE_AA, shift=3)
+    cv2.line(img, tuple(far[0]), tuple(far[1]), TOP_EDGE_BGR, thickness * 2 + 1, cv2.LINE_AA, shift=3)
     return img
 
 
