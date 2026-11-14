@@ -274,6 +274,12 @@ class GeoBody(BaseModel):
     check_only: bool = False
 
 
+class GeoregBody(BaseModel):
+    map_path: str
+    corners: list[float] | None = Field(None, min_length=4, max_length=4)
+    dtm_path: str | None = None
+
+
 class MapServerBody(BaseModel):
     id: str | None = None
     name: str = Field("", max_length=120)
@@ -2361,6 +2367,44 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         cs = [float(v) for v in corners.split(",")] if corners else None
         data = _geo_call(lambda: frame_overlay(m, svc, version_id, t, dtm, map, cs))
         return Response(data, media_type="image/png", headers={"Cache-Control": "private, max-age=600"})
+
+    # ---------- drone video: typed platform data, and the whole video registered ahead (video_georeg) ----------
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/platform")
+    def platform_get_(version_id: int, m: Mission = Depends(mission)):
+        from ..video_georeg import platform_get
+        _video(m)
+        return {"platform": platform_get(m.con, version_id)}
+
+    @app.put("/api/missions/{mission_id}/recordings/{version_id}/platform")
+    def platform_put(version_id: int, body: dict, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Platform data typed by the operator (wins over the video's own), and a square to search in."""
+        from ..video_georeg import PlatformError, platform_set
+        _video(m)
+        try:
+            return {"platform": platform_set(m.con, version_id, body, u.username)}
+        except PlatformError as exc:
+            raise ApiError(400, "platform", str(exc)) from None
+
+    @app.get("/api/missions/{mission_id}/recordings/{version_id}/georeg")
+    def georeg_get(version_id: int, map: str | None = None, m: Mission = Depends(mission)):
+        """The preparation's progress, and the prepared outlines (with this map) for playing back."""
+        from ..video_georeg import job_status, load_track, track_outlines
+        _video(m)
+        tr = load_track(m, version_id, map) if map else None
+        return {"job": job_status(m.id, version_id),
+                "track": None if tr is None else {k: tr[k] for k in ("fps", "made_at", "seconds", "summary", "matcher")}
+                | {"outlines": track_outlines(tr)}}
+
+    @app.post("/api/missions/{mission_id}/recordings/{version_id}/georeg")
+    def georeg_start(version_id: int, body: GeoregBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """Register the whole video to the map in the background (``map_path``, ``corners``, ``dtm_path``)."""
+        from ..video_geo import load_map
+        from ..video_georeg import start
+        _video(m)
+        _geo_call(lambda: load_map(body.map_path, body.corners))
+        mid = m.id
+        return {"job": start(lambda: DataRoot(data_root).open_mission(mid), mid, version_id, body.map_path,
+                             body.corners, body.dtm_path, u.username)}
 
     # ---------- where maps and ground heights come from (map_sources, terrain) ----------
     def _src_call(fn):

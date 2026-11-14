@@ -734,7 +734,8 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
 .mapsrc-tabs { margin-bottom: 2px; }
 .mapsrc-tabs button { flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 12px; min-height: 46px; text-align: start; }
 .mapsrc-tabs button small { color: var(--muted); font-size: 12px; font-weight: 500; }
-.mapsrc label.small, .serverform label.small { display: grid; gap: 4px; }
+.mapsrc label.small, .serverform label.small, .platform label.small { display: grid; gap: 4px; }
+.platform .grow { flex: 1 1 220px; }
 .serverform .grow { flex: 1 1 200px; }
 .serverform { background: transparent; }
 .maplayers label { cursor: pointer; }

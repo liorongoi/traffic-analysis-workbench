@@ -261,8 +261,12 @@ def placement(m, svc, version_id: int, t: float, dtm_path: str | None = None, ma
     with a map, the frame is then matched to the map, which lines it up (registered: green, ``how`` "map-match");
     when the match fails it stays where the flight data put it (not registered: red). A terrain file gives the
     ground's height under the camera for flight data that only knows the height above sea level."""
+    from .video_georeg import track_path
+    tp = track_path(m, version_id)
     key = (m.id, version_id, round(t, 1), dtm_path, map_path, tuple(corners or ()),
-           m.con.execute("SELECT MAX(id) FROM camera_geo").fetchone()[0])
+           m.con.execute("SELECT MAX(id) FROM camera_geo").fetchone()[0],
+           m.con.execute("SELECT MAX(id) FROM video_platform WHERE source_version_id=?", (version_id,)).fetchone()[0],
+           tp.stat().st_mtime if tp.is_file() else None)
     with _placed_lock:
         if key in _placed:
             return _placed[key]
@@ -285,46 +289,51 @@ def _placement(m, svc, version_id, t, dtm_path, map_path, corners):
         good = rms is not None and rms <= GOOD_RMS_M
         return (np.array(g["fit"]["homography"]), LocalFrame(*g["fit"]["origin"]), w, h,
                 "points" if good else "points-poor", good, None)
+    from .video_georeg import load_track, platform_get, sample_at, track_sample
     from .video_meta import stored
     try:
         path = svc.path(version_id)
     except Exception:  # noqa: BLE001 - the file has gone: what was read before is still used
         path = None
+    if map_path:                                       # prepared ahead with this map: use it as it is
+        tr = load_track(m, version_id, map_path)
+        x = track_sample(tr, t) if tr else None
+        if x is not None:
+            if x["G"] is None:
+                return None
+            return (np.array(x["G"]).reshape(3, 3), LocalFrame(*tr["origin"]), w, h, x["how"], x["registered"],
+                    "Prepared ahead." if x["registered"] else "Prepared ahead: the map match did not work here.")
     tel = stored(m.con, version_id, path)
-    s = tel.at(t) if tel is not None else None
-    if not s or s.get("lat") is None:
+    s, ground = sample_at(m.con, tel, platform_get(m.con, version_id), t, dtm_path)
+    if s is None:
         return None
     frame = LocalFrame(float(s["lat"]), float(s["lon"]))
-    ground = None
-    if dtm_path:
-        from .terrain import TerrainError, load_terrain
-        try:
-            v = load_terrain(dtm_path).height_at(s["lat"], s["lon"])
-            ground = float(v) if np.isfinite(v) else None
-        except TerrainError:
-            ground = None
+    sea = None
+    if ground is None and s.get("alt") is not None and s.get("rel_alt") is None and s.get("agl") is None:
+        ground, sea = 0.0, "The height is above sea level and there is no terrain: the ground is taken at sea level."
     G = pose_from_telemetry(s, w, h, frame, None, ground)
     if G is None:
         return None
     if not map_path or path is None:
-        return G, frame, w, h, "flight-data", False, None
+        return G, frame, w, h, "flight-data", False, sea
     # line the frame up with the map: draw the map as the flight data says the camera sees it, and match
     from .georeg import snap_to_map
     from .video import frame_at
     try:
         gm = load_map(map_path, corners)
     except GeoError:
-        return G, frame, w, h, "flight-data", False, None
+        return G, frame, w, h, "flight-data", False, sea
     f = frame_at(path, t)
     if f is None:
-        return G, frame, w, h, "flight-data", False, None
+        return G, frame, w, h, "flight-data", False, sea
     img = f.image if f.image.shape[:2] == (h, w) else cv2.resize(f.image, (w, h), interpolation=cv2.INTER_AREA)
     T = np.eye(3)
     e, n = gm.frame.to_en(frame.lat0, frame.lon0)
     T[0, 2], T[1, 2] = float(e), float(n)
     snap = snap_to_map(img, T @ G, gm, _matcher())
     if snap.G is None:
-        return G, frame, w, h, "flight-data", False, f"The map match did not work here ({snap.reason})."
+        return G, frame, w, h, "flight-data", False, \
+            " ".join(x for x in (f"The map match did not work here ({snap.reason}).", sea) if x)
     return snap.G, gm.frame, w, h, "map-match", True, f"Lined up with the map: moved {snap.shift_m:.1f} m."
 
 

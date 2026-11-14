@@ -1076,6 +1076,16 @@ CREATE TABLE camera_geo (                  -- a fixed camera on the map (video_g
 """,
     26: """
 ALTER TABLE camera_geo ADD COLUMN dtm_path TEXT;          -- the terrain (ground heights) file picked, or NULL
+-- Platform data the operator typed for a recording (video_georeg): position, height, angles, lens, and a square on
+-- the map to search in when the video has no position. Newest row wins.
+CREATE TABLE video_platform (
+  id INTEGER PRIMARY KEY,
+  source_version_id INTEGER NOT NULL REFERENCES source_version(id),
+  data TEXT NOT NULL,                      -- JSON (video_georeg.PLATFORM_FIELDS, search_box)
+  author TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_video_platform ON video_platform(source_version_id);
 """,
 }
 
