@@ -141,7 +141,11 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
   const dataLabel = (ev: any) => (ev.sources as Ref[]).map((r) => dsLabel(s, missionId, r)).join(" + ");
   return (
     <div className="grid" style={{ gap: 10 }}>
-      <RunModeCard s={s} missionId={missionId} act={act} />
+      <div className="runmode-line">
+        <span><b>{s.auto?.run_mode === "auto" ? "Full auto" : "Manual decisions"}</b>
+          {s.auto?.run_mode === "auto" ? <> · {s.auto.new_reviews} of {s.auto.auto_min_reviews} new decisions toward the next round</> : " · nothing trains or changes model by itself"}</span>
+        <a href={`#/m/${missionId}/setup`}>Change in mission setup</a>
+      </div>
       {s.video ? (
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Recordings that can teach a model</h2>
@@ -680,6 +684,21 @@ function SavedModelsCard({ s, missionId, act }: { s: any; missionId: string; act
         </div>)}
     </div>
   );
+}
+
+/** The run mode card on its own, for the mission's setup page: chosen once, before the learning runs. */
+export function MissionRunMode({ missionId }: { missionId: string }) {
+  const [s, setS] = useState<any>(null);
+  const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
+  const load = useCallback(async () => setS(await api(`/missions/${missionId}/learning`)), [missionId]);
+  useEffect(() => { load().catch(() => undefined); }, [load]);
+  const act: Act = async (fn, ok) => {
+    setMsg(null);
+    try { const r = await fn(); if (ok) setMsg({ kind: "ok", text: ok(r) }); await load(); }
+    catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }
+  };
+  if (!s) return null;
+  return <div className="grid" style={{ gap: 8 }}><RunModeCard s={s} missionId={missionId} act={act} />{msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}</div>;
 }
 
 /** Run mode: the operator decides each step, or the automatic loop runs rounds and adopts a better model by itself. */
