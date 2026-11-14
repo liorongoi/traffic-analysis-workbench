@@ -19,6 +19,11 @@ Rules:
 - Occlusion: a track that is not matched keeps its predicted motion for up to
   `gap_s` seconds. If it is matched again within that time it is the same
   track. After that the track is closed.
+- Stop and go: a target that stops keeps its track while it stands (the
+  detector still sees it, so it keeps matching). A confirmed target that was
+  standing still when it was lost (hidden by a bus passing in front, say) is
+  kept for `still_hold_s` and taken up again where it stood if it looks
+  alike, so it moves on under the same ID.
 - Re-entry: a new track that starts within `reentry_s` of a closed track and
   near where that track was last predicted is flagged "possible duplicate" of
   it. The tracker never merges them silently; an operator decides.
@@ -71,6 +76,12 @@ class TrackerParams:
     # A box mostly inside a box a track holds on this frame (or holding one), of the same family, starts no track:
     # half a person, or two people in one box, next to a person already followed. 0 turns it off.
     nested_ioa: float = 0.8
+    # Stop and go ("byte" with re-linking only): a confirmed track that was standing still (its centre moving less
+    # than still_speed box heights a second) when it lost its target is kept this many seconds, instead of
+    # gap_s + relink_s, and re-linked where it stood. A car waiting at a light behind a passing truck stays one
+    # target. 0 turns it off.
+    still_hold_s: float = 6.0
+    still_speed: float = 0.25
 
 
 def appearance(img, box) -> list[float] | None:
@@ -170,6 +181,7 @@ class Tracker:
     def from_state(cls, s: dict) -> "Tracker":
         params = dict(s["params"])
         params.setdefault("algo", "iou")          # checkpoints written before the Kalman tracker resume as they began
+        params.setdefault("still_hold_s", 0.0)    # and those written before stop-and-go holding, without it
         tr = cls(s["w"], s["h"], TrackerParams(**params))
         tr.counter = s["counter"]
         tr.tracks = [Track(**t) for t in s["tracks"]]
@@ -313,7 +325,7 @@ class Tracker:
             if i in used_t:
                 keep.append(tr)
                 continue
-            if t - tr.t > self.p.gap_s + (self.p.relink_s if byte and tr.state == "confirmed" else 0.0):
+            if t - tr.t > self._hold(tr):
                 closed.append(self._close(tr, "left_frame" if self._touches_edge(tr.box) else "lost"))
             else:
                 keep.append(tr)
@@ -349,6 +361,22 @@ class Tracker:
         self.tracks = keep
         self.recent = [r for r in self.recent if t - r["t"] <= self.p.reentry_s]
         return obs, closed, new
+
+    def _hold(self, tr: Track) -> float:
+        """How long a track that lost its target is kept: gap_s; a confirmed one relink_s longer, and one that was
+        standing still (stop and go) still_hold_s."""
+        if self.p.algo != "byte" or tr.state != "confirmed":
+            return self.p.gap_s
+        keep = self.p.gap_s + self.p.relink_s
+        if self.p.relink_s > 0 and self.p.still_hold_s > 0 and self.still(tr):
+            keep = max(keep, self.p.still_hold_s)
+        return keep
+
+    def still(self, tr: Track) -> bool:
+        """Standing still: its centre moved less than still_speed box heights a second when last seen."""
+        h = max(tr.box[3] - tr.box[1], 1.0)
+        vx, vy = (tr.v[0] + tr.v[2]) / 2, (tr.v[1] + tr.v[3]) / 2
+        return tr.hits > 1 and (vx * vx + vy * vy) ** 0.5 < self.p.still_speed * h
 
     @staticmethod
     def _look(tr: Track, look: list[float]) -> None:

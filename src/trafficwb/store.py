@@ -1166,6 +1166,8 @@ class MissionConfig:
     crowd_alert: int | None = None   # video: list the periods with this many people or more in view at once
     analyse_new: bool = False        # video: new videos in the input folder are analysed with the mission's model
                                      # as they arrive (always so in full auto)
+    track_min_frames: int | None = None  # video: analysed frames a target must be seen on before it counts as a target
+                                         # (None: 5 with the standard detector, 3 with SAM 3.1 alone)
 
     def sources(self) -> list[str]:
         """Every source folder of the mission, the first being source_dir."""
@@ -1237,6 +1239,8 @@ def validate(cfg: MissionConfig, data_root: Path, min_free_bytes: int = 1 << 30)
         v.errors.append(f"Camera must be one of {sorted(CAMERAS)}.")
     if cfg.sam3_interval_s is not None and not (0.2 <= cfg.sam3_interval_s <= 10):
         v.errors.append("SAM 3.1 in video runs every 0.2 to 10 seconds of the recording.")
+    if cfg.track_min_frames is not None and not (1 <= cfg.track_min_frames <= 30):
+        v.errors.append("Frames before a target counts must be 1 to 30.")
     if cfg.sam3_words is not None:
         from .sam3 import vehicle_prompts
         try:
