@@ -553,6 +553,21 @@ def test_export_leaves_out_events_under_the_chosen_confidence(two_cars):
     assert [r["event_id"] for r in rows] == [a.key] and float(rows[0]["score"]) == pytest.approx(a.score)
 
 
+def test_job_progress_counts_the_video_in_progress():
+    # A single long video: the bar and the time left move before the video ends.
+    import time as _t
+
+    from trafficwb.web.jobs import Job
+    j = Job("m", "scan_and_process", total=1)
+    j.started = _t.time() - 600
+    j.control.within = 0.25
+    s = j.snapshot()
+    assert s["progress"] == 0.25 and s["done"] == 0
+    assert 1700 <= s["eta_s"] <= 1900 and s["eta_basis"] == "estimated from the part analysed so far"
+    j.done, j.control.within = 1, 0.0
+    assert j.snapshot()["progress"] == 1.0
+
+
 def test_new_videos_after_the_first_run_are_queued_when_the_mission_follows_them(tmp_path):
     m = mission(tmp_path, {"a.mp4": (1.0, car_scene, False)})
     assert m.con.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 1

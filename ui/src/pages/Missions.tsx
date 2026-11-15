@@ -5,7 +5,7 @@ const DeleteMissionDialog = lazy(() => import("./Mission").then((mod) => ({ defa
 
 type Review = { unreviewed: number; first_unreviewed: number | null; approved: number; processed: number; latest: number | null };
 type M = { id: string; name: string; input_type: string; mode: string; processing: string; monitoring: boolean; created_at: string;
-  status: Record<string, number>; job: { state: string; done: number; total: number } | null; review: Review | null;
+  status: Record<string, number>; job: { state: string; done: number; total: number; progress?: number | null } | null; review: Review | null;
   attention: { severity: string; message: string } | null };
 
 export default function Missions() {
@@ -108,7 +108,7 @@ function MissionCard({ m, reload }: { m: M; reload: () => void }) {
   const total = m.status.source_versions;
   const done = job ? job.done : r?.processed ?? total;
   const of = job ? job.total : video ? total : Math.max(total, r?.processed ?? 0);
-  const pct = of ? Math.round((100 * done) / of) : 0;
+  const pct = job?.progress != null ? Math.round(100 * job.progress) : of ? Math.round((100 * done) / of) : 0;
   const act = async (fn: () => Promise<string>) => {
     setBusy(true); setMsg(null);
     try { setMsg({ kind: "ok", text: await fn() }); } catch (e) { setMsg({ kind: "err", text: (e as ApiError).message }); }

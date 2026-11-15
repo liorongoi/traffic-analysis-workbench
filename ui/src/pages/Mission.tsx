@@ -66,7 +66,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
       ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []),
       ["results", "Results"], ["night", "Night review"], ["views", "Camera views"], ["learning", "Learning"]];
   const job = m.job && ["running", "paused"].includes(m.job.state) ? m.job : null;
-  const pct = job && job.total ? Math.round((100 * job.done) / job.total) : null;
+  const pct = job && job.total ? Math.round(100 * (job.progress ?? job.done / job.total)) : null;
   const facts = (sorting ? ["Still images", "Indoor and outdoor", m.config.iana_zone]
     : [isVideo ? "Video" : "Still images", cap(m.config.mode.replace(/_/g, " ")), m.config.iana_zone,
       DETECTOR_LABEL[m.config.detector ?? "standard"] ?? "Standard detector"]).join(" · ");
@@ -116,7 +116,7 @@ function JobCard({ job, mid, reload, unit }: { job: Job | null; mid: string; rel
     try { await post(`/missions/${mid}/job${path}`); reload(); } catch (e) { setErr((e as ApiError).message); }
   };
   const active = job && ["running", "paused"].includes(job.state);
-  const pct = job && job.total ? Math.round((100 * job.done) / job.total) : 0;
+  const pct = job && job.total ? Math.round(100 * (job.progress ?? job.done / job.total)) : 0;
   return (
     <div className="card">
       <h2>{job?.kind === "search" ? "Search" : job?.kind === "teach" ? "SAM 3.1 labelling for training" : "Processing"}</h2>

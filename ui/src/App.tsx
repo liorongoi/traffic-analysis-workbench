@@ -58,7 +58,7 @@ export default function App() {
   );
 }
 
-const ACCEL: Record<string, string> = { cuda: "GPU ready", directml: "GPU ready", cpu: "Running on CPU" };
+const ACCEL: Record<string, string> = { cuda: "GPU ready", directml: "GPU ready", coreml: "Apple GPU ready", cpu: "Running on CPU" };
 
 /** Where models run, and whether any mission is processing right now. */
 function Status() {

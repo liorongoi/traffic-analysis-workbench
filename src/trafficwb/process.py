@@ -35,6 +35,7 @@ class RunControl:
         self._go.set()
         self.cancelled = False
         self.stage = "idle"
+        self.within = 0.0       # how far into the file in progress (0 to 1): a long video moves the bar before it ends
 
     def pause(self) -> None:
         self._go.clear()

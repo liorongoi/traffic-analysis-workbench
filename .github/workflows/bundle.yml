@@ -546,6 +546,11 @@ jobs:
           test -d "$LANEPULSE_HOME/data/keep-me"
           PY="$LANEPULSE_HOME/runtime/python/bin/python3"
           "$PY" -c "from trafficwb import training_env as t; s = t.status(wait=True); print(s); assert s['state'] == 'ready' and s['coco_weights'], s"
+          # Core ML (Apple GPU, Neural Engine, processor) is in the app's ONNX Runtime, and a detector opens with it
+          # (asked for by name; on "auto" it is kept only where it is measured faster).
+          "$PY" -c "import onnxruntime as o; p = o.get_available_providers(); print(p); assert 'CoreMLExecutionProvider' in p"
+          TWB_MODELS="$LANEPULSE_HOME/models" "$PY" -c "from trafficwb import models; from trafficwb.detect import YoloxDetector; d = YoloxDetector(models.find('yolox-s'), accelerator='coreml'); print(d.runtime.record())"
+          TWB_MODELS="$LANEPULSE_HOME/models" "$PY" -c "from trafficwb import models; from trafficwb.detect import YoloxDetector; d = YoloxDetector(models.find('yolox-s'), accelerator='auto'); print(d.runtime.record())"
           # A newer build with the same packages: only LanePulse itself is installed again.
           echo "${{ steps.mac.outputs.version }}-next" > "$RUNNER_TEMP/LanePulse.app/Contents/Resources/build.txt"
           "$RUNNER_TEMP/LanePulse.app/Contents/MacOS/LanePulse"
