@@ -977,3 +977,4 @@ details.fold > .card { margin-top: 10px; }
 .newm-v > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .newm-v.bad > span { color: var(--bad); }
 .newm-own { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line-strong); background: var(--panel-2); }
+.vid-switch { font-size: 15px; font-weight: 600; max-width: 360px; }

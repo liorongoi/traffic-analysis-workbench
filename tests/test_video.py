@@ -564,3 +564,25 @@ def test_new_videos_after_the_first_run_are_queued_when_the_mission_follows_them
         "SELECT f.rel_path FROM run_item i JOIN source_version v ON v.id=i.source_version_id "
         "JOIN source_file f ON f.id=v.source_file_id WHERE i.run_id=?", (run_id,))]
     assert names == ["b.mp4"]
+
+
+def test_two_scans_at_once_queue_new_videos_once(tmp_path):
+    import threading as _t
+    m = mission(tmp_path, {"a.mp4": (1.0, car_scene, False)})
+    m.update_config("lior", "follow new videos", analyse_new=True)
+    for n in ("b.mp4", "c.mp4"):
+        make_video(tmp_path / "src" / n, 1.0, car_scene)
+    errors = []
+
+    def scan():
+        own = DataRoot(tmp_path / "data").open_mission(m.id)
+        try:
+            cycle(own, stability_seconds=0)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    ts = [_t.Thread(target=scan) for _ in range(4)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert errors == []
+    assert m.con.execute("SELECT COUNT(*) FROM run_item").fetchone()[0] == 3

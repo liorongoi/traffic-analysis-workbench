@@ -918,7 +918,8 @@ class JobManager:
                 self.start(mid, kind="process")
 
             mon = Monitor(m, interval_seconds=self.monitor_interval, stability_seconds=self.stability, on_cycle=on_cycle,
-                          active=self._watches)
+                          # No scan while this mission's own job runs: the job finishes first, then new videos are picked up.
+                          active=lambda cfg, mid=mission_id: self._watches(cfg) and not self.busy(mid))
             mon.start()
             self.monitors[mission_id] = mon
         elif not enabled and mission_id in self.monitors:
