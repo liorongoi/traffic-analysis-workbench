@@ -46,7 +46,7 @@ table.t:not(:has(thead)) td:first-child:nth-last-child(2) { white-space: nowrap;
 .tablewrap table.t th, .catalog-scroll table.t th { top: 0; z-index: 1; }
 .catalog-scroll { max-height: max(260px, calc(100dvh - 330px)); }
 /* The results list: as many rows as the window holds, with the filters and the pager in view. */
-.results-wrap { max-height: max(260px, calc(100dvh - var(--bar-h) - 320px)); }
+.results-wrap { max-height: max(260px, calc(100dvh - var(--bar-h) - 250px)); }
 table.t td { padding-top: 7px; padding-bottom: 7px; }
 
 /* ---- Figures: one compact strip, not two rows of large tiles ---- */
@@ -86,3 +86,41 @@ td.mono.bidi, .mono.bidi { font-family: var(--sans); font-size: inherit; font-va
 
 /* Detector choices in a wide card sit side by side instead of three full-width rows. */
 .set-wide .choices, .card.set-wide .choices { grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+
+/* ---- One bar on mission pages: the mission's name, tabs, Review and setup sit in the application bar ----
+   (Nielsen #8: about 65 px more room for the work on every mission screen). The app's own links give way: the
+   back arrow returns to the missions, and the jump box (Ctrl K) reaches every other page. */
+.top-slot:empty { display: none; }
+.top-slot { display: flex; flex: 1 1 auto; min-width: 0; align-self: stretch; }
+.top:has(.top-slot:not(:empty)) .top-nav,
+.top:has(.top-slot:not(:empty)) .brand-wordmark { display: none; }
+.top:has(.top-slot:not(:empty)) .jump { width: clamp(150px, 14vw, 280px); }
+.top:has(.top-slot:not(:empty)) .clock { display: none; }
+.top-slot .mstrip { margin: 0; border: 0; flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; gap: 8px; align-self: stretch; align-items: center; }
+.top-slot .mstrip h1 { font-size: 17px; max-width: 24ch; flex: 0 1 auto; min-width: 6ch; }
+.top-slot .mstrip-back { flex: none; }
+.top-slot .mstrip-tabs { align-self: stretch; margin: 0 0 0 4px; min-width: 0; flex: 0 1 auto; overflow-x: auto; scrollbar-width: none; }
+.top-slot .mstrip-tabs a { display: flex; align-items: center; padding: 0 10px; }
+.top-slot .tag { white-space: nowrap; flex: none; }
+.top-slot .btn.attn { min-height: 32px; padding: 0 12px; flex: none; }
+@media (max-width: 1400px) { .top:has(.top-slot:not(:empty)) .top-tools .status-dot { display: none; } }
+
+/* ---- Settings: the parts and their sections in a list beside the cards (Windows 11 Settings pattern) ---- */
+.settings-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.set-index { display: flex; gap: 4px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.set-index > div > a { display: flex; flex-direction: column; gap: 1px; padding: 8px 14px; color: var(--text-2); font-weight: 600; border-radius: 8px; white-space: nowrap; }
+.set-index > div > a small { color: var(--muted); font-weight: 500; font-size: 12px; }
+.set-index > div > a:hover { background: rgba(255, 255, 255, .04); text-decoration: none; color: var(--text); }
+.set-index > div > a.on { color: var(--text); background: var(--panel-2); }
+.set-index ul { display: none; }
+@media (min-width: 1100px) {
+  .settings-body { grid-template-columns: 230px minmax(0, 1fr); }
+  .set-index { display: block; border: 0; position: sticky; top: calc(var(--bar-h) + 12px); max-height: calc(100dvh - var(--bar-h) - 24px); overflow-y: auto; }
+  .set-index > div + div { margin-top: 4px; }
+  .set-index > div > a.on { box-shadow: inset 3px 0 0 var(--lane); }
+  .set-index ul { display: block; list-style: none; margin: 4px 0 8px; padding: 0 0 0 14px; border-left: 1px solid var(--line); margin-left: 14px; }
+  .set-index ul button { width: 100%; justify-content: flex-start; min-height: 30px; padding: 4px 10px; border: 0; background: transparent;
+    color: var(--muted); font-weight: 500; font-size: 13px; text-align: start; white-space: normal; clip-path: none; filter: none; }
+  .set-index ul button:hover:not(:disabled) { color: var(--text); background: rgba(255, 255, 255, .04); border: 0; }
+  .set-index ul button.on { color: var(--text); }
+}

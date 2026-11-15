@@ -77,6 +77,9 @@ function DatasetPicker({ s, missionId, value, onChange, split = "train", label =
   );
 }
 
+const STEPS: [string, string][] = [["Prepare the data", "What your reviews can teach; freeze a dataset version"],
+  ["Train", "Train a detector on a version; earlier rounds"], ["Compare and put into use", "Evaluate, compare detectors, save, promote"]];
+
 const RATIOS: [string, string][] = [["70/15/15", "70 / 15 / 15"], ["80/10/10", "80 / 10 / 10"], ["60/20/20", "60 / 20 / 20"],
   ["70/20/10", "70 / 20 / 10"], ["75/15/10", "75 / 15 / 10"], ["50/25/25", "50 / 25 / 25"]];
 const BLOCK_DAYS: [number, string][] = [[1, "1 day"], [2, "2 days"], [3, "3 days"], [7, "1 week"], [14, "2 weeks"], [30, "30 days"], [90, "90 days"]];
@@ -95,6 +98,7 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
   const [evalModel, setEvalModel] = useState("");
   const [open, setOpen] = useState<number | null>(null);
   const [cmp, setCmp] = useState<{ cur: number | null; prev: number | null }>({ cur: null, prev: null });
+  const [step, setStep] = useState<number | null>(null);   // null: the first step not done yet
 
   const load = useCallback(async () => setS(await api(`/missions/${missionId}/learning`)), [missionId]);
   useEffect(() => { load(); }, [load]);
@@ -135,6 +139,9 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
   if (!s) return <div className="muted">Loading…</div>;
   const e = s.eligibility;
   const prod = s.production;
+  const done = [s.datasets.length > 0, (s.training_runs?.length ?? 0) > 0, s.evaluations.some((x: any) => x.state === "completed")];
+  const firstOpen = done.findIndex((d) => !d);
+  const cur = step ?? (firstOpen < 0 ? 2 : firstOpen);
   const eRefs = evalRefs ?? defaultRefs(s, missionId);
   const savedByPack = new Map<string, any>((s.saved_models as any[]).map((x) => [`${x.model_name}/${x.model_version}`, x]));
   const modelLabel = (md: any) => { const sv = savedByPack.get(`${md?.name}/${md?.version}`); return sv ? `${sv.name} (${md.name} ${md.version})` : `${md?.name ?? "?"} ${md?.version ?? ""}`; };
@@ -146,6 +153,21 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
           {s.auto?.run_mode === "auto" ? <> · {s.auto.new_reviews} of {s.auto.auto_min_reviews} new decisions toward the next round</> : " · nothing trains or changes model by itself"}</span>
         <a href={`#/m/${missionId}/setup`}>Change in mission setup</a>
       </div>
+      {/* Three steps in the order they are done (Nielsen #5: a later step says what it needs first, instead of a
+          button that fails). Each tab shows only its own panels, so the page no longer scrolls through eight. */}
+      <ol className="learn-steps" role="tablist" aria-label="Learning steps">
+        {STEPS.map(([title, hint], i) => (
+          <li key={title} role="presentation">
+            <button role="tab" aria-selected={cur === i} className={`${cur === i ? "on" : ""}${done[i] ? " done" : ""}`} onClick={() => setStep(i)}>
+              <span className="n" aria-hidden="true">{done[i] ? "✓" : i + 1}</span>
+              <span><b>{title}</b><small>{hint}</small></span>
+            </button>
+          </li>))}
+      </ol>
+      {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
+      {cur > 0 && s.datasets.length === 0 && <div className="msg warn">Freeze a dataset version in step 1 first: training and
+        comparing use one. <button className="linkish" onClick={() => setStep(0)}>Go to step 1</button></div>}
+      {cur === 0 && <>
       {s.video ? (
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Recordings that can teach a model</h2>
@@ -225,8 +247,14 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
           </table>)}
       </div>
 
-      <TrainCard missionId={missionId} s={s} act={act} />
+      </>}
 
+      {cur === 1 && <>
+      <TrainCard missionId={missionId} s={s} act={act} />
+      <RoundsCard s={s} missionId={missionId} act={act} modelLabel={modelLabel} dataLabel={(r: Ref[]) => r.map((x) => dsLabel(s, missionId, x)).join(" + ")} />
+      </>}
+
+      {cur === 2 && <>
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Evaluate a model</h2>
         <div className="row">
@@ -284,8 +312,6 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
 
       <BenchmarkCard s={s} missionId={missionId} act={act} job={job} load={load} modelLabel={modelLabel} />
 
-      <RoundsCard s={s} missionId={missionId} act={act} modelLabel={modelLabel} dataLabel={(r: Ref[]) => r.map((x) => dsLabel(s, missionId, x)).join(" + ")} />
-
       <SavedModelsCard s={s} missionId={missionId} act={act} />
 
       <div className="card">
@@ -303,11 +329,12 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
           <li key={h.id}>{h.created_at}: {h.action === "promote" ? "promoted" : "rolled back from"} {h.name} {h.version} by {h.author}{h.note ? ` (${h.note})` : ""}</li>)}</ul>}
       </div>
 
-      <div className="card">
-        <h2 style={{ marginTop: 0 }}>What can learn</h2>
+      </>}
+
+      <details className="card learn-later">
+        <summary>What can learn, and what comes later</summary>
         <table className="t"><tbody>{s.adapters.map((a: any) => <tr key={a.algorithm}><td>{a.algorithm}</td><td>{a.adapter}</td><td>{a.status.replace("_", " ")}</td></tr>)}</tbody></table>
-      </div>
-      {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
+      </details>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, ApiError, Filter, fmtDuration, Job, plausibleFps, post, REVIEW_LABEL, ResultRow } from "../api";
 import { go } from "../router";
+import { useTopSlot } from "../components/TopSlot";
 import { ScoreSlider } from "../components/ScoreSlider";
 import SearchTab from "./Search";
 import EventsTab from "./Events";
@@ -32,6 +33,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   const [m, setM] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const [review, setReview] = useState<any>(null);
+  const slot = useTopSlot();
   const loadMission = useCallback(() => api(`/missions/${missionId}`).then(setM).catch((e: ApiError) => setErr(e.message)), [missionId]);
   // The mission list carries what waits for review, for the one button that is always the next step. It covers every
   // mission, so it is read when the page opens, after a change and when processing starts or ends, not on every tick.
@@ -63,22 +65,26 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   const facts = (sorting ? ["Still images", "Indoor and outdoor", m.config.iana_zone]
     : [isVideo ? "Video" : "Still images", cap(m.config.mode.replace(/_/g, " ")), m.config.iana_zone,
       DETECTOR_LABEL[m.config.detector ?? "standard"] ?? "Standard detector"]).join(" · ");
+  const strip = (
+  <div className="mstrip">
+    <a className="mstrip-back" href="#/" aria-label="All missions" title="All missions">‹</a>
+    <h1 className="bidi" title={facts}>{m.config.name}</h1>
+    {job ? <span className="tag live"><i aria-hidden="true" />{job.state === "paused" ? "Paused" : `Processing${pct != null ? ` ${pct}%` : ""}`}</span>
+      : m.config.monitoring_enabled ? <span className="tag watch"><i aria-hidden="true" />Watching the folder</span> : null}
+    <nav className="tabs mstrip-tabs" aria-label="Mission">
+      {(sorting ? [tabs[0], ["sort", "Indoor and outdoor"]] : tabs).map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""} aria-current={tab === k ? "page" : undefined}>{l}</a>)}
+    </nav>
+    <span className="grow" />
+    {!isVideo && !sorting && review?.unreviewed > 0 && review.first_unreviewed &&
+      <a className="btn attn" href={`#/m/${missionId}/i/${review.first_unreviewed}`}>Review {review.unreviewed}</a>}
+    <a className={`gear${tab === "setup" ? " on" : ""}`} href={`#/m/${missionId}/setup`} title={`This mission's setup: ${facts}`} aria-label="Mission setup"><GearIcon /></a>
+  </div>
+  );
   return (
     <div className="page">
-      {/* One strip instead of a breadcrumb, a title, a row of facts and a row of tabs: the work below gets the room. */}
-      <div className="mstrip">
-        <a className="mstrip-back" href="#/" aria-label="All missions" title="All missions">‹</a>
-        <h1 className="bidi" title={facts}>{m.config.name}</h1>
-        {job ? <span className="tag live"><i aria-hidden="true" />{job.state === "paused" ? "Paused" : `Processing${pct != null ? ` ${pct}%` : ""}`}</span>
-          : m.config.monitoring_enabled ? <span className="tag watch"><i aria-hidden="true" />Watching the folder</span> : null}
-        <nav className="tabs mstrip-tabs" aria-label="Mission">
-          {(sorting ? [tabs[0], ["sort", "Indoor and outdoor"]] : tabs).map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""} aria-current={tab === k ? "page" : undefined}>{l}</a>)}
-        </nav>
-        <span className="grow" />
-        {!isVideo && !sorting && review?.unreviewed > 0 && review.first_unreviewed &&
-          <a className="btn attn" href={`#/m/${missionId}/i/${review.first_unreviewed}`}>Review {review.unreviewed}</a>}
-        <a className={`gear${tab === "setup" ? " on" : ""}`} href={`#/m/${missionId}/setup`} title={`This mission's setup: ${facts}`} aria-label="Mission setup"><GearIcon /></a>
-      </div>
+      {/* One strip instead of a breadcrumb, a title, a row of facts and a row of tabs, and it sits in the application bar
+          itself, so mission pages have one bar and the work below gets the room. */}
+      {slot ? createPortal(strip, slot) : strip}
       {tab === "overview" && <Overview m={m} reload={load} />}
       {tab === "sort" && sorting && <SortingTab m={m} reload={load} />}
       {tab === "results" && !isVideo && <Results m={m} reload={load} />}

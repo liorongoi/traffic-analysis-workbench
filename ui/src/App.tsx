@@ -40,6 +40,7 @@ export default function App() {
         </a>
         <a className={`gear${inSettings ? " on" : ""}`} href="#/settings" title="Settings: one-time setup for this workstation"
           aria-label="Settings" aria-current={inSettings ? "page" : undefined}><GearIcon /></a>
+        <div id="top-slot" className="top-slot" />
         <nav className="top-nav" aria-label="Main navigation">
           <a href="#/" aria-current={section === "m" ? "true" : section !== "new" && !inSettings ? "page" : undefined}>Missions</a>
           <a href="#/new" aria-current={section === "new" ? "page" : undefined}>New mission</a>
