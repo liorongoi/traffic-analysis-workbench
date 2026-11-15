@@ -1,0 +1,106 @@
+/* "Night road": the 2027 look (proposal, switched on with <html data-look="2027">).
+   Graphite asphalt surfaces that step up in tone instead of outlines and cut corners; one typeface, Overpass, drawn
+   from the US highway-sign alphabet; soft rounded panels and controls; the amber lane-marking dash stays as the one
+   mark of where you are. Camera images remain the brightest thing on screen.
+   UX basis: Nielsen #4 (consistency and standards: controls look like the controls people use every day in
+   Windows 11 and macOS), #8 (aesthetic and minimalist design: no grid, no brackets, no chamfers, fewer borders);
+   Fluent 2 and Material 3: tonal elevation, 8 px control radius, 4 px spacing grid, sentence-case labels. */
+@import "@fontsource-variable/overpass";
+/* Overpass's middle dot sits tight against the next word: take that one character from the system face. */
+@font-face { font-family: "LP Dot"; src: local("Segoe UI"), local("Helvetica Neue"), local("Arial"), local("DejaVu Sans"); unicode-range: U+00B7; }
+
+:root[data-look="2027"] {
+  --bg: #0c0f14;
+  --surface: #141922;
+  --panel-2: #1a202b;
+  --field: #10141b;
+  --text: #e9edf3;
+  --text-2: #b4bdcb;
+  --muted: #8d97a8;
+  --line: rgba(255, 255, 255, .07);
+  --line-strong: rgba(255, 255, 255, .13);
+  --hover-bg: #212837;
+  --hover-line: rgba(255, 255, 255, .22);
+  --accent: #5ccff0;
+  --accent-hover: #8adcf5;
+  --accent-text: #04161d;
+  --accent-soft: rgba(92, 207, 240, .13);
+  --lane: #ffc24a;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --sans: "LP Dot", "Overpass Variable", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --display: "LP Dot", "Overpass Variable", "Segoe UI Variable", system-ui, sans-serif;
+  --elev-1: 0 1px 0 rgba(255, 255, 255, .04) inset, 0 8px 24px rgba(0, 0, 0, .28);
+}
+[data-look="2027"] body {
+  background: radial-gradient(90% 50% at 50% -10%, rgba(92, 207, 240, .07), transparent 60%), var(--bg);
+  font-size: 14.5px; letter-spacing: .003em;
+}
+[data-look="2027"] h1, [data-look="2027"] h2 { letter-spacing: -.01em; font-weight: 650; }
+[data-look="2027"] h1 { font-weight: 700; }
+
+/* Application bar: frosted, borderless. */
+[data-look="2027"] .top { background: rgba(12, 15, 20, .72); border-bottom-color: var(--line); backdrop-filter: blur(18px) saturate(1.4); }
+[data-look="2027"] .clock, [data-look="2027"] .build-version { font-family: var(--sans); font-variant-numeric: tabular-nums; }
+[data-look="2027"] .build-version { border-radius: 999px; }
+[data-look="2027"] .jump input, [data-look="2027"] .jump > div { border-radius: 999px; }
+
+/* Panels: one surface a step lighter than the road, rounded, no drawn outline, no cut corners. */
+[data-look="2027"] .card { clip-path: none; background: var(--surface); border-radius: var(--radius); box-shadow: var(--elev-1); }
+[data-look="2027"] .card::before, [data-look="2027"] .card::after { display: none; }
+[data-look="2027"] .card .card { background: var(--panel-2); box-shadow: none; }
+[data-look="2027"] .grid:has(> .card.stat) { border-radius: var(--radius); border-color: var(--line); background: var(--line); }
+[data-look="2027"] .grid > .card.stat { outline: 0; border-radius: 0; box-shadow: none; background: var(--surface); }
+[data-look="2027"] .tablewrap, [data-look="2027"] .catalog-scroll { border-radius: var(--radius); border-color: var(--line); background: var(--surface); }
+[data-look="2027"] .hud-figs, [data-look="2027"] .qs-figs { border-radius: var(--radius); overflow: hidden; }
+
+/* Controls: the shapes of a current desktop app. */
+[data-look="2027"] button, [data-look="2027"] .btn {
+  clip-path: none; filter: none; border-radius: var(--radius-sm); font-weight: 600; letter-spacing: .005em;
+  background: var(--panel-2); border-color: var(--line-strong); transition: background-color .12s, border-color .12s, box-shadow .12s;
+}
+[data-look="2027"] button.primary, [data-look="2027"] .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+[data-look="2027"] button.primary:hover:not(:disabled), [data-look="2027"] .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+[data-look="2027"] button.attn, [data-look="2027"] .btn.attn { background: rgba(255, 194, 74, .1); border-color: rgba(255, 194, 74, .5); color: #ffd58a; }
+[data-look="2027"] button.danger { background: transparent; }
+[data-look="2027"] button.primary:not(:disabled), [data-look="2027"] .btn.primary:not(.x) { box-shadow: 0 0 0 1px rgba(92, 207, 240, .5), 0 6px 18px rgba(92, 207, 240, .18); }
+[data-look="2027"] button.primary:not(:disabled), [data-look="2027"] .btn.primary { filter: none; }
+[data-look="2027"] button.attn, [data-look="2027"] .btn.attn { border-radius: 999px; }
+[data-look="2027"] button:focus-visible, [data-look="2027"] .btn:focus-visible, [data-look="2027"] input:focus-visible,
+[data-look="2027"] select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[data-look="2027"] input, [data-look="2027"] select, [data-look="2027"] textarea {
+  border-radius: var(--radius-sm); background-color: var(--field); border-color: var(--line-strong);
+}
+[data-look="2027"] input:hover, [data-look="2027"] select:hover { border-color: var(--hover-line); }
+[data-look="2027"] input::placeholder { font-family: var(--sans); }
+[data-look="2027"] .seg { border-radius: 10px; background: var(--field); border-color: var(--line); }
+[data-look="2027"] .seg button { border-radius: 7px; }
+[data-look="2027"] .seg button.on, [data-look="2027"] .seg button.on:hover:not(:disabled) { background: var(--hover-bg); box-shadow: 0 1px 2px rgba(0, 0, 0, .4); }
+[data-look="2027"] .choice { border-radius: 10px; border-color: var(--line); }
+[data-look="2027"] .choice:has(input:checked) { box-shadow: none; border-color: rgba(92, 207, 240, .6); }
+[data-look="2027"] .badge { border-radius: 999px; padding: 1px 10px; }
+[data-look="2027"] .msg { border-radius: 10px; border-left-width: 1px; }
+[data-look="2027"] .dialog, [data-look="2027"] .fx { border-radius: 16px; clip-path: none; background: var(--surface); }
+
+/* Tables: quiet header, roomy rows, the row under the pointer lifts. */
+[data-look="2027"] table.t th { background: var(--surface); text-transform: none; font-size: 12.5px; color: var(--muted); border-bottom-color: var(--line-strong); }
+[data-look="2027"] table.t td { border-bottom-color: var(--line); }
+[data-look="2027"] table.t tbody tr:hover td, [data-look="2027"] table.t tr.click:hover td { background: rgba(255, 255, 255, .035); }
+[data-look="2027"] table.t td.mono { font-family: var(--sans); font-variant-numeric: tabular-nums; }
+[data-look="2027"] table.t img { border-radius: 6px !important; }
+
+/* Tabs: text tabs with the amber lane dash under the current one (the dash is the one bold mark). */
+[data-look="2027"] .tabs a { border-radius: 8px 8px 0 0; }
+[data-look="2027"] .tabs a:hover, [data-look="2027"] .top-nav a:hover { background: rgba(255, 255, 255, .04); }
+
+/* Camera frames: rounded, without the targeting brackets. */
+[data-look="2027"] .player .stage, [data-look="2027"] .card video, [data-look="2027"] .card img { border-radius: 8px; }
+[data-look="2027"] .mthumb { border-radius: 8px; }
+[data-look="2027"] .mthumb::before, [data-look="2027"] .mthumb::after, [data-look="2027"] .stage::after { display: none; }
+
+/* Figures and times in the same face as everything else, lined up; the code face stays only for code. */
+[data-look="2027"] .mono, [data-look="2027"] .clock, [data-look="2027"] .tlabel { font-family: var(--sans); font-variant-numeric: tabular-nums; letter-spacing: 0; }
+[data-look="2027"] code, [data-look="2027"] kbd { font-family: var(--mono); }
+/* Text buttons in tool bars read as buttons: a quiet fill on hover, rounded like the rest. */
+[data-look="2027"] .iconbtn { border-radius: var(--radius-sm); padding: 6px 12px; color: var(--text-2); font-weight: 600; }
+[data-look="2027"] .iconbtn:hover:not(:disabled) { background: var(--hover-bg); color: var(--text); }

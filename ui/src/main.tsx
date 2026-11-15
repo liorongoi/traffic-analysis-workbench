@@ -13,6 +13,14 @@ import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-500.css";
 import "./styles.css";
 import "./fit.css";
+import "./look2027.css";
+// The 2027 look, while it is a proposal: ?look=2027 in the address, or remembered in this browser.
+try {
+  const q = new URLSearchParams(location.search).get("look");
+  if (q !== null) localStorage.setItem("lp-look", q);
+  const look = localStorage.getItem("lp-look");
+  if (look) document.documentElement.dataset.look = look;
+} catch { /* storage blocked: keep the current look */ }
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
