@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, post } from "../api";
+import { api, ApiError, plausibleFps, post } from "../api";
 import { go } from "../router";
 import { ScoreSlider } from "../components/ScoreSlider";
 import { Choice } from "../components/Pick";
@@ -487,7 +487,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
                 </details>
               </td>
               <td className="num mono">{fmtT(r.duration_s)}</td>
-              <td>{r.nominal_fps ? `${Number(r.nominal_fps).toFixed(2)} fps` : ""}{r.variable_frame_rate ? " (variable)" : ""}</td>
+              <td>{plausibleFps(r.nominal_fps) ? `${plausibleFps(r.nominal_fps)!.toFixed(2)} fps` : ""}{r.variable_frame_rate ? " (variable)" : ""}</td>
               <td>{r.error ? <span className="badge failed" title={r.error}>cannot decode</span> : r.processing_state ?? ""}</td>
               <td className="num">{r.events}</td>
               <td>

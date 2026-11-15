@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { api, ApiError, Filter, fmtDuration, Job, post, REVIEW_LABEL, ResultRow } from "../api";
+import { api, ApiError, Filter, fmtDuration, Job, plausibleFps, post, REVIEW_LABEL, ResultRow } from "../api";
 import { go } from "../router";
 import { ScoreSlider } from "../components/ScoreSlider";
 import SearchTab from "./Search";
@@ -1123,7 +1123,7 @@ function CatalogCard({ m, reload }: { m: any; reload: () => void }) {
           title="The ticked videos become parts of one recording: one job, a target crossing from one part into the next counts once, one results tab">
           Merge the {tickedFree.length} ticked videos into one recording</button></div>)}
       {vids.length === 0 ? <p className="muted">No videos in the source folder yet.</p> : (
-        <table className="t">
+        <div className="catalog-scroll"><table className="t">
           <thead><tr>
             <th><input type="checkbox" aria-label="Tick all" checked={allOn} disabled={busy}
               onChange={() => setSel(allOn ? new Set() : new Set(all.map((v) => v.id)))} /></th>
@@ -1145,14 +1145,14 @@ function CatalogCard({ m, reload }: { m: any; reload: () => void }) {
               <td>{!v.error && <img loading="lazy" src={`/api/missions/${m.id}/recordings/${v.id}/thumb?h=96`} alt="" className="thumb" />}</td>
               <td className="mono bidi">{v.part ? <span className="badge part">part {v.part}</span> : null} {v.rel_path}</td>
               <td className="num mono">{fmtDuration(v.duration_s)}</td>
-              <td className="muted">{v.width ? `${v.width}×${v.height}` : ""}{v.nominal_fps ? ` · ${Number(v.nominal_fps).toFixed(0)} fps` : ""}</td>
+              <td className="muted">{v.width ? `${v.width}×${v.height}` : ""}{plausibleFps(v.nominal_fps) ? ` · ${Math.round(plausibleFps(v.nominal_fps)!)} fps` : ""}</td>
               <td className="mono muted">{v.start_utc ?? "unknown"}</td>
               <td>{v.error ? <span className="badge failed" title={v.error}>cannot decode</span> : <span className={`badge ${v.state}`}>{STATE_TEXT[v.state] ?? v.state}</span>}</td>
               <td className="num">{v.analysed ? <a href={`#/m/${m.id}/events/rec-${v.id}`} onClick={(e) => e.stopPropagation()}>{v.events}</a> : ""}</td>
               <td>{v.analysed && <a className="play-link" href={`#/m/${m.id}/events/play-${v.id}`} onClick={(e) => e.stopPropagation()}
                 title="Play with the detections drawn, review and edit them, and approve for learning">▶ Review</a>}</td>
             </tr>))}</tbody>
-        </table>)}
+        </table></div>)}
       <p className="muted" style={{ marginBottom: 0 }}>New videos are ticked for you. Tick an analysed video to analyse it again; its newest analysis is the one that counts.
         Ticking one part of a merged recording analyses all of its parts.</p>
     </div>

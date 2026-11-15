@@ -849,3 +849,8 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
 
 .plain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .plain-list li { padding: 6px 10px; background: var(--field); border: 1px solid var(--line); }
+
+/* The video list scrolls inside its card, so its column names stay at the top of the list instead of floating
+   over the rows in the middle of the page while the page scrolls. */
+.catalog-scroll { max-height: min(70vh, 720px); overflow: auto; border: 1px solid var(--line); }
+.catalog-scroll table.t th { top: 0; z-index: 1; }
