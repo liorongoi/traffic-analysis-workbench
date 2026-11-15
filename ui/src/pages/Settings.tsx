@@ -77,10 +77,10 @@ export default function Settings({ section }: { section?: string }) {
         {part === "both" && <div className="set-grid">
           <Card title="Results" id="set-results" lead="Where each mission writes its Excel and CSV files.">
             <div className="seg two" role="radiogroup" aria-label="Results folder">
-              <button role="radio" aria-checked={!d.both.results_folder} className={!d.both.results_folder ? "on" : ""}
+              <button role="radio" aria-checked={d.both.results_folder === null} className={d.both.results_folder === null ? "on" : ""}
                 onClick={() => change("both", { results_folder: null })}><b>Beside each input folder</b><small>A new folder “… LanePulse exports” next to it</small></button>
-              <button role="radio" aria-checked={!!d.both.results_folder} className={d.both.results_folder ? "on" : ""}
-                onClick={() => { if (!d.both.results_folder) setD({ ...d, both: { ...d.both, results_folder: "" } }); }}><b>In one results folder</b><small>Each mission gets its own folder inside it</small></button>
+              <button role="radio" aria-checked={d.both.results_folder !== null} className={d.both.results_folder !== null ? "on" : ""}
+                onClick={() => { if (d.both.results_folder === null) setD({ ...d, both: { ...d.both, results_folder: "" } }); }}><b>In one results folder</b><small>Each mission gets its own folder inside it</small></button>
             </div>
             {d.both.results_folder !== null && <FolderPicker label="Results folder" value={d.both.results_folder ? [d.both.results_folder] : []}
               onChange={(v) => v[0]?.trim() && v[0] !== d.both.results_folder && change("both", { results_folder: v[0] })} placeholder="Choose the results folder" />}
@@ -234,7 +234,7 @@ function SizesCard() {
       <p style={{ marginTop: 0 }}>This computer: {hw.cpu_threads} processor threads, {hw.memory_gb ?? "?"} GB memory
         {gpus ? `, ${gpus}` : hw.apple_silicon ? ", Apple GPU" : ", no NVIDIA GPU"}. Detection runs on <b>{h.run_on}</b>;
         training on <b>{h.train_on}</b>. Larger sizes find more but are slower.</p>
-      <table className="t">
+      <div className="tablewrap"><table className="t">
         <thead><tr><th>Detector</th><th>Size for detection</th><th>Recommended for training</th><th>Installed</th></tr></thead>
         <tbody>{Object.entries(h.families).map(([f, d]: [string, any]) => (
           <tr key={f}><td>{d.title}</td>
@@ -245,7 +245,7 @@ function SizesCard() {
               </select>}</td>
             <td>{d.train_auto ?? <span className="muted">–</span>}</td>
             <td className="muted">{d.installed.join(", ") || "–"}</td></tr>))}</tbody>
-      </table>
+      </table></div>
       <p className="muted" style={{ marginBottom: 0 }}>YOLOX runs in missions with the standard detector, and RF-DETR in missions that choose
         it, unless a model is promoted. A promoted or saved model always runs as it is.</p>
       {err && <div className="msg err">{err}</div>}

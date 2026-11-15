@@ -13,7 +13,8 @@
 # remove:  removes the automatic start and stops the server.
 # uninstall: what the uninstaller runs first: remove, then deletes the model packs that came with LanePulse. Models
 #          trained on this computer are kept, in <Target>\trained-models; installing again puts them back.
-# open:    what the Lanemark shortcut runs: starts the server when it is not running, then opens the browser.
+# open:    what the LanePulse icon runs: shows the launch screen in the browser, starts the server when it is not
+#          running, and the screen moves on to LanePulse when it answers.
 # boot:    for an IT administrator: a scheduled task that starts at power-on, before anyone signs in.
 #          Creating it needs administrator rights. It runs as a Windows account you name (asked for its password),
 #         so source folders on network shares stay reachable. -System runs it as the local SYSTEM account instead,
@@ -166,15 +167,65 @@ function Get-RunningInstall([int]$p) {
   } catch { if (Test-HttpAnswer $_) { return "" } else { return $null } }
 }
 
+# The launch screen: a page in the browser that shows the version and what is happening (checking, starting the
+# engine), then moves on to LanePulse when it answers. It reads status.js, which Set-Launch rewrites.
+$LaunchSrc = Join-Path $Target "launch"
+$LaunchDir = Join-Path $Target "launch-screen"
+$script:LaunchVersion = ""
+function ConvertTo-JsText([string]$t) {
+  if (-not $t) { return "" }
+  $t = ($t -replace "[\r\n\t]", " ")
+  if ($t.Length -gt 400) { $t = $t.Substring(0, 400) }
+  return ($t -replace '\\', '\\' -replace '"', '\"')
+}
+function Set-Launch([string]$state, [string]$text = "", [string]$detail = "", [string]$step = "") {
+  if (-not (Test-Path (Join-Path $LaunchDir "index.html"))) { return }
+  $line = 'lpStatus({"state":"' + $state + '","text":"' + (ConvertTo-JsText $text) + '","detail":"' + (ConvertTo-JsText $detail) +
+    '","step":"' + $step + '","version":"' + $script:LaunchVersion + '","url":"' + $script:LaunchUrl + '"});'
+  try {
+    [IO.File]::WriteAllText((Join-Path $LaunchDir "status.js.tmp"), $line)
+    Move-Item -Force (Join-Path $LaunchDir "status.js.tmp") (Join-Path $LaunchDir "status.js")
+  } catch { }
+}
+function Open-Launch([string]$url) {
+  # Returns the page to open, or $null when this install has no launch screen (then the address is opened at the end).
+  $page = Join-Path $LaunchSrc "index.html"
+  if (-not (Test-Path $page)) { return $null }
+  try {
+    $cur = Join-Path $Target "current.txt"
+    if (Test-Path $cur) { $script:LaunchVersion = (Split-Path -Leaf ((Get-Content $cur -Raw).Trim())) -replace '^app-', '' -replace '-repair-.*$', '' }
+    New-Item -ItemType Directory -Force -Path $LaunchDir | Out-Null
+    $fonts = Join-Path $LaunchSrc "fonts"
+    if (Test-Path $fonts) { Copy-Item -Recurse -Force $fonts $LaunchDir }
+    $html = [IO.File]::ReadAllText($page)
+    $html = $html.Replace("__LP_VERSION__", $script:LaunchVersion).Replace("__LP_BUILD__", $script:LaunchVersion).Replace("__LP_URL__", $url)
+    # Where the missions and backups are: the --data folder start.cmd names.
+    $dataDir = $Target
+    if (Test-Path $Start) {
+      $m = Select-String -Path $Start -Pattern '--data "([^"]+)"' | Select-Object -First 1
+      if ($m) { $dataDir = $m.Matches[0].Groups[1].Value }
+    }
+    $html = $html.Replace("__LP_HOST__", "this PC").Replace("__LP_FOLDER__", [Net.WebUtility]::HtmlEncode($dataDir))
+    $out = Join-Path $LaunchDir "index.html"
+    [IO.File]::WriteAllText($out, $html, (New-Object Text.UTF8Encoding $false))
+    Set-Launch "check"
+    if (-not $env:LANEPULSE_NO_BROWSER) { Start-Process $out }
+    return $out
+  } catch { return $null }
+}
+
 if ($Mode -eq "open") {
   $p = Get-Port
   $url = "http://127.0.0.1:$p"
+  $script:LaunchUrl = $url
+  $screen = Open-Launch $url
   # After an update, a server still running the previous version is replaced by the installed one.
   $cur = Join-Path $Target "current.txt"
   if ((Test-Server $p) -and (Test-Path $cur)) {
     $want = Split-Path -Leaf ((Get-Content $cur -Raw).Trim())
     $have = Get-RunningInstall $p
     if ($null -ne $have -and $have -ne $want) {
+      Set-Launch "start" "Replacing the previous version with the one just installed."
       Stop-Server
       for ($i = 0; $i -lt 30 -and (Test-Server $p); $i++) { Start-Sleep -Seconds 1 }
       if ((Test-Path $Link) -or (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
@@ -184,15 +235,27 @@ if ($Mode -eq "open") {
     }
   }
   if (-not (Test-Server $p)) {
+    Set-Launch "start"
     # Not running: start it the way it is set up to start, otherwise with start.cmd, and wait for it.
     if (Test-Path $Link) { Start-Process -FilePath $Link -WindowStyle Minimized }
     elseif (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Start-ScheduledTask -TaskName $TaskName }
     elseif (Test-Path $Start) { Start-Process -FilePath $Start -WorkingDirectory $Target -WindowStyle Minimized }
-    for ($i = 0; $i -lt 90 -and -not (Test-Server $p); $i++) { Start-Sleep -Seconds 1 }
+    for ($i = 0; $i -lt 120 -and -not (Test-Server $p); $i++) { Start-Sleep -Seconds 1 }
   }
-  Start-Process $url
+  if (Test-Server $p) {
+    # The launch screen moves on to LanePulse by itself; without it, open LanePulse directly.
+    if ($screen) { Set-Launch "ready" } elseif (-not $env:LANEPULSE_NO_BROWSER) { Start-Process $url }
+  } else {
+    $log = Join-Path $Logs "server.log"
+    $last = ""
+    if (Test-Path $log) { $last = (Get-Content $log -Tail 3 -ErrorAction SilentlyContinue) -join " " }
+    if ($screen) {
+      Set-Launch "failed" "LanePulse did not answer within two minutes. The details are in $log." $last "start"
+    } elseif (-not $env:LANEPULSE_NO_BROWSER) { Start-Process $url }
+  }
   exit 0
 }
+
 if ($Mode -eq "remove") { Remove-All; exit 0 }
 if ($Mode -eq "uninstall") {
   Remove-All

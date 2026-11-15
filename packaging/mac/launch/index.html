@@ -1,5 +1,6 @@
 <!doctype html>
-<!-- LanePulse launch screen. LanePulse.app copies this page to ~/LanePulse/.launch, fills in the version, and opens it
+<!-- LanePulse launch screen. LanePulse.app (Mac) copies this page to ~/LanePulse/.launch, and the LanePulse icon on Windows
+     (autostart.ps1 -Mode open) to <install folder>\launch-screen; each fills in the version, and opens it
      in the browser the moment the app is opened. It shows what the app is doing (setting up, starting the engine) from
      status.js, which the app rewrites as it goes, and moves on to LanePulse itself when the server answers. Everything
      is local: no fonts, scripts or images are downloaded. -->
@@ -148,7 +149,7 @@ body.ready .set { display: inline-block; }
 <div class="frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
 <div class="hud tl" aria-hidden="true"><b>&#9679;</b> LanePulse launch</div>
 <div class="hud tr" aria-hidden="true" id="hud-clock">--:--:-- UTC</div>
-<div class="hud bl" aria-hidden="true">Offline · this Mac</div>
+<div class="hud bl" aria-hidden="true">Offline · __LP_HOST__</div>
 <div class="hud br" aria-hidden="true" id="hud-addr"></div>
 
 <main>
@@ -174,11 +175,11 @@ body.ready .set { display: inline-block; }
       <li id="s-check">Check</li><li id="s-setup">Set up</li><li id="s-start">Start engine</li><li id="s-open">Open</li>
     </ol>
     <div class="state"><h2 id="title">Getting ready</h2><span class="t" id="elapsed"></span></div>
-    <p class="msg" id="msg">Checking this Mac and the LanePulse folder.</p>
+    <p class="msg" id="msg">Checking __LP_HOST__ and the LanePulse folder.</p>
     <div class="detail" id="detail"></div>
     <a class="go" id="go" href="__LP_URL__">Open LanePulse</a><a class="set" id="set" href="__LP_URL__/#/settings" title="One-time setup: backups, detector sizes, filename formats, other computers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Settings</a>
   </section>
-  <p class="foot">Your missions, models and backups stay in <code>~/LanePulse</code>. Nothing leaves this Mac.</p>
+  <p class="foot">Your missions, models and backups stay in <code>__LP_FOLDER__</code>. Nothing leaves __LP_HOST__.</p>
 </main>
 
 <script>
@@ -186,7 +187,7 @@ body.ready .set { display: inline-block; }
   var URL0 = "__LP_URL__", BUILD = "__LP_BUILD__";
   var ORDER = ["check", "setup", "start", "open"];
   var COPY = {
-    check: ["Getting ready", "Checking this Mac and the LanePulse folder."],
+    check: ["Getting ready", "Checking __LP_HOST__ and the LanePulse folder."],
     setup: ["Setting up LanePulse", "First time, or after an update: downloads about 2 GB once, then runs offline. The Terminal window shows the full log."],
     start: ["Starting the engine", "Loading the server. This takes a few seconds."],
     ready: ["LanePulse is ready", "Opening it now."],

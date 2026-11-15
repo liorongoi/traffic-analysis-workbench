@@ -27,7 +27,7 @@ lp_status() {
 PAGE=""
 if [ -z "${LANEPULSE_NO_BROWSER:-}" ] && [ -f "$RES/launch/index.html" ]; then
   rm -rf "$LAUNCH/fonts"; [ ! -d "$RES/launch/fonts" ] || cp -R "$RES/launch/fonts" "$LAUNCH/fonts"
-  sed -e "s|__LP_VERSION__|$VER|g" -e "s|__LP_BUILD__|$BUILD|g" -e "s|__LP_URL__|$URL|g" "$RES/launch/index.html" > "$LAUNCH/index.html"
+  sed -e "s|__LP_VERSION__|$VER|g" -e "s|__LP_BUILD__|$BUILD|g" -e "s|__LP_URL__|$URL|g" -e "s|__LP_HOST__|this Mac|g" -e "s|__LP_FOLDER__|~/LanePulse|g" "$RES/launch/index.html" > "$LAUNCH/index.html"
   PAGE="$LAUNCH/index.html"
 fi
 # (While a setup runs, its window keeps the status up to date.)

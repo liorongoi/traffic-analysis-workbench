@@ -146,6 +146,16 @@ def main(argv=None) -> int:
         shutil.copy2(a.python_installer, tmp / Path(a.python_installer).name)
     for f in ("install.ps1", "autostart.ps1", "install.sh", "INSTALL.txt"):
         shutil.copy2(ROOT / "packaging" / f, tmp / f)
+    # The launch screen the LanePulse icon shows while the server starts (the Mac app's page), with its fonts taken
+    # from the built web screens, so nothing is downloaded when it shows.
+    (tmp / "launch" / "fonts").mkdir(parents=True)
+    shutil.copy2(ROOT / "packaging" / "mac" / "launch" / "index.html", tmp / "launch" / "index.html")
+    assets = ROOT / "src" / "trafficwb" / "web" / "static" / "assets"
+    for f in ("chakra-petch-600", "chakra-petch-700", "ibm-plex-sans-400", "ibm-plex-sans-500", "ibm-plex-mono-400", "ibm-plex-mono-500"):
+        family, weight = f.rsplit("-", 1)
+        font = next(iter(sorted(assets.glob(f"{family}-latin-{weight}-normal*.woff2"))), None)
+        if font:
+            shutil.copy2(font, tmp / "launch" / "fonts" / f"{f}.woff2")
     shutil.copy2(ROOT / "scripts" / "offline_smoke.py", tmp / "offline_smoke.py")
     shutil.copy2(ROOT / "scripts" / "pc_check.py", tmp / "pc_check.py")
     shutil.copy2(ROOT / "packaging" / "training" / "TRAINING.txt", tmp / "TRAINING.txt")

@@ -105,7 +105,9 @@ export default function QuickStart() {
     } finally { setBusy(false); }
   };
 
-  const ready = !!g && !reading && files > 0 && g.readable > 0;
+  // Videos need no date or time in their names: they are analysed by their own clock, and a start time can be set
+  // for each one later on the mission's video page.
+  const ready = !!g && !reading && files > 0 && (video || g.readable > 0);
   return (
     <div className="page newm">
       <div className="newm-hero">
@@ -120,11 +122,14 @@ export default function QuickStart() {
         <div className="newm-card card">
           <div className="newm-figs">
             <div><b>{files.toLocaleString()}{g.more ? "+" : ""}</b><span>{video ? (g.images ? `${g.videos} videos, ${g.images} images` : "video recordings") : "still images"}</span></div>
-            <div><b>{g.readable.toLocaleString()}</b><span>capture times read</span></div>
-            <div><b>{g.first_utc && g.last_utc ? span(g.first_utc, g.last_utc) : "–"}</b><span>{g.first_utc && g.last_utc ? `${when(g.first_utc)} to ${when(g.last_utc)} UTC` : "no capture times"}</span></div>
+            <div><b>{g.readable.toLocaleString()}</b><span>{video ? "start times in the names" : "capture times read"}</span></div>
+            <div><b>{g.first_utc && g.last_utc ? span(g.first_utc, g.last_utc) : "–"}</b><span>{g.first_utc && g.last_utc ? `${when(g.first_utc)} to ${when(g.last_utc)} UTC` : video ? "timed from the start of each video" : "no capture times"}</span></div>
           </div>
           {files === 0 && <div className="msg warn">There are no images or videos in this folder or its subfolders.</div>}
-          {files > 0 && g.readable < files && (
+          {files > 0 && video && g.readable < files && (
+            <div className="msg">{g.readable === 0 ? "These video names hold no date or time. That is fine:" : `${files - g.readable} of ${files} video names hold no date or time. That is fine:`}{" "}
+              events are timed from the start of each video, and you can give a video its start time later on the mission's page if you want clock times.</div>)}
+          {files > 0 && !video && g.readable < files && (
             <div className="msg warn learn">
               <div>{files - g.readable} of {files} file names have no capture time LanePulse knows yet{g.unreadable[0] ? <>, for example <span className="mono bidi">{g.unreadable[0].file}</span></> : null}.</div>
               {learn?.template && !learn.saved && <div className="row" style={{ marginTop: 8 }}>
