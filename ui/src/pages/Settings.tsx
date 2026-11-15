@@ -187,11 +187,12 @@ function Card({ title, lead, wide, id, children }: { title: string; lead?: strin
 }
 
 function Modes({ kind, value, onChange }: { kind: "images" | "video"; value: string; onChange: (v: string) => void }) {
-  const list = kind === "video" ? ["object_search", "plate_recognition"] : ["general_traffic", "object_search", "plate_recognition"];
+  const list = ["general_traffic", "object_search", "plate_recognition"];
+  const label = (m: string) => (kind === "video" && m === "general_traffic" ? "Count and track vehicles" : MODE_TEXT[m]);
   return (
     <div className="seg col" role="radiogroup" aria-label="What to find">
       {list.map((m) => <button key={m} role="radio" aria-checked={value === m} className={value === m ? "on" : ""} onClick={() => onChange(m)}>
-        <b>{MODE_TEXT[m]}</b></button>)}
+        <b>{label(m)}</b></button>)}
     </div>
   );
 }

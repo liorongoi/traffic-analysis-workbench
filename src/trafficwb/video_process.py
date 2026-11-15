@@ -352,6 +352,7 @@ class VideoProcessor:
         in_chunk = 0
         chunk_start = time.monotonic()
         acc = None                                 # the camera's motion since the tracker last saw a frame
+        self._position(vid, last_t or 0.0, pr["duration_s"], start=True)
         self.con.execute("BEGIN")
         try:
             for fr, nxt_after in frames(path, self.grid_s, after_t=last_t, next_sample_t=nxt):
@@ -401,6 +402,7 @@ class VideoProcessor:
                 rep.frames += 1
                 self._where(fr.t, pr["duration_s"])
                 in_chunk += 1
+                self._position(vid, fr.t, pr["duration_s"])
                 if in_chunk >= self.s.chunk_frames or time.monotonic() - chunk_start >= self.s.chunk_seconds:
                     self._checkpoint(it["id"], last_t, nxt, count, tracker, prev, pm)
                     self.con.execute("COMMIT")
@@ -481,6 +483,8 @@ class VideoProcessor:
                    for n in range(min(self.workers, max(1, len(todo))))]
         for t in threads:
             t.start()
+        dur = pr["duration_s"] or 0.0
+        self._position(it["source_version_id"], dur * len(done) / max(1, len(segs)), pr["duration_s"], start=True)
         try:
             while not hub.finished(job) or job.fresh:
                 for s, res, who in hub.collect(job, 1.0):
@@ -493,6 +497,7 @@ class VideoProcessor:
                         (it["id"], s.idx, s.own_a, None if s.own_b == float("inf") else s.own_b, "done",
                          json.dumps(_plain(res) | {"worker": who}), res.frames, res.seconds, utcnow()))
                     self.control.within = min(0.999, len(done) / len(segs))
+                    self._position(it["source_version_id"], dur * len(done) / max(1, len(segs)), pr["duration_s"])
                 self.control.checkpoint()          # pause or cancel between segments too
                 if job.error:
                     if self.control.cancelled:
@@ -561,6 +566,16 @@ class VideoProcessor:
         if self.kind == "sam3" and count % self.sam_every:
             return None                            # SAM 3.1 alone on a moving camera: this frame for motion only
         return self.detector.detect(img)
+
+    def _position(self, version_id: int, t: float, duration: float | None, start: bool = False) -> None:
+        """Where the analysis is in the recording now, for the progress bar of each video (read by the web server
+        from the job; nothing is written to the database)."""
+        now = time.monotonic()
+        pos = getattr(self.control, "video_pos", None)
+        if start or not pos or pos.get("version_id") != version_id:
+            pos = {"version_id": version_id, "t0": t, "started": now}
+        pos.update(t=t, duration=duration, at=now)
+        self.control.video_pos = pos
 
     def _checkpoint(self, item_id, last_t, nxt, count, tracker: Tracker, prev, pm=None) -> None:
         self.con.execute(

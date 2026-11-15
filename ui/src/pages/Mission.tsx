@@ -49,9 +49,12 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   // Sorting indoor from outdoor finds no vehicles: its own tab replaces the vehicle tabs.
   const sorting = m.config.mode === "indoor_outdoor";
   const isVideo = m.config.input_type === "video";
-  const tabs = [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
-    ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []),
-    ...(isVideo ? [["events", "Events"]] : [["results", "Results"], ["night", "Night review"], ["views", "Camera views"]]), ["learning", "Learning"]];
+  // Video: Videos (each one with its own progress), Results (the vehicles, a Find box and Export), Learning.
+  const tabs = isVideo
+    ? [["overview", "Videos"], ["events", "Results"], ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []), ["learning", "Learning"]]
+    : [["overview", "Overview"], ...(m.config.mode === "object_search" ? [["search", "Search"]] : []),
+      ...(m.config.mode === "plate_recognition" ? [["plates", "Plates"]] : []),
+      ["results", "Results"], ["night", "Night review"], ["views", "Camera views"], ["learning", "Learning"]];
   const job = m.job && ["running", "paused"].includes(m.job.state) ? m.job : null;
   const pct = job && job.total ? Math.round(100 * (job.progress ?? job.done / job.total)) : null;
   const facts = (sorting ? ["Still images", "Indoor and outdoor", m.config.iana_zone]
@@ -64,7 +67,8 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
         <a className="mstrip-back" href="#/" aria-label="All missions" title="All missions">‹</a>
         <h1 className="bidi" title={facts}>{m.config.name}</h1>
         {job ? <span className="tag live"><i aria-hidden="true" />{job.state === "paused" ? "Paused" : `Processing${pct != null ? ` ${pct}%` : ""}`}</span>
-          : m.config.monitoring_enabled ? <span className="tag watch"><i aria-hidden="true" />Watching the folder</span> : null}
+          : m.config.monitoring_enabled || (isVideo && (m.config.analyse_new || m.config.run_mode === "auto"))
+            ? <span className="tag watch"><i aria-hidden="true" />{isVideo ? "New videos start by themselves" : "Watching the folder"}</span> : null}
         <nav className="tabs mstrip-tabs" aria-label="Mission">
           {(sorting ? [tabs[0], ["sort", "Indoor and outdoor"]] : tabs).map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""} aria-current={tab === k ? "page" : undefined}>{l}</a>)}
         </nav>
@@ -73,7 +77,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
           <a className="btn attn" href={`#/m/${missionId}/i/${review.first_unreviewed}`}>Review {review.unreviewed}</a>}
         <a className={`gear${tab === "setup" ? " on" : ""}`} href={`#/m/${missionId}/setup`} title={`This mission's setup: ${facts}`} aria-label="Mission setup"><GearIcon /></a>
       </div>
-      {tab === "overview" && <Overview m={m} reload={load} />}
+      {tab === "overview" && (isVideo ? <VideosTab m={m} reload={load} /> : <Overview m={m} reload={load} />)}
       {tab === "sort" && sorting && <SortingTab m={m} reload={load} />}
       {tab === "results" && !isVideo && <Results m={m} reload={load} />}
       {tab === "night" && !isVideo && <NightReviewTab missionId={missionId} />}
@@ -81,8 +85,10 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
       {(tab === "setup" || tab === "settings") && <MissionSetup m={m} reload={load} />}
       {tab === "learning" && <LearningTab missionId={missionId} job={m.job} reload={load} />}
       {tab === "plates" && m.config.mode === "plate_recognition" && <PlatesTab missionId={missionId} />}
-      {tab === "events" && isVideo && <EventsTab missionId={missionId} extra={extra ?? null} />}
-      {tab === "search" && <SearchTab missionId={missionId} runId={extra ? Number(extra) : null} />}
+      {tab === "events" && isVideo && <EventsTab missionId={missionId} extra={extra ?? null}
+        find={m.config.mode !== "plate_recognition" ? <SearchTab missionId={missionId} runId={null} embedded /> : null} />}
+      {tab === "search" && (isVideo ? <EventsTab missionId={missionId} extra={null} find={<SearchTab missionId={missionId} runId={extra ? Number(extra) : null} embedded />} />
+        : <SearchTab missionId={missionId} runId={extra ? Number(extra) : null} />)}
     </div>
   );
 }
@@ -128,6 +134,148 @@ function JobCard({ job, mid, reload, unit }: { job: Job | null; mid: string; rel
       </div>
       <p className="muted" style={{ marginBottom: 0 }}>Work continues on the workstation if you close the browser.</p>
       {err && <div className="msg err">{err}</div>}
+    </div>
+  );
+}
+
+/** A video mission's main screen: one list of its videos, each with its own progress bar, position and time left,
+ *  and a Review button once done. New videos, and videos still being copied, start by themselves. The image-only
+ *  counters, runs and notifications are under "Details". */
+function VideosTab({ m, reload }: { m: any; reload: () => void }) {
+  const [data, setData] = useState<any>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [details, setDetails] = useState(false);
+  const job: Job | null = m.job;
+  const busy = !!job && ["running", "paused"].includes(job.state);
+  const load = useCallback(async (refresh: boolean) => {
+    try { setData(await api(`/missions/${m.id}/catalog?refresh=${refresh}`)); }
+    catch (e) { setErr((e as ApiError).message); }
+  }, [m.id]);
+  useEffect(() => { load(true); }, [load]);
+  const waitingN = data?.waiting?.length ?? 0;
+  useEffect(() => {
+    const t = setInterval(() => load(!busy), busy ? 1500 : waitingN ? 5000 : 10000);
+    return () => clearInterval(t);
+  }, [busy, waitingN, load]);
+  const jobState = m.job?.state;
+  useEffect(() => { if (jobState && !["running", "paused"].includes(jobState)) load(true); }, [jobState, load]);
+  const act = async (fn: () => Promise<unknown>) => { setErr(null); try { await fn(); reload(); load(false); } catch (e) { setErr((e as ApiError).message); } };
+  if (!data) return <div className="card muted">{err ?? "Looking for videos…"}</div>;
+  const vids: any[] = data.videos;
+  const groups: any[] = data.groups ?? [];
+  const name = (id: number) => vids.find((v) => v.id === id)?.rel_path.split(/[\\/]/).pop() ?? id;
+  const todo = vids.filter((v) => !v.error && !v.analysed);
+  const notStarted = todo.filter((v) => ["queued", "new", "cancelled", "failed"].includes(v.state));
+  // Overall progress: seconds of video analysed out of the seconds to analyse (the analysed ones and the rest).
+  const inRun = vids.filter((v) => !v.error && (v.analysed || v.progress != null));
+  const total = inRun.reduce((a, v) => a + (v.duration_s ?? 0), 0);
+  const doneS = inRun.reduce((a, v) => a + (v.duration_s ?? 0) * (v.progress ?? 0), 0);
+  const overall = total ? doneS / total : 0;
+  const running = vids.find((v) => v.state === "running");
+  const leftS = running?.eta_s != null ? running.eta_s + todo.filter((v) => v !== running).reduce((a, v) => a + (v.duration_s ?? 0) * (1 - (v.progress ?? 0)), 0)
+    * (running.eta_s / Math.max(1, (running.duration_s ?? 0) * (1 - (running.progress ?? 0)))) : null;
+  const errors = vids.filter((v) => v.error);
+  const events = vids.reduce((a, v) => a + (v.events ?? 0), 0);
+  const rows: any[] = [];
+  const seen = new Set<number>();
+  for (const v of vids) {
+    if (seen.has(v.id)) continue;
+    const g = v.group_id ? groups.find((x) => x.id === v.group_id) : null;
+    if (g) {
+      rows.push({ group: g });
+      for (const id of g.members) { const p = vids.find((x) => x.id === id); if (p) { rows.push(p); seen.add(id); } }
+    } else rows.push(v);
+  }
+  return (
+    <div className="grid" style={{ gap: 12 }}>
+      <div className="card vv-sum">
+        <div className="vv-sum-n"><b>{busy ? `${Math.round(overall * 100)}%` : todo.length ? `${vids.length - todo.length - errors.length} of ${vids.length - errors.length}` : vids.length}</b>
+          <span>{busy ? (job?.state === "paused" ? "paused" : `analysing ${running ? name(running.id) : "…"}`) : todo.length ? "videos analysed" : `video${vids.length === 1 ? "" : "s"}, ${events} vehicle${events === 1 ? "" : "s"}`}</span></div>
+        <div className="vv-sum-bar"><div className={`vv-bar${!busy && !todo.length && vids.length ? " done" : ""}`}><i style={{ width: `${Math.round((busy ? overall : vids.length ? (vids.length - todo.length) / vids.length : 0) * 100)}%` }} /></div>
+          <span className="muted small">{busy ? (leftS != null ? `about ${fmtDuration(Math.round(leftS))} left` : "working out the time left…")
+            : waitingN ? `${waitingN} video${waitingN === 1 ? " is" : "s are"} still being copied; analysis starts when the copy is done`
+            : notStarted.length ? `${notStarted.length} video${notStarted.length === 1 ? "" : "s"} not analysed yet` : "Everything here is analysed. New videos in the folder start by themselves."}</span></div>
+        <div className="row">
+          {job?.state === "running" && <button onClick={() => act(() => post(`/missions/${m.id}/job/pause`))}>Pause</button>}
+          {job?.state === "paused" && <button className="primary" onClick={() => act(() => post(`/missions/${m.id}/job/resume`))}>Resume</button>}
+          {busy && <button className="danger" onClick={() => act(() => post(`/missions/${m.id}/job/cancel`))}>Stop</button>}
+          {!busy && notStarted.length > 0 && <button className="primary" onClick={() => act(() => post(`/missions/${m.id}/catalog/analyse`, { version_ids: notStarted.map((v) => v.id) }))}>
+            Analyse {notStarted.length} video{notStarted.length === 1 ? "" : "s"}</button>}
+        </div>
+      </div>
+      {err && <div className="msg err" role="alert">{err}</div>}
+      {errors.length > 0 && <div className="msg warn">{errors.length} video{errors.length === 1 ? "" : "s"} cannot be opened: {errors.map((v) => v.rel_path).join(", ")}.
+        {" "}LanePulse reads AVI, MP4, MKV, MOV, WMV, TS, WebM and H.264/H.265 files; a camera's own format (for example .dav) may need to be exported from the camera software first.</div>}
+      {(data.suggestions ?? []).map((sg: any) => (
+        <div key={sg.members.join("-")} className="msg suggest row">
+          <span><strong>Parts of one recording?</strong> {sg.members.length} videos look like parts of one ({sg.reason}).</span>
+          <span style={{ flex: 1 }} />
+          <button disabled={busy} onClick={() => act(() => post(`/missions/${m.id}/catalog/merge`, { version_ids: sg.members }))}>Join them into one</button>
+        </div>))}
+      <div className="vv-list">
+        {rows.map((v) => v.group ? (
+          <div key={`g${v.group.id}`} className="vv-group"><strong>{v.group.name}</strong><span className="muted"> · parts of one recording, analysed as one</span>
+            {v.group.members.every((id: number) => vids.find((x) => x.id === id)?.analysed) && <a href={`#/m/${m.id}/events/rec-g${v.group.id}`}>Results</a>}
+            <button className="linkish" disabled={busy} onClick={() => act(() => api(`/missions/${m.id}/catalog/groups/${v.group.id}`, { method: "DELETE" }))}>Separate</button></div>
+        ) : (
+          <VideoRow key={v.id} v={v} mid={m.id} busy={busy} paused={job?.state === "paused"}
+            again={() => act(() => post(`/missions/${m.id}/catalog/analyse`, { version_ids: [v.id] }))} />))}
+        {(data.waiting ?? []).map((w: string) => (
+          <div key={`w${w}`} className="vv-row wait"><div className="vv-thumb ph" /><div className="vv-main"><div className="vv-name mono bidi">{w}</div>
+            <div className="vv-bar"><i style={{ width: 0 }} /></div><div className="muted small">Still being copied into the folder. It starts by itself when the copy is done.</div></div>
+            <div /><div className="vv-state"><span className="badge">copying</span></div></div>))}
+        {vids.length === 0 && waitingN === 0 && <div className="card muted">No videos in the input folder yet. Videos added there start by themselves.</div>}
+      </div>
+      <button className="linkish" style={{ justifySelf: "start" }} onClick={() => setDetails(!details)} aria-expanded={details}>
+        {details ? "Hide details" : "Details: input folders, runs and messages"}</button>
+      {details && <div className="grid cols-2">
+        <SourcesCard m={m} reload={reload} />
+        <RunsCard m={m} reload={reload} />
+        <div className="card">
+          <div className="row" style={{ justifyContent: "space-between" }}><h2>Messages</h2>
+            <button onClick={async () => { await post(`/missions/${m.id}/notifications/ack`); reload(); }}>Mark all read</button></div>
+          <div style={{ maxHeight: 260, overflowY: "auto" }}>
+            {m.notifications.length === 0 && <p className="muted">None.</p>}
+            {m.notifications.map((n: any) => (
+              <div key={n.id} style={{ padding: "4px 0", borderBottom: "1px solid var(--line)", opacity: n.acknowledged ? 0.6 : 1 }}>
+                <span className={`badge ${n.severity === "error" ? "failed" : ""}`}>{n.severity}</span> <span className="bidi">{n.message}</span>
+                <div className="muted mono">{n.created_at}</div>
+              </div>))}
+          </div>
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+function VideoRow({ v, mid, busy, paused, again }: { v: any; mid: string; busy: boolean; paused: boolean; again: () => void }) {
+  const now = v.state === "running";
+  const [noThumb, setNoThumb] = useState(false);
+  const pct = Math.round((v.progress ?? 0) * 100);
+  const fps = plausibleFps(v.nominal_fps);
+  return (
+    <div className={`vv-row${now ? " now" : ""}${v.error ? " bad" : ""}`}>
+      {v.error || noThumb ? <div className="vv-thumb ph" /> : <img loading="lazy" src={`/api/missions/${mid}/recordings/${v.id}/thumb?h=96`} alt="" className="vv-thumb" onError={() => setNoThumb(true)} />}
+      <div className="vv-main">
+        <div className="vv-name mono bidi" title={v.rel_path}>{v.part ? <span className="badge part">part {v.part}</span> : null} {v.rel_path}</div>
+        <div className={`vv-bar${v.analysed ? " done" : ""}`}><i style={{ width: `${v.analysed ? 100 : pct}%` }} /></div>
+        <div className="muted small">
+          {v.error ? <span title={v.error}>Cannot be opened: {v.error}</span>
+            : now ? <>{fmtDuration(v.position_s ?? 0)} of {fmtDuration(v.duration_s)}{v.eta_s != null ? ` · about ${fmtDuration(v.eta_s)} left` : ""}{paused ? " · paused" : ""}</>
+            : <>{fmtDuration(v.duration_s)}{v.width ? ` · ${v.width}×${v.height}` : ""}{fps ? ` · ${Math.round(fps)} fps` : ""}{v.codec ? ` · ${v.codec}` : ""}</>}
+        </div>
+      </div>
+      <div className="vv-num">{v.analysed ? <><b>{v.events}</b><span>vehicle{v.events === 1 ? "" : "s"}</span></> : now ? <b className="live">{pct}%</b> : null}</div>
+      <div className="vv-state">
+        {v.analysed ? <>
+            <a className="btn primary" href={`#/m/${mid}/events/play-${v.id}`}>Review</a>
+            <button className="linkish small" disabled={busy} onClick={again} title="Analyse this video again; its newest analysis is the one that counts">Analyse again</button></>
+          : v.error ? <span className="badge failed">cannot open</span>
+          : now ? <span className="badge live">{paused ? "paused" : "analysing"}</span>
+          : v.state === "failed" ? <span className="badge failed" title="Its analysis stopped with an error; see Details">failed</span>
+          : v.state === "cancelled" ? <span className="badge">stopped</span>
+          : <span className="badge">{busy ? "queued" : "not analysed"}</span>}
+      </div>
     </div>
   );
 }
@@ -198,17 +346,28 @@ function MissionSetup({ m, reload }: { m: any; reload: () => void }) {
       <div className="setup-facts card">
         <h2 style={{ margin: 0 }}>This mission's setup</h2>
         <dl>
-          <dt>Kind</dt><dd>{c.input_type === "video" ? "Video" : "Still images"} · {cap(c.mode.replace(/_/g, " "))}</dd>
-          <dt>Time zone</dt><dd>{c.iana_zone} ({c.country})</dd>
+          <dt>Kind</dt><dd>{c.input_type === "video" ? "Video" : "Still images"} · {c.input_type === "video" && c.mode === "general_traffic" ? "Count and track vehicles" : cap(c.mode.replace(/_/g, " "))}</dd>
+          {c.input_type !== "video" && <><dt>Time zone</dt><dd>{c.iana_zone} ({c.country})</dd></>}
           <dt>Results</dt><dd className="mono bidi">{c.output_dir} ({c.export_formats.join(", ")})</dd>
-          <dt>New files</dt><dd>{c.processing === "continuous" ? "Keeps watching the input folder" : "Analysed once"}</dd>
+          <dt>New files</dt><dd>{c.input_type === "video" ? (c.analyse_new || c.run_mode === "auto" ? "New videos start by themselves" : "New videos wait until you press Analyse")
+            : c.processing === "continuous" ? "Keeps watching the input folder" : "Analysed once"}</dd>
         </dl>
         <p className="muted" style={{ margin: 0 }}>New missions take their setup from <a href={`#/settings/${c.input_type === "video" ? "video" : "images"}`}>Settings</a>. Changes here apply to this mission only.</p>
       </div>
-      <div className="grid cols-2" style={{ alignItems: "start" }}>
+      {c.input_type === "video" ? (
+        // Video: the choices came from Settings when the mission was made; they are not asked again, only shown,
+        // and opened here when this one mission should differ.
+        <details className="card fold">
+          <summary><h2>Detector and camera: {DETECTOR_LABEL[c.detector ?? "standard"] ?? c.detector}, {c.camera === "moving" ? "moving camera" : "fixed camera"}. Change for this mission…</h2></summary>
+          <div className="grid cols-2" style={{ alignItems: "start" }}>
+            <DetectorCard m={m} reload={reload} />
+            <MissionRunMode missionId={m.id} />
+          </div>
+        </details>
+      ) : <div className="grid cols-2" style={{ alignItems: "start" }}>
         <DetectorCard m={m} reload={reload} />
         <MissionRunMode missionId={m.id} />
-      </div>
+      </div>}
       <DeleteMission m={m} />
     </div>
   );

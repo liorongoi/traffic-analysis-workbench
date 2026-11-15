@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
-from .inventory import IMAGE_EXT, VIDEO_EXT, read_image_header
+from .inventory import IMAGE_EXT, VIDEO_EXT, hidden, hidden_path, read_image_header
 from .store import Mission, utcnow
 from .timeparse import MalformedName, parse_capture_time
 
@@ -80,10 +80,12 @@ class Ingestor:
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
             d = Path(dirpath)
             dirnames[:] = sorted(
-                n for n in dirnames if recursive and not any((d / n).resolve() == e for e in excluded)
+                n for n in dirnames
+                if recursive and not hidden(n) and not any((d / n).resolve() == e for e in excluded)
             )
             for n in sorted(filenames):
-                yield d / n
+                if not hidden(n):
+                    yield d / n
 
     def scan(self, now: datetime | None = None) -> ScanResult:
         now = now or datetime.now(timezone.utc)
@@ -268,28 +270,49 @@ class Ingestor:
             res.newly_missing.append(r["rel_path"])
 
 
+_cycle_locks: dict[str, threading.Lock] = {}
+_cycle_locks_guard = threading.Lock()
+
+
 def cycle(mission: Mission, now: datetime | None = None, stability_seconds: int = DEFAULT_STABILITY_SECONDS) -> tuple[ScanResult, int | None]:
     """One scan plus, when there are new eligible files, a processing run.
 
     One-time missions get exactly one run (the initial snapshot). Continuous
-    missions get a new batch run for each scan that finds new files.
+    missions get a new batch run for each scan that finds new files. One scan at a time per mission: the monitor and
+    a page asking for the latest list can otherwise both queue the same new files.
     """
+    with _cycle_locks_guard:
+        lock = _cycle_locks.setdefault(str(mission.dir), threading.Lock())
+    with lock:
+        return _cycle(mission, now, stability_seconds)
+
+
+def _cycle(mission: Mission, now: datetime | None, stability_seconds: int) -> tuple[ScanResult, int | None]:
     cfg = mission.config()
     has_runs = mission.con.execute("SELECT COUNT(*) FROM run").fetchone()[0] > 0
-    if cfg.processing == "one_time" and has_runs:
+    # A video mission that analyses new videos as they arrive keeps scanning after its first run.
+    follows_new = mission.input_type == "video" and (cfg.analyse_new or cfg.run_mode == "auto")
+    if cfg.processing == "one_time" and has_runs and not follows_new:
         return ScanResult(scan_id=-1, status="skipped_one_time_complete"), None
     res = Ingestor(mission, stability_seconds).scan(now)
-    if cfg.processing == "one_time" and res.waiting_for_stability:
+    if cfg.processing == "one_time" and not has_runs and res.waiting_for_stability:
         return res, None  # wait until the snapshot is complete
     # Queue every eligible current version not yet in any run, not just this scan's finds,
     # so files ingested by an interrupted or deferred cycle are never left behind.
     # Video, and sorting indoor from outdoor, do not need a capture time in the name.
     no_time_needed = mission.input_type == "video" or cfg.mode == "indoor_outdoor"
     parse_ok = "v.parse_status IN ('ok','malformed')" if no_time_needed else "v.parse_status='ok'"
+    # Hidden files ("._clip.mp4" from a Mac, ...) that versions before this one took in are never analysed.
+    stale = [r[0] for r in mission.con.execute(
+        "SELECT i.id, f.rel_path FROM run_item i JOIN source_version v ON v.id=i.source_version_id "
+        "JOIN source_file f ON f.id=v.source_file_id WHERE i.processing_state='queued'") if hidden_path(r[1])]
+    if stale:
+        mission.con.executemany("UPDATE run_item SET processing_state='cancelled' WHERE id=?", [(i,) for i in stale])
     todo = [r[0] for r in mission.con.execute(
-        f"SELECT v.id FROM source_version v WHERE v.superseded_by IS NULL AND {parse_ok} "
+        f"SELECT v.id, f.rel_path FROM source_version v JOIN source_file f ON f.id=v.source_file_id "
+        f"WHERE v.superseded_by IS NULL AND {parse_ok} "
         "AND v.integrity IN ('ok','unverified') AND NOT EXISTS "
-        "(SELECT 1 FROM run_item i WHERE i.source_version_id=v.id) ORDER BY v.id")]
+        "(SELECT 1 FROM run_item i WHERE i.source_version_id=v.id) ORDER BY v.id") if not hidden_path(r[1])]
     run_id = mission.create_run("initial" if not has_runs else "continuous_batch", todo)
     if run_id is not None:
         mission.notify("info", "new_data", f"{len(todo)} new file(s) queued in run {run_id}.", run_id=run_id)
@@ -363,6 +386,8 @@ class Monitor:
                     if self.on_cycle:
                         self.on_cycle(res, run_id)
                 except Exception as exc:  # keep monitoring alive; surface the failure
+                    if m.con.in_transaction:      # a scan stopped half way must not keep the mission's database locked
+                        m.con.execute("ROLLBACK")
                     m.notify("error", "scan_failed", f"Scan failed: {exc}")
             self._wake.wait(self.interval)
             self._wake.clear()

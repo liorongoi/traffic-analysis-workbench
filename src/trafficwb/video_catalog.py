@@ -12,6 +12,7 @@ Rules:
 """
 from __future__ import annotations
 
+from .inventory import hidden_path
 from .ingest import cycle
 from .store import Mission
 from .video_groups import GroupError, Groups, suggest
@@ -43,6 +44,8 @@ class VideoCatalog:
             "WHERE v.superseded_by IS NULL ORDER BY f.rel_path").fetchall()
         out = []
         for r in rows:
+            if hidden_path(r["rel_path"]):     # "._clip.mp4" and the like, listed by versions before this one
+                continue
             try:
                 p = probe_version(self.con, self.views, r["id"])
             except Exception as exc:          # a file that cannot be read is listed with its reason
@@ -62,12 +65,40 @@ class VideoCatalog:
             v["group_id"], v["part"] = part.get(v["id"], (None, None))
         return out
 
-    def overview(self) -> dict:
-        """The videos, the merged recordings, and runs of videos that look like parts of one recording."""
+    def overview(self, live: dict | None = None) -> dict:
+        """The videos, the merged recordings, and runs of videos that look like parts of one recording.
+
+        live: where the running job is in the recording it analyses now (VideoProcessor._position), for the progress
+        bar of that video. Each video gets ``progress`` (0 to 1, or None), ``position_s`` and ``eta_s``; files still
+        being copied into the folder are listed under ``waiting``."""
+        import time
         vids = self.items()
+        for v in vids:
+            v["progress"], v["position_s"], v["eta_s"] = (1.0 if v["analysed"] else None), None, None
+            if v["state"] not in ("running", "queued", "cancelled"):
+                continue
+            dur = v["duration_s"] or 0
+            pos = None
+            if live and live.get("version_id") == v["id"] and live.get("t") is not None:
+                pos = float(live["t"])
+                took, gone = time.monotonic() - live.get("started", time.monotonic()), pos - float(live.get("t0") or 0)
+                if took > 2 and gone > 0 and dur:
+                    v["eta_s"] = round(max(0.0, dur - pos) * took / gone)
+            else:
+                row = self.con.execute(
+                    "SELECT c.last_t FROM video_checkpoint c JOIN run_item i ON i.id=c.run_item_id "
+                    "WHERE i.source_version_id=? ORDER BY i.id DESC LIMIT 1", (v["id"],)).fetchone()
+                pos = row["last_t"] if row else None
+            if pos is not None and dur:
+                v["position_s"] = round(pos, 1)
+                v["progress"] = max(0.0, min(1.0, pos / dur))
+            elif v["state"] == "queued":
+                v["progress"] = 0.0
         groups = Groups(self.m).all()
         grouped = {v for g in groups for v in g["members"]}
-        return {"videos": vids, "groups": groups, "suggestions": suggest(vids, grouped)}
+        waiting = [r["rel_path"] for r in self.con.execute("SELECT rel_path FROM pending_file ORDER BY rel_path")
+                   if not hidden_path(r["rel_path"])]
+        return {"videos": vids, "groups": groups, "suggestions": suggest(vids, grouped), "waiting": waiting}
 
     def merge(self, version_ids: list[int], author: str) -> dict:
         try:
