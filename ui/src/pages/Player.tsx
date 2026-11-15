@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, post } from "../api";
+import { api, ApiError, plausibleFps, post } from "../api";
 import { fmtT } from "./Events";
 import { NamePick } from "../components/Pick";
 import { Labels, ScoreKey, Tails, TAILS, boxColourSetting, dotColourSetting, hueOf, scoreAt, type TailLen } from "../components/TrackMarks";
@@ -190,7 +190,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
 
   const W = ov?.recording.width ?? 1280, H = ov?.recording.height ?? 720;
   const dur = ov?.recording.duration_s ?? 0;
-  const frame = 1 / (ov?.recording.nominal_fps || 25);
+  const frame = 1 / (plausibleFps(ov?.recording.nominal_fps) ?? 25);
   const evs = ov?.events.filter((e) => e.status !== "merged") ?? [];
   const selEv = evs.find((e) => e.id === sel) ?? null;
   const classes = ov?.classes ?? ["car"];
@@ -364,7 +364,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%", cursor: drawing ? "crosshair" : "default" }}
               onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}>
               <Tails events={shown} now={now} len={tail} sel={sel} px={px} lookOf={lookFor} boxAt={boxAt}
-                fps={ov.recording.nominal_fps || 25} colour={dotColour} />
+                fps={plausibleFps(ov.recording.nominal_fps) ?? 25} colour={dotColour} />
               {shown.map((e) => {
                 const b = boxAt(e, now);
                 if (!b) return null;
