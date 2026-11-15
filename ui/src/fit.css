@@ -124,3 +124,7 @@ td.mono.bidi, .mono.bidi { font-family: var(--sans); font-size: inherit; font-va
   .set-index ul button:hover:not(:disabled) { color: var(--text); background: rgba(255, 255, 255, .04); border: 0; }
   .set-index ul button.on { color: var(--text); }
 }
+
+/* Segmented choices with a line of explanation wrap that line instead of running out of their panel. */
+.seg button { min-width: 0; flex: 1 1 0; white-space: normal; }
+.seg button small { display: block; }
