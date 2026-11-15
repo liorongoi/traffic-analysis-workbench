@@ -195,7 +195,7 @@ export default function QuickStart() {
             <span className="grow" />
             {!video && <button className="big" disabled={!g || reading || files === 0 || busy} onClick={() => create("indoor_outdoor")}
               title="Split these images into indoor and outdoor instead; file names need no capture time">Sort into indoor and outdoor</button>}
-            <button className="primary big" disabled={!ready || busy} onClick={() => create()}>{busy ? "Starting…" : "Start"}</button>
+            <button className="primary big" disabled={!ready || busy} onClick={() => create()}>{busy ? "Starting…" : video && g && g.videos > 0 ? `Start analysing ${g.videos.toLocaleString()}${g.more ? "+" : ""} video${g.videos === 1 ? "" : "s"}` : "Start"}</button>
           </div>
         </div>
       )}

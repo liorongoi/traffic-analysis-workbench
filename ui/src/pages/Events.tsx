@@ -60,7 +60,7 @@ const REVIEW_TEXT: Record<string, string> = {
   full: "Approved: full labels", partial: "Some events reviewed", none: "Not reviewed",
 };
 
-const FLAG_LABEL: Record<string, string> = {
+export const FLAG_LABEL: Record<string, string> = {
   appeared_inside_frame: "appeared inside the frame", ended_inside_frame: "lost inside the frame",
   possible_duplicate: "possible duplicate", class_uncertain: "class uncertain",
   cut_by_scene_change: "cut by a scene change", cut_by_end_of_recording: "cut by the end of the recording",

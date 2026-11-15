@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, plausibleFps, post } from "../api";
-import { fmtT } from "./Events";
+import { FLAG_LABEL, fmtT } from "./Events";
 import { NamePick } from "../components/Pick";
 import { Labels, ScoreKey, Tails, TAILS, boxColourSetting, dotColourSetting, hueOf, scoreAt, type TailLen } from "../components/TrackMarks";
 
@@ -107,6 +107,13 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
     return () => { live = false; window.clearTimeout(timer); };
   }, [fallback, playSrc, original, missionId, versionId]);
   const [help, setHelp] = useState(false);
+  // The mission's other videos, to switch between them without going back to the list; and a Find box over the list.
+  const [videos, setVideos] = useState<{ id: number; rel_path: string }[]>([]);
+  useEffect(() => {
+    api(`/missions/${missionId}/catalog`).then((r) => setVideos((r.videos ?? []).map((v: any) => ({ id: v.id, rel_path: v.rel_path }))))
+      .catch(() => setVideos([]));
+  }, [missionId]);
+  const [find, setFind] = useState("");
   // Tails and labels: how long a tail, and what the small label over each target says. Kept for next time.
   const keep = <T,>(k: string, v: T) => { try { localStorage.setItem(`twb.player.${k}`, JSON.stringify(v)); } catch { /* not kept */ } };
   const kept = <T,>(k: string, d: T): T => { try { const v = localStorage.getItem(`twb.player.${k}`); return v == null ? d : JSON.parse(v); } catch { return d; } };
@@ -216,6 +223,13 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   const selEv = evs.find((e) => e.id === sel) ?? null;
   const classes = ov?.classes ?? ["car"];
   const toReview = evs.filter((e) => e.status === "pending").sort((a, b) => a.first_t - b.first_t);
+  const inOrder = [...evs].sort((a, b) => a.first_t - b.first_t);
+  // Find: every word must match the class, the key, the review state, a flag or the time ("red car", "rejected").
+  const words = find.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const listed = words.length ? inOrder.filter((e) => {
+    const hay = [e.key, e.cls, e.machine_cls, STATUS_TEXT[e.status] ?? e.status, ...e.flags.map((f) => FLAG_LABEL[f] ?? f), fmtT(e.first_t)].join(" ").replace(/_/g, " ").toLowerCase();
+    return words.every((w) => hay.includes(w));
+  }) : inOrder;
   const myBoxHere = selEv?.fixes.find((f) => Math.abs(f.t - now) < frame * 0.6) ?? null;
   const tl = useMemo(() => lanes(evs), [ov]);
 
@@ -362,15 +376,19 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   return (
     <div className="grid player" style={{ gap: 10 }}>
       <div className="row">
-        <a href={`#/m/${missionId}/events/rec-${versionId}`}>← Events of this video</a>
-        <h2 style={{ margin: 0 }} className="mono bidi">{rec.rel_path.split("/").pop()}</h2>
+        <a href={`#/m/${missionId}/events`} title="All the videos' results, with Find and Export">← Results</a>
+        {videos.length > 1
+          ? <select className="mono vid-switch" aria-label="Video" value={versionId}
+              onChange={(e) => { location.hash = `#/m/${missionId}/events/play-${e.target.value}`; }}>
+              {videos.map((v) => <option key={v.id} value={v.id}>{v.rel_path}</option>)}</select>
+          : <h2 style={{ margin: 0 }} className="mono bidi">{rec.rel_path.split("/").pop()}</h2>}
         <span className={`badge ${rec.approved ? "approved" : ""}`}>{REVIEW_TEXT[rec.review] ?? rec.review}</span>
-        <span className="muted">{toReview.length ? `${toReview.length} of ${evs.length} events to review` : `all ${evs.length} events reviewed`}</span>
+        <span className="muted">{toReview.length ? `${toReview.length} of ${evs.length} to check` : `all ${evs.length} checked`}</span>
         <span style={{ flex: 1 }} />
-        <button className="iconbtn" aria-pressed={panel} onClick={togglePanel} title="Show or hide the events panel, so the video can take the whole width">{panel ? "Hide events" : "Events"}</button>
+        <button className="iconbtn" aria-pressed={panel} onClick={togglePanel} title="Show or hide the events panel, so the video can take the whole width">{panel ? "Hide list" : "Vehicles"}</button>
         <button className={rec.approved ? "" : "primary"} onClick={approve}
           title="Say every target in this video is marked and every box is right; it then teaches the detector (A)">
-          {rec.approved ? "Reopen" : rec.pending ? `Confirm ${rec.pending} left and approve for learning` : "Approve for learning"}</button>
+          {rec.approved ? "Reopen" : rec.pending ? `Confirm ${rec.pending} left and approve this video` : "Approve this video"}</button>
       </div>
       <div className="grid" style={{ gridTemplateColumns: panel ? "minmax(0, 1fr) 320px" : "minmax(0, 1fr)", gap: 10 }}>
         <div className="card" style={{ padding: 8 }}>
@@ -535,16 +553,24 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               <div className="muted small">{fmtT(selEv.first_t)} to {fmtT(selEv.last_t)} · {selEv.origin === "human" ? "added by you" : "found by the analysis"}
                 {selEv.fixes.length ? ` · ${selEv.fixes.length} box(es) drawn by you` : ""}</div>
               <div className="row">
-                <button className="primary" onClick={() => decide("confirm")} title="C">Confirm</button>
-                <button className="danger" onClick={() => decide("reject")} title="X">Reject</button>
+                <button className="primary" onClick={() => decide("confirm")} title="Correct: confirm and go to the next one to check (C)">✓ Correct</button>
+                <button className="danger" onClick={() => decide("reject")} title="Not a vehicle: reject it (X)">✕ Not a vehicle</button>
                 <select aria-label="Class" value={selEv.cls} onChange={(e) => setClass(e.target.value)}>
                   {[...new Set([...classes, selEv.cls])].map((c) => <option key={c}>{c}</option>)}</select>
+              </div>
+              <div className="row">
+                <button disabled={inOrder[0]?.id === selEv.id} onClick={() => pick(inOrder[inOrder.findIndex((e) => e.id === selEv.id) - 1], true)}
+                  title="The vehicle before this one">◀ Previous</button>
+                <button disabled={inOrder[inOrder.length - 1]?.id === selEv.id} onClick={() => pick(inOrder[inOrder.findIndex((e) => e.id === selEv.id) + 1], true)}
+                  title="The vehicle after this one">Next ▶</button>
               </div>
               <div className="muted small">Pause where the box is wrong and drag a new one on the picture: it replaces the box on that frame.</div>
               {myBoxHere && <button onClick={() => revise(selEv.id, "clear_box", { t: myBoxHere.t })}>Take back my box on this frame</button>}
               <a href={`#/m/${missionId}/events/${selEv.id}`}>Times, split, merge and clips…</a>
-            </> : <div className="muted">Click a box on the video, or a bar under it, to review that event. Press J to go to the
-              next event not reviewed yet.</div>}
+            </> : <div className="grid" style={{ gap: 8 }}>
+              <div className="muted">Click a box on the video, or a vehicle in the list, to check it. J goes to the next one not checked yet.</div>
+              {toReview.length > 0 && <button className="primary" onClick={() => pick(toReview[0], true)}>Check the first one ▶</button>}
+            </div>}
           </div>
           {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
           {curMark && <MarkCard mk={curMark} now={now} missionId={missionId}
@@ -565,16 +591,25 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               <span>{z.kind === "line" ? "Line" : "Area"}: {z.name}</span>
               <button className="danger" onClick={() => deleteZone(z)}>Remove</button></div>)}
           </div>}
-          <div className="card" style={{ padding: 0, maxHeight: "48vh", overflow: "auto" }}>
+          <div className="card grid" style={{ gap: 6, padding: 8 }}>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <strong className="small">Vehicles in this video</strong>
+              <span className="muted small">{words.length ? `${listed.length} of ${evs.length}` : evs.length}</span>
+            </div>
+            <input type="search" placeholder="Find: car, truck, rejected, 00:15…" aria-label="Find in this video"
+              value={find} onChange={(e) => setFind(e.target.value)} />
+          <div style={{ maxHeight: "44vh", overflow: "auto" }}>
             <table className="t"><tbody>
-              {[...evs].sort((a, b) => a.first_t - b.first_t).map((e) => (
+              {listed.length === 0 && <tr><td className="muted small">Nothing matches.</td></tr>}
+              {listed.map((e) => (
                 <tr key={e.id} className={`click ${e.id === sel ? "sel" : ""}`} onClick={() => pick(e, true)}>
                   <td className="mono">{e.origin === "human" ? "H" : "M"} {e.key}</td>
                   <td>{e.cls}</td>
                   <td className="mono small">{fmtT(e.first_t).slice(3)}</td>
-                  <td><span className={`badge ${e.status === "confirmed" ? "approved" : e.status === "rejected" ? "failed" : ""}`}>{STATUS_TEXT[e.status]}</span></td>
+                  <td><span className={`badge ${e.status === "confirmed" ? "approved" : e.status === "rejected" ? "failed" : ""}`}>{e.status === "pending" ? "to check" : STATUS_TEXT[e.status]}</span></td>
                 </tr>))}
             </tbody></table>
+          </div>
           </div>
         </div>
       </div>

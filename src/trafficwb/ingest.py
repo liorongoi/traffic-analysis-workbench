@@ -268,12 +268,24 @@ class Ingestor:
             res.newly_missing.append(r["rel_path"])
 
 
+_cycle_locks: dict[str, threading.Lock] = {}
+_cycle_locks_guard = threading.Lock()
+
+
 def cycle(mission: Mission, now: datetime | None = None, stability_seconds: int = DEFAULT_STABILITY_SECONDS) -> tuple[ScanResult, int | None]:
     """One scan plus, when there are new eligible files, a processing run.
 
     One-time missions get exactly one run (the initial snapshot). Continuous
-    missions get a new batch run for each scan that finds new files.
+    missions get a new batch run for each scan that finds new files. One scan at a time per mission: the monitor and
+    a page asking for the latest list can otherwise both queue the same new files.
     """
+    with _cycle_locks_guard:
+        lock = _cycle_locks.setdefault(str(mission.dir), threading.Lock())
+    with lock:
+        return _cycle(mission, now, stability_seconds)
+
+
+def _cycle(mission: Mission, now: datetime | None, stability_seconds: int) -> tuple[ScanResult, int | None]:
     cfg = mission.config()
     has_runs = mission.con.execute("SELECT COUNT(*) FROM run").fetchone()[0] > 0
     # A video mission that analyses new videos as they arrive keeps scanning after its first run.
@@ -365,6 +377,8 @@ class Monitor:
                     if self.on_cycle:
                         self.on_cycle(res, run_id)
                 except Exception as exc:  # keep monitoring alive; surface the failure
+                    if m.con.in_transaction:      # a scan stopped half way must not keep the mission's database locked
+                        m.con.execute("ROLLBACK")
                     m.notify("error", "scan_failed", f"Scan failed: {exc}")
             self._wake.wait(self.interval)
             self._wake.clear()
