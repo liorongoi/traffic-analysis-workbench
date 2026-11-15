@@ -150,6 +150,8 @@ export default function Settings({ section }: { section?: string }) {
           <Card title="What to find" lead="The kind of analysis a new video mission runs.">
             <Modes kind="video" value={d.video.mode} onChange={(v) => change("video", { mode: v })} />
           </Card>
+          {/* Beside the long camera card, so the two columns come out even. */}
+          <div id="set-colours"><PlayerColours /></div>
           <Card title="Camera and speed" lead="How recordings are analysed.">
             <CameraChoice value={d.video.camera} onChange={(v) => change("video", { camera: v })} />
             <ParallelChoice value={d.video.video_workers} onChange={(v) => change("video", { video_workers: v })} />
@@ -165,7 +167,6 @@ export default function Settings({ section }: { section?: string }) {
           <Card title="Detector" wide lead="Which detectors look at each analysed frame.">
             <DetectorChoice value={d.video.detector} onChange={(v) => change("video", { detector: v })} sam={sam ?? undefined} legend={false} video />
           </Card>
-          <div id="set-colours"><PlayerColours /></div>
           <div className="set-wide" id="set-workers"><Workers embedded /></div>
           <Card title="Map and ground heights" wide id="set-maps" lead="Our own map and height servers, for putting a camera on the map. Set up once; then picked from a list.">
             <MapServers />

@@ -713,7 +713,7 @@ function EventDetail({ missionId, eventId }: { missionId: string; eventId: numbe
         {ev.merged_into && <a href={`#/m/${missionId}/events/${ev.merged_into}`}>merged into another event</a>}
         <span className="muted">{idx} other event(s) in this recording</span>
       </div>
-      <div className="grid cols-2" style={{ gridTemplateColumns: "minmax(0, 2fr) minmax(280px, 1fr)" }}>
+      <div className="grid cols-2 event-detail">
         <div className="card" style={{ padding: 8 }}>
           <div style={{ position: "relative", background: "#000" }}>
             {!fallback && <video ref={video} src={`/api/missions/${missionId}/videos/${ev.source_version_id}`} controls preload="metadata"

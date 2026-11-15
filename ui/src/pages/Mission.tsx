@@ -614,7 +614,7 @@ function Results({ m, reload }: { m: any; reload: () => void }) {
       {data && data.total === 0 && <div className="card muted">No images match this filter. Clear the filters to see all processed images.</div>}
       {data && data.total > 0 && (
         <>
-          <div className="tablewrap">
+          <div className="tablewrap results-wrap">
             <table className="t">
               <thead><tr><th style={{ width: 100 }}></th>{COLS.map(([k, l, c]) => <th key={l} className={c} onClick={() => sortBy(k)}>{l}{q.sort === k ? (q.desc ? " ▼" : " ▲") : ""}</th>)}<th>Notes</th></tr></thead>
               <tbody>
