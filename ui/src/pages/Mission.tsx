@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { api, ApiError, Filter, fmtDuration, Job, plausibleFps, post, REVIEW_LABEL, ResultRow } from "../api";
 import { go } from "../router";
 import { useTopSlot } from "../components/TopSlot";
+import DateRange from "../components/DateRange";
 import { ScoreSlider } from "../components/ScoreSlider";
 import SearchTab from "./Search";
 import EventsTab from "./Events";
@@ -609,8 +610,9 @@ function Results({ m, reload }: { m: any; reload: () => void }) {
         <select value={q.filter.processing_state ?? ""} onChange={(e) => setF("processing_state", e.target.value)}>
           <option value="">Any processing state</option>{["done", "queued", "running", "failed", "cancelled"].map((s) => <option key={s}>{s}</option>)}
         </select>
-        <label className="row muted">From <input type="date" value={q.filter.local_date_from ?? ""} onChange={(e) => setF("local_date_from", e.target.value)} /></label>
-        <label className="row muted">to <input type="date" value={q.filter.local_date_to ?? ""} onChange={(e) => setF("local_date_to", e.target.value)} /></label>
+        <DateRange from={q.filter.local_date_from ?? ""} to={q.filter.local_date_to ?? ""} country={m.config.country}
+          near={data?.rows?.[0]?.capture_local?.slice(0, 10) ?? null}
+          onChange={(a, b) => { setPage(0); setQ({ ...q, filter: { ...q.filter, local_date_from: a || undefined, local_date_to: b || undefined } }); }} />
         <select aria-label="Vehicles at least" value={q.filter.min_vehicles ?? ""} onChange={(e) => setF("min_vehicles", e.target.value)}>
           <option value="">Any number of vehicles</option>
           {!["", undefined, null, ...MIN_VEHICLES.map(String)].includes(q.filter.min_vehicles as any) && <option value={q.filter.min_vehicles as any}>{q.filter.min_vehicles} or more vehicles</option>}
