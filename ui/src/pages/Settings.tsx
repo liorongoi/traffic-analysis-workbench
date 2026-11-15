@@ -197,8 +197,8 @@ export default function Settings({ section }: { section?: string }) {
           <Card title="Detector" wide lead="Which detectors look at each analysed frame.">
             <DetectorChoice value={d.video.detector} onChange={(v) => change("video", { detector: v })} sam={sam ?? undefined} legend={false} video />
           </Card>
-          <div className="set-wide" id="set-workers"><Workers embedded /></div>
-          <Card title="Map and ground heights" wide id="set-maps" lead="Our own map and height servers, for putting a camera on the map. Set up once; then picked from a list.">
+          <div id="set-workers"><Workers embedded /></div>
+          <Card title="Map and ground heights" id="set-maps" lead="Our own map and height servers, for putting a camera on the map. Set up once; then picked from a list.">
             <MapServers />
           </Card>
         </div>}

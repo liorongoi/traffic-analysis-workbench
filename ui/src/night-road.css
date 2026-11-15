@@ -81,6 +81,8 @@ body {
 :root .choice:has(input:checked) { box-shadow: none; border-color: rgba(92, 207, 240, .6); }
 :root .badge { border-radius: 999px; padding: 1px 10px; }
 :root .msg { border-radius: 10px; border-left-width: 1px; }
+/* A plain note (no ok, warning or error) is a quiet panel, not an outlined box that reads as a button. */
+:root .msg:not(.ok):not(.warn):not(.err) { border-color: var(--line); background: rgba(255, 255, 255, .03); }
 :root .dialog, :root .fx { border-radius: 16px; clip-path: none; background: var(--surface); }
 
 /* Tables: quiet header, roomy rows, the row under the pointer lifts. */

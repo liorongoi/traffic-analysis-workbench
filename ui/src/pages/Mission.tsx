@@ -354,8 +354,7 @@ function Overview({ m, reload }: { m: any; reload: () => void }) {
  *  Overview, because adding a folder is part of the work. */
 function MissionSetup({ m, reload }: { m: any; reload: () => void }) {
   const c = m.config;
-  return (
-    <div className="grid" style={{ gap: 14 }}>
+  const facts = (
       <div className="setup-facts card">
         <h2 style={{ margin: 0 }}>This mission's setup</h2>
         <dl>
@@ -366,21 +365,24 @@ function MissionSetup({ m, reload }: { m: any; reload: () => void }) {
             : c.processing === "continuous" ? "Keeps watching the input folder" : "Analysed once"}</dd>
         </dl>
         <p className="muted" style={{ margin: 0 }}>New missions take their setup from <a href={`#/settings/${c.input_type === "video" ? "video" : "images"}`}>Settings</a>. Changes here apply to this mission only.</p>
-      </div>
-      {c.input_type === "video" ? (
-        // Video: the choices came from Settings when the mission was made; they are not asked again, only shown,
-        // and opened here when this one mission should differ.
+      </div>);
+  // The facts and the run mode share the top row; the detector gets the full width, its choices side by side.
+  return (
+    <div className="grid" style={{ gap: 14 }}>
+      {c.input_type === "video" ? <>{facts}
+        {/* Video: the choices came from Settings when the mission was made; they are not asked again, only shown,
+            and opened here when this one mission should differ. */}
         <details className="card fold">
           <summary><h2>Detector and camera: {DETECTOR_LABEL[c.detector ?? "standard"] ?? c.detector}, {c.camera === "moving" ? "moving camera" : "fixed camera"}. Change for this mission…</h2></summary>
-          <div className="grid cols-2" style={{ alignItems: "start" }}>
+          <div className="grid" style={{ gap: 14 }}>
             <DetectorCard m={m} reload={reload} />
             <MissionRunMode missionId={m.id} />
           </div>
         </details>
-      ) : <div className="grid cols-2" style={{ alignItems: "start" }}>
+      </> : <>
+        <div className="grid cols-2" style={{ alignItems: "stretch" }}>{facts}<MissionRunMode missionId={m.id} /></div>
         <DetectorCard m={m} reload={reload} />
-        <MissionRunMode missionId={m.id} />
-      </div>}
+      </>}
       <DeleteMission m={m} />
     </div>
   );
@@ -454,7 +456,7 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
   };
   if (m.config.mode === "indoor_outdoor") return <div className="card"><h2>Model</h2><p className="muted">Indoor or outdoor is decided by CLIP ViT-B/32 (OpenAI, MIT licence), installed with LanePulse. It finds no vehicles, so there is no detector to choose. See the <a href={`#/m/${m.id}/sort`}>Indoor and outdoor</a> tab.</p></div>;
   return (
-    <div className="card">
+    <div className="card set-wide">
       <h2>Detector</h2>
       <DetectorChoice value={value} onChange={setValue} sam={sam ?? undefined} disabled={busy} legend={false} video={video} />
       {video && usesSam(value) && <SamInterval value={every} onChange={setEvery} both={partsOf(value).fast !== null} disabled={busy} />}
@@ -1129,7 +1131,7 @@ function FoundBy({ m, reload }: { m: any; reload: () => void }) {
 }
 
 /** Run every processed image again, with the mission's detector or another one. Nothing is overwritten. */
-function RerunButton({ m, reload, small }: { m: any; reload: () => void; small?: boolean }) {
+function RerunButton({ m, reload }: { m: any; reload: () => void; small?: boolean }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState<string>(m.config.detector ?? "standard");
   const [sam, setSam] = useState<any>(null);
@@ -1150,7 +1152,7 @@ function RerunButton({ m, reload, small }: { m: any; reload: () => void; small?:
   };
   return (
     <>
-      <button className={small ? undefined : "primary"} disabled={busy || n === 0}
+      <button disabled={busy || n === 0}
         title={busy ? "Processing is running. Run again when it has finished." : n === 0 ? "Nothing has been processed yet." : undefined}
         onClick={() => { setValue(current); setErr(null); setOpen(true); }}>Run again with another detector…</button>
       {open && createPortal(
