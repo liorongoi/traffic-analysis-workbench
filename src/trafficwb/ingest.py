@@ -276,10 +276,12 @@ def cycle(mission: Mission, now: datetime | None = None, stability_seconds: int 
     """
     cfg = mission.config()
     has_runs = mission.con.execute("SELECT COUNT(*) FROM run").fetchone()[0] > 0
-    if cfg.processing == "one_time" and has_runs:
+    # A video mission that analyses new videos as they arrive keeps scanning after its first run.
+    follows_new = mission.input_type == "video" and (cfg.analyse_new or cfg.run_mode == "auto")
+    if cfg.processing == "one_time" and has_runs and not follows_new:
         return ScanResult(scan_id=-1, status="skipped_one_time_complete"), None
     res = Ingestor(mission, stability_seconds).scan(now)
-    if cfg.processing == "one_time" and res.waiting_for_stability:
+    if cfg.processing == "one_time" and not has_runs and res.waiting_for_stability:
         return res, None  # wait until the snapshot is complete
     # Queue every eligible current version not yet in any run, not just this scan's finds,
     # so files ingested by an interrupted or deferred cycle are never left behind.

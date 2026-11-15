@@ -3,7 +3,8 @@ import { api, ApiError, post } from "../api";
 import { go } from "../router";
 import FolderPicker from "../components/FolderPicker";
 import { NamePick } from "../components/Pick";
-import { DETECTOR_LABEL } from "./Wizard";
+import { CameraChoice, DETECTOR_LABEL, DetectorChoice } from "./Wizard";
+import { fmtDuration } from "../api";
 import { MODE_TEXT as SET_MODE } from "./Settings";
 
 // A new mission is its input folder. The person chooses the folder; LanePulse reads it, names the mission, and takes
@@ -52,6 +53,12 @@ export default function QuickStart() {
   const [err, setErr] = useState<string[]>([]);
   const [learn, setLearn] = useState<Learned | null>(null);
   const [again, setAgain] = useState(0);
+  // Video: the files themselves, and this mission's own choices when they differ from Settings.
+  const [vids, setVids] = useState<{ videos: any[]; more: boolean } | null>(null);
+  const [own, setOwn] = useState<Record<string, any>>({});
+  const [changing, setChanging] = useState(false);
+  const [sam, setSam] = useState<any>(null);
+  useEffect(() => { api("/reference").then((r) => setSam(r.sam3 ?? null)).catch(() => undefined); }, []);
 
   // Read the folder once the path stops changing (the picker reports every key typed in its field).
   useEffect(() => {
@@ -65,6 +72,9 @@ export default function QuickStart() {
         const r: Guess = await post("/quick-start", { source_dir: dir, include_subdirs: true });
         if (!live) return;
         setG(r); setName((n) => (again && n ? n : r.name)); setErr([]);
+        setVids(null);
+        if (r.input_type === "video") post("/quick-start/videos", { source_dir: r.source_dir, include_subdirs: true })
+          .then((v) => live && setVids(v)).catch(() => undefined);
         // Names this app cannot read yet: guess their format straight away, so one press teaches it.
         if (r.readable < r.images + r.videos) {
           post("/name-formats/learn", { folder: r.source_dir, zone: "UTC" }).then((l) => live && setLearn(l)).catch(() => undefined);
@@ -78,7 +88,7 @@ export default function QuickStart() {
 
   const files = g ? g.images + g.videos : 0;
   const video = g?.input_type === "video";
-  const st = g?.settings ?? {};
+  const st = { ...(g?.settings ?? {}), ...own };
 
   const remember = async () => {
     if (!g) return;
@@ -120,15 +130,28 @@ export default function QuickStart() {
 
       {g && !reading && (
         <div className="newm-card card">
-          <div className="newm-figs">
-            <div><b>{files.toLocaleString()}{g.more ? "+" : ""}</b><span>{video ? (g.images ? `${g.videos} videos, ${g.images} images` : "video recordings") : "still images"}</span></div>
-            <div><b>{g.readable.toLocaleString()}</b><span>{video ? "start times in the names" : "capture times read"}</span></div>
-            <div><b>{g.first_utc && g.last_utc ? span(g.first_utc, g.last_utc) : "–"}</b><span>{g.first_utc && g.last_utc ? `${when(g.first_utc)} to ${when(g.last_utc)} UTC` : video ? "timed from the start of each video" : "no capture times"}</span></div>
-          </div>
+          {!video && <div className="newm-figs">
+            <div><b>{files.toLocaleString()}{g.more ? "+" : ""}</b><span>still images</span></div>
+            <div><b>{g.readable.toLocaleString()}</b><span>capture times read</span></div>
+            <div><b>{g.first_utc && g.last_utc ? span(g.first_utc, g.last_utc) : "–"}</b><span>{g.first_utc && g.last_utc ? `${when(g.first_utc)} to ${when(g.last_utc)} UTC` : "no capture times"}</span></div>
+          </div>}
+          {video && <div className="newm-vids">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <b>{g.videos.toLocaleString()}{g.more ? "+" : ""} video{g.videos === 1 ? "" : "s"}{vids ? ` · ${fmtDuration(vids.videos.reduce((a, v) => a + (v.duration_s ?? 0), 0))}${vids.more ? "+" : ""} in all` : ""}</b>
+              <span className="muted small">{g.readable ? `${g.readable} with a start time in the name; the rest are timed from their own start` : "Timed from the start of each video; no date is needed in the names"}</span>
+            </div>
+            {!vids && <p className="muted small" role="status">Opening the videos…</p>}
+            {vids && <div className="newm-vlist">{vids.videos.map((v) => (
+              <div key={v.rel_path} className={`newm-v${v.error ? " bad" : ""}`}>
+                {v.thumb ? <img src={v.thumb} alt="" /> : <div className="ph" />}
+                <span className="mono bidi" title={v.rel_path}>{v.rel_path}</span>
+                <span className="muted small">{v.error ? "cannot be opened" : `${fmtDuration(v.duration_s)}${v.width ? ` · ${v.width}×${v.height}` : ""}${v.codec ? ` · ${v.codec}` : ""}`}</span>
+              </div>))}
+              {vids.more && <div className="muted small">and more…</div>}
+            </div>}
+            {vids && vids.videos.some((v) => v.error) && <div className="msg warn">{vids.videos.filter((v) => v.error).length} file(s) cannot be opened and will be listed as such: {vids.videos.filter((v) => v.error).map((v) => v.rel_path).join(", ")}.</div>}
+          </div>}
           {files === 0 && <div className="msg warn">There are no images or videos in this folder or its subfolders.</div>}
-          {files > 0 && video && g.readable < files && (
-            <div className="msg">{g.readable === 0 ? "These video names hold no date or time. That is fine:" : `${files - g.readable} of ${files} video names hold no date or time. That is fine:`}{" "}
-              events are timed from the start of each video, and you can give a video its start time later on the mission's page if you want clock times.</div>)}
           {files > 0 && !video && g.readable < files && (
             <div className="msg warn learn">
               <div>{files - g.readable} of {files} file names have no capture time LanePulse knows yet{g.unreadable[0] ? <>, for example <span className="mono bidi">{g.unreadable[0].file}</span></> : null}.</div>
@@ -145,18 +168,30 @@ export default function QuickStart() {
             <NamePick label="Mission name" value={name} onChange={setName} suggestions={nameIdeas(g)} style={{ width: "100%" }} />
           </div>
           <div className="newm-uses">
-            <span className="muted">From Settings</span>
-            <span className="chip">{SET_MODE[st.mode] ?? modeText(st.mode ?? "")}</span>
+            <span className="muted">{Object.keys(own).length ? "Settings, changed for this mission" : "From Settings"}</span>
+            <span className="chip">{video && st.mode === "general_traffic" ? "Count and track vehicles" : SET_MODE[st.mode] ?? modeText(st.mode ?? "")}</span>
             <span className="chip">{DETECTOR_LABEL[st.detector] ?? st.detector}</span>
             {video && <span className="chip">{st.camera === "moving" ? "Moving camera" : "Fixed camera"}</span>}
-            <span className="chip">{g.iana_zone}</span>
-            <span className="chip">{st.processing === "continuous" ? "Keeps watching" : "Analyse once"}</span>
+            {!video && <span className="chip">{g.iana_zone}</span>}
+            <span className="chip">{video ? (st.analyse_new ? "New videos start by themselves" : "New videos wait for you") : st.processing === "continuous" ? "Keeps watching" : "Analyse once"}</span>
             <span className="chip" title={g.output_dir}>Results: <span className="mono bidi">{g.output_dir.split(/[\\/]/).slice(-2).join("/")}</span></span>
-            <a href={`#/settings/${video ? "video" : "images"}`}>Change</a>
+            {video ? <button className="linkish" aria-expanded={changing} onClick={() => setChanging(!changing)}>{changing ? "Done" : "Change for this mission"}</button>
+              : <a href={`#/settings/${video ? "video" : "images"}`}>Change</a>}
           </div>
+          {video && changing && <div className="newm-own">
+            <div className="field"><span>What to find</span>
+              <div className="seg" role="radiogroup" aria-label="What to find">
+                {[["general_traffic", "Count and track vehicles"], ["object_search", "Find vehicles by description"], ["plate_recognition", "Read licence plates"]].map(([k, l]) => (
+                  <button key={k} role="radio" aria-checked={st.mode === k} className={st.mode === k ? "on" : ""} onClick={() => setOwn({ ...own, mode: k })}><b>{l}</b></button>))}
+              </div></div>
+            <DetectorChoice value={st.detector ?? "standard"} onChange={(d) => setOwn({ ...own, detector: d })} sam={sam ?? undefined} video />
+            <CameraChoice value={st.camera ?? "fixed"} onChange={(c) => setOwn({ ...own, camera: c })} />
+            <div className="row"><span className="muted small">These apply to this mission only. Settings stay as they are.</span>
+              {Object.keys(own).length > 0 && <button className="linkish" onClick={() => setOwn({})}>Back to Settings</button>}</div>
+          </div>}
           {err.map((e) => <div key={e} className="msg err" role="alert">{e}</div>)}
           <div className="newm-go">
-            <a href="#/new/full" className="muted">Different choices for this mission only</a>
+            {!video && <a href="#/new/full" className="muted">Different choices for this mission only</a>}
             <span className="grow" />
             {!video && <button className="big" disabled={!g || reading || files === 0 || busy} onClick={() => create("indoor_outdoor")}
               title="Split these images into indoor and outdoor instead; file names need no capture time">Sort into indoor and outdoor</button>}

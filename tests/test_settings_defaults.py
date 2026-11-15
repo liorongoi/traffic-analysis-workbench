@@ -10,14 +10,14 @@ from test_web_api import H1, client, direct_access, env  # noqa: F401  (env is a
 def test_built_in_values_without_a_file(tmp_path):
     d = defaults.load(tmp_path)
     assert d["both"]["results_folder"] is None and d["both"]["export_formats"] == ["xlsx", "csv"]
-    assert d["images"]["mode"] == "general_traffic" and d["video"]["mode"] == "object_search"
+    assert d["images"]["mode"] == "general_traffic" and d["video"]["mode"] == "general_traffic" and d["video"]["analyse_new"] is True
 
 
 def test_save_merges_checks_and_survives_a_damaged_file(tmp_path):
     out = defaults.save(tmp_path, {"images": {"detector": "rfdetr"}, "video": {"camera": "moving", "video_workers": 4}})
     assert out["images"]["detector"] == "rfdetr" and out["video"]["camera"] == "moving"
     assert defaults.load(tmp_path)["video"]["video_workers"] == 4
-    for bad in ({"video": {"mode": "general_traffic"}}, {"both": {"export_formats": []}}, {"both": {"iana_zone": "Mars/Base"}},
+    for bad in ({"images": {"mode": "no_such_mode"}}, {"both": {"export_formats": []}}, {"both": {"iana_zone": "Mars/Base"}},
                 {"images": {"nope": 1}}, {"nope": {}}, {"both": {"results_folder": str(tmp_path / "missing")}}):
         with pytest.raises(ValueError):
             defaults.save(tmp_path, bad)

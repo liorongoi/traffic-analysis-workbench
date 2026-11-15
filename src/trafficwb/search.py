@@ -119,8 +119,10 @@ class SearchService:
         return Context(tuple(names))
 
     def _check_mode(self) -> None:
-        mode = self.con.execute("SELECT mode FROM mission").fetchone()[0]
-        if mode != "object_search":
+        row = self.con.execute("SELECT mode, input_type FROM mission").fetchone()
+        mode, kind = row[0], row[1]
+        # Video missions that count and track vehicles can be searched too: their vehicles are the same events.
+        if mode != "object_search" and not (kind == "video" and mode == "general_traffic"):
             raise SearchError("Object search runs in object search missions only. Create an object search mission "
                               "over the same source folder.")
 

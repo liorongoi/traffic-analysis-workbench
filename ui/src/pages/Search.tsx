@@ -34,17 +34,19 @@ const EXAMPLES = ["red pickup trucks", "white vans between 07:00 and 09:00", "bu
 const DETECTOR = ["car", "bus", "truck", "motorcycle", "bicycle"];
 const SUBTYPE_LABEL: Record<string, string> = { pickup: "pickup", van: "van", suv: "SUV", taxi: "taxi", minibus: "minibus", semi_trailer: "semi-trailer" };
 
-export default function SearchTab({ missionId, runId }: { missionId: string; runId: number | null }) {
+/** embedded: the Find box on a video mission's Results tab (its vehicles, found by description; video missions that
+ *  count and track vehicles can be searched as object search ones). */
+export default function SearchTab({ missionId, runId, embedded = false }: { missionId: string; runId: number | null; embedded?: boolean }) {
   const [home, setHome] = useState<Home | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const load = useCallback(() => api<Home>(`/missions/${missionId}/search`).then(setHome).catch((e: ApiError) => setErr(e.message)), [missionId]);
   useEffect(() => { load(); }, [load]);
   if (err) return <div className="msg err">{err}</div>;
   if (!home) return <div className="muted">Loading…</div>;
-  if (home.mode !== "object_search")
+  if (home.mode !== "object_search" && !(embedded && home.mode === "general_traffic"))
     return <div className="msg warn">Object search runs in object search missions only. Create a new mission with the mode "object search" over the same source folder.</div>;
   if (runId) return <RunView missionId={missionId} runId={runId} vocab={home.vocabulary} />;
-  return <Ask missionId={missionId} home={home} reload={load} />;
+  return <Ask missionId={missionId} home={home} reload={load} simple={embedded} />;
 }
 
 const WHAT: [string, string][] = [["vehicles", "Any vehicle"], ["cars", "Cars"], ["buses", "Buses"], ["trucks", "Trucks"],
@@ -59,7 +61,7 @@ const DAYS: [string, string][] = [["", "Every day"], ...["Sunday", "Monday", "Tu
 const LIGHT: [string, string][] = [["", "Day or night"], ["by day", "By day"], ["at dusk", "At dusk"], ["at night", "At night"]];
 
 /** The request built from menus: each pick rewrites the request text, which the interpreter then reads as usual. */
-function RequestMenus({ onText }: { onText: (t: string) => void }) {
+function RequestMenus({ onText, simple = false }: { onText: (t: string) => void; simple?: boolean }) {
   const [p, setP] = useState({ what: "vehicles", colour: "", when: "", days: "", light: "" });
   const set = (k: keyof typeof p, v: string) => {
     const n = { ...p, [k]: v };
@@ -74,13 +76,13 @@ function RequestMenus({ onText }: { onText: (t: string) => void }) {
     <div className="row" style={{ flexWrap: "wrap", marginBottom: 8 }}>
       {menu("colour", "Colour", [["", "Any colour"], ...COLOUR.map((c): [string, string] => [c, c[0].toUpperCase() + c.slice(1)])])}
       {menu("what", "What", WHAT)}
-      {menu("when", "Time of day", WHEN)}
-      {menu("days", "Days", DAYS)}
+      {!simple && menu("when", "Time of day", WHEN)}
+      {!simple && menu("days", "Days", DAYS)}
       {menu("light", "Light", LIGHT)}
     </div>);
 }
 
-function Ask({ missionId, home, reload }: { missionId: string; home: Home; reload: () => void }) {
+function Ask({ missionId, home, reload, simple = false }: { missionId: string; home: Home; reload: () => void; simple?: boolean }) {
   const [text, setText] = useState("vehicles");
   const [req, setReq] = useState<Request | null>(null);
   const [spec, setSpec] = useState<Spec | null>(null);
@@ -129,9 +131,9 @@ function Ask({ missionId, home, reload }: { missionId: string; home: Home; reloa
     <div className="grid cols-2" style={{ alignItems: "start" }}>
       <div className="grid">
         <div className="card">
-          <h2>What are you looking for?</h2>
+          <h2>{simple ? "Find vehicles" : "What are you looking for?"}</h2>
           <p className="muted">Pick from the menus (or type in English). Nothing runs until you have checked how the request was understood.</p>
-          <RequestMenus onText={setText} />
+          <RequestMenus onText={setText} simple={simple} />
           <textarea rows={3} style={{ width: "100%" }} value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. red pickup trucks between 17:00 and 05:00"
             onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && text.trim()) ask(); }} />
           <div className="row" style={{ marginTop: 8, justifyContent: "space-between" }}>
@@ -164,7 +166,7 @@ function Ask({ missionId, home, reload }: { missionId: string; home: Home; reloa
         )}
         {!req && err && <div className="msg err">{err}</div>}
       </div>
-      <History requests={home.requests} missionId={missionId} reload={reload} />
+      {(!simple || home.requests.length > 0) && <History requests={home.requests} missionId={missionId} reload={reload} />}
     </div>
   );
 }

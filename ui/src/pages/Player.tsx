@@ -88,6 +88,24 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   const [addCls, setAddCls] = useState("car");
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [fallback, setFallback] = useState(false);
+  // A format the browser cannot play (AVI, WMV, H.265 ...): frames from the workstation while LanePulse makes a copy
+  // the browser can play, then that copy, with the same timestamps.
+  const original = `/api/missions/${missionId}/videos/${versionId}`;
+  const [playSrc, setPlaySrc] = useState(original);
+  const [copy, setCopy] = useState<{ progress: number; error: string | null } | null>(null);
+  useEffect(() => { setPlaySrc(original); setFallback(false); setCopy(null); }, [original]);
+  useEffect(() => {
+    if (!fallback || playSrc !== original) return;
+    let live = true, timer = 0;
+    const poll = () => api(`/missions/${missionId}/videos/${versionId}/playable`).then((r) => {
+      if (!live) return;
+      if (r.ready) { setCopy(null); setPlaySrc(r.url); setFallback(false); return; }
+      setCopy({ progress: r.progress ?? 0, error: r.error ?? null });
+      if (!r.error) timer = window.setTimeout(poll, 1500);
+    }).catch(() => { if (live) timer = window.setTimeout(poll, 4000); });
+    poll();
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [fallback, playSrc, original, missionId, versionId]);
   const [help, setHelp] = useState(false);
   // Tails and labels: how long a tail, and what the small label over each target says. Kept for next time.
   const keep = <T,>(k: string, v: T) => { try { localStorage.setItem(`twb.player.${k}`, JSON.stringify(v)); } catch { /* not kept */ } };
@@ -142,6 +160,9 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   }, [missionId, versionId]);
   // Where a drone or aircraft camera was (DJI subtitle file or KLV in the video), when the recording carries it.
   // Optional: read only when the operator asks for it; nothing else depends on it.
+  // Flight data only means something for a moving camera (a drone or an aircraft).
+  const [camera, setCamera] = useState<string | null>(null);
+  useEffect(() => { api(`/missions/${missionId}`).then((r) => setCamera(r.config?.camera ?? "fixed")).catch(() => setCamera(null)); }, [missionId]);
   const [tel, setTel] = useState<{ source: string | null; summary?: any; samples?: any[] } | null>(null);
   useEffect(() => { setTel(null); }, [missionId, versionId]);
   const askFlight = () => api(`/missions/${missionId}/recordings/${versionId}/telemetry`)
@@ -354,10 +375,10 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
       <div className="grid" style={{ gridTemplateColumns: panel ? "minmax(0, 1fr) 320px" : "minmax(0, 1fr)", gap: 10 }}>
         <div className="card" style={{ padding: 8 }}>
           <div className="stage" style={{ position: "relative", background: "#000", aspectRatio: `${W} / ${H}`, maxHeight: "calc(100vh - 330px)", minHeight: 240 }}>
-            {!fallback && <video ref={video} src={`/api/missions/${missionId}/videos/${versionId}`} preload="auto"
+            {!fallback && <video ref={video} src={playSrc} preload="auto"
               style={{ width: "100%", height: "100%", display: "block", objectFit: "contain" }}
               onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)}
-              onError={() => setFallback(true)} />}
+              onError={() => { if (playSrc === original) setFallback(true); else { setPlaySrc(original); setFallback(true); setCopy({ progress: 0, error: "The playable copy could not be played either." }); } }} />}
             {fallback && <img alt={`Frame at ${fmtT(now)}`} src={`/api/missions/${missionId}/videos/${versionId}/frame?t=${now.toFixed(2)}&w=1920`}
               style={{ width: "100%", height: "100%", display: "block", objectFit: "contain" }} />}
             <svg ref={svg} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
@@ -483,7 +504,10 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             <button onClick={() => setHelp(!help)} title="Keys (?)">?</button>
           </div>
           <Timeline lanes={tl} dur={dur} now={now} sel={sel} onSeek={(t) => { pause(); seek(t); }} onPick={(e) => pick(e, true)} />
-          {fallback && <div className="msg warn">This browser cannot play the video's format, so its frames are decoded on the workstation, five a second.</div>}
+          {fallback && (copy?.error
+            ? <div className="msg warn">This browser cannot play the video's format, so its frames are decoded on the workstation, five a second. ({copy.error})</div>
+            : <div className="msg">This browser cannot play this video's format. LanePulse is making a copy it can play
+                {copy ? ` (${Math.round(copy.progress * 100)}%)` : ""}; until then you see five frames a second. Your file is not changed.</div>)}
           {zoning === "line" && <div className="msg">Drag the line across the road. Targets crossing it are counted both ways; "in" is
             to the right of the line as you draw it (the arrow shows it). Every video from this camera uses it.</div>}
           {zoning === "area" && <div className="msg">Click each corner of the area; click the first corner again (or Enter) to finish.
@@ -533,7 +557,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               <span>T{mk.id} {mk.cls} · {mk.start_t != null ? `${fmtT(mk.start_t)} to ${fmtT(mk.end_t ?? mk.start_t)}` : "not found"}</span>
               <span className={`badge ${mk.state === "confirmed" ? "approved" : ""}`}>{mk.state === "confirmed" ? "teaches" : "to check"}</span></div>)}
           </div>}
-          {tel === null ? <button onClick={askFlight} title="Read the drone's or aircraft's own flight record (a DJI .srt beside the video, or KLV inside it)">Flight data</button>
+          {camera === "fixed" && tel === null ? null : tel === null ? <button onClick={askFlight} title="Read the drone's or aircraft's own flight record (a DJI .srt beside the video, or KLV inside it)">Flight data</button>
             : tel.source ? <Aircraft tel={tel as any} t={now} /> : <div className="muted small">This recording carries no flight data.</div>}
           {zones.length > 0 && <div className="card grid" style={{ gap: 4 }}>
             <strong className="small">Lines and areas of this camera</strong>
