@@ -151,11 +151,9 @@ def main(argv=None) -> int:
     (tmp / "launch" / "fonts").mkdir(parents=True)
     shutil.copy2(ROOT / "packaging" / "mac" / "launch" / "index.html", tmp / "launch" / "index.html")
     assets = ROOT / "src" / "trafficwb" / "web" / "static" / "assets"
-    for f in ("chakra-petch-600", "chakra-petch-700", "ibm-plex-sans-400", "ibm-plex-sans-500", "ibm-plex-mono-400", "ibm-plex-mono-500"):
-        family, weight = f.rsplit("-", 1)
-        font = next(iter(sorted(assets.glob(f"{family}-latin-{weight}-normal*.woff2"))), None)
-        if font:
-            shutil.copy2(font, tmp / "launch" / "fonts" / f"{f}.woff2")
+    font = next(iter(sorted(assets.glob("overpass-latin-wght-normal*.woff2"))), None)
+    if font:
+        shutil.copy2(font, tmp / "launch" / "fonts" / "overpass.woff2")
     shutil.copy2(ROOT / "scripts" / "offline_smoke.py", tmp / "offline_smoke.py")
     shutil.copy2(ROOT / "scripts" / "pc_check.py", tmp / "pc_check.py")
     shutil.copy2(ROOT / "packaging" / "training" / "TRAINING.txt", tmp / "TRAINING.txt")
