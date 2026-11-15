@@ -304,8 +304,8 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
       if (k === " ") toggle();
       else if (k === "arrowright" || k === ".") { pause(); seek(now + (e.shiftKey ? 1 : frame)); }
       else if (k === "arrowleft" || k === ",") { pause(); seek(now - (e.shiftKey ? 1 : frame)); }
-      else if (k === "j" && toReview.length) pick(toReview[(i + 1) % toReview.length], true);
-      else if (k === "k" && toReview.length) pick(toReview[(i - 1 + toReview.length) % toReview.length], true);
+      else if (k === "k" && toReview.length) pick(toReview[(i + 1) % toReview.length], true);   // K forward, J back
+      else if (k === "j" && toReview.length) pick(toReview[(i - 1 + toReview.length) % toReview.length], true);
       else if (k === "c" && selEv) decide("confirm");
       else if ((k === "x" || k === "delete" || k === "backspace") && selEv) decide("reject");
       else if (k === "b") { setAdding((a) => !a); setSel(null); setMeasuring(false); pause(); }
@@ -496,7 +496,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             : "Pause where the target is clear and drag a box around all of it. The app follows it forwards and backwards and suggests where it enters and leaves."}</div>}
           {adding && <div className="msg">Drag a box around the target the analysis missed. It is added as a confirmed {addCls}.</div>}
           {help && <div className="msg small">
-            Space play or pause · ← → one frame (Shift: one second) · J / K next or previous event to review · C confirm ·
+            Space play or pause · ← → one frame (Shift: one second) · K / J next or previous event to review · C confirm ·
             X or Delete reject · 1–{classes.length} class ({classes.map((c, i) => `${i + 1} ${c}`).join(", ")}) ·
             B missed target · T teach a new target · M measure the camera · L counting line · drag on the paused picture to redraw the picked event's box · A approve for learning ·
             H hide boxes · S show scores · Esc let go</div>}
@@ -519,7 +519,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               <div className="muted small">Pause where the box is wrong and drag a new one on the picture: it replaces the box on that frame.</div>
               {myBoxHere && <button onClick={() => revise(selEv.id, "clear_box", { t: myBoxHere.t })}>Take back my box on this frame</button>}
               <a href={`#/m/${missionId}/events/${selEv.id}`}>Times, split, merge and clips…</a>
-            </> : <div className="muted">Click a box on the video, or a bar under it, to review that event. Press J to go to the
+            </> : <div className="muted">Click a box on the video, or a bar under it, to review that event. Press K to go to the
               next event not reviewed yet.</div>}
           </div>
           {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
