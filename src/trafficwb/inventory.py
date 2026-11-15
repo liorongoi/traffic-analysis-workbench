@@ -22,6 +22,22 @@ from typing import Any
 from .timeparse import MalformedName, parse_capture_time
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+# Not the operator's files: names starting with a dot (macOS writes "._clip.mp4" beside every file it copies to a
+# USB or network drive, and .Trashes, .Spotlight-V100 ...) and Windows' own folders on every drive.
+SYSTEM_DIRS = {"$recycle.bin", "system volume information", "@eadir", "#recycle"}
+
+
+def hidden(name: str) -> bool:
+    """A file or folder the operator did not put there and never sees in their file browser."""
+    return name.startswith(".") or name.lower() in SYSTEM_DIRS or name.lower() in ("thumbs.db", "desktop.ini")
+
+
+def hidden_path(rel) -> bool:
+    """Whether any part of a relative path is hidden."""
+    from pathlib import PurePath
+    return any(hidden(part) for part in PurePath(rel).parts)
+
+
 VIDEO_EXT = {".mp4", ".mkv", ".avi", ".mov", ".ts", ".m4v", ".wmv", ".asf", ".dav", ".h264", ".h265", ".webm", ".ogv",
              ".mpg", ".mpeg", ".m2ts", ".mts"}
 

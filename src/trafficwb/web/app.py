@@ -507,6 +507,9 @@ GENERIC_FOLDERS = {"images", "image", "img", "photos", "pictures", "videos", "vi
                    "source", "input", "export", "exports", "dcim"}
 
 
+from ..inventory import hidden as _hidden, hidden_path as _hidden_path  # noqa: E402
+
+
 def quick_start(source_dir: str, include_subdirs: bool, data_root: Path, limit: int = 5000) -> dict:
     """What a new mission for this folder most likely is, so it can be created on one screen: a name, still images or
     video, how many names give a capture time and over what span, the time zone of the latest mission, and an
@@ -520,7 +523,7 @@ def quick_start(source_dir: str, include_subdirs: bool, data_root: Path, limit: 
     unreadable: list[dict] = []
     more = False
     for p in (root.rglob("*") if include_subdirs else root.glob("*")):
-        if p.name.startswith(".") or p.suffix.lower() not in IMAGE_EXTS or not p.is_file():
+        if _hidden_path(p.relative_to(root)) or p.suffix.lower() not in IMAGE_EXTS or not p.is_file():
             continue
         if images + videos >= limit:
             more = True
@@ -689,7 +692,7 @@ def folder_roots() -> list[dict]:
     for base in (Path("/Volumes"), Path("/mnt"), Path("/media")):
         try:
             for d in sorted(base.iterdir()) if base.is_dir() else []:
-                if d.is_dir() and not d.name.startswith("."):
+                if d.is_dir() and not _hidden(d.name):
                     out.append({"name": d.name, "path": str(d), "group": "drives"})
         except OSError:
             pass
@@ -1009,7 +1012,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         it = root.rglob("*") if body.include_subdirs else root.glob("*")
         out = []
         for p in it:
-            if not p.is_file():
+            if not p.is_file() or _hidden_path(p.relative_to(root)):
                 continue
             row: dict[str, Any] = {"file": str(p.relative_to(root))}
             try:
@@ -1041,7 +1044,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         walk = root.rglob("*") if body.include_subdirs else root.glob("*")
         files = []
         for p in walk:
-            if p.suffix.lower() in VIDEO_EXT and p.is_file():
+            if p.suffix.lower() in VIDEO_EXT and p.is_file() and not _hidden_path(p.relative_to(root)):
                 files.append(p)
                 if len(files) > 200:
                     break
@@ -1131,7 +1134,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             else:
                 names = []
                 for p in (root.rglob("*") if body.include_subdirs else root.glob("*")):
-                    if p.is_file() and p.suffix.lower() in IMAGE_EXT | VIDEO_EXT:
+                    if p.is_file() and p.suffix.lower() in IMAGE_EXT | VIDEO_EXT and not _hidden_path(p.relative_to(root)):
                         names.append(p.name)
                         if len(names) >= 5000:
                             break
@@ -1155,7 +1158,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "no_folder", f"{root} is not a folder on this workstation.")
         unread: list[str] = []
         for p in (root.rglob("*") if body.include_subdirs else root.glob("*")):
-            if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in IMAGE_EXT | VIDEO_EXT:
+            if p.is_file() and not _hidden_path(p.relative_to(root)) and p.suffix.lower() in IMAGE_EXT | VIDEO_EXT:
                 try:
                     parse_capture_time(p.name)
                 except MalformedName:
