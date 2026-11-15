@@ -336,6 +336,7 @@ function EventList({ missionId, recording, find }: { missionId: string; recordin
   const setRec = (v: string) => { setRecState(v); go(`/m/${missionId}/events${v ? `/rec-${v}` : ""}`); };
   const [status, setStatus] = useState("");
   const [flag, setFlag] = useState("");
+  const [kind, setKind] = useState("");     // one kind of target (car, pedestrian ...), "" every kind
   const [dir, setDir] = useState("");
   const [inView, setInView] = useState("");
   const [stopped, setStopped] = useState("");
@@ -436,10 +437,11 @@ function EventList({ missionId, recording, find }: { missionId: string; recordin
   const people = evs?.some((e) => e.attrs?.upper != null || e.cls === "person");
   // Kept whatever the slider says: what the operator confirmed, re-classed or added (as the export does).
   const sure = (e: VEvent) => !minScore || e.score == null || e.score >= minScore || e.status === "confirmed" || e.cls !== e.machine_cls;
-  const shown = (evs ?? []).filter((e) => { if (!sure(e)) return false; const a = e.attrs; if (!a) return true;
+  const kinds = [...new Set((evs ?? []).map((e) => e.cls))].sort();
+  const shown = (evs ?? []).filter((e) => { if (!sure(e) || (kind && e.cls !== kind)) return false; const a = e.attrs; if (!a) return true;
     return (!dir || a.direction === dir) && (!inView || a.dwell_s >= Number(inView)) && (!stopped || a.stopped_s >= Number(stopped))
       && inSpeed(a) && inZone(a) && onPath(a) && (!colour || has(a.colour, colour) || has(a.upper, colour) || has(a.lower, colour)) && (!upper || has(a.upper, upper)) && (!lower || has(a.lower, lower)); });
-  const filtering = !!(minScore || dir || inView || stopped || speed || colour || upper || lower || zone || from || to);
+  const filtering = !!(minScore || kind || dir || inView || stopped || speed || colour || upper || lower || zone || from || to);
   // One tab per analysed video; the parts of a merged recording share one tab.
   const inGroup = new Set(groups.flatMap((g) => g.members));
   const done = new Set(recs.filter((r) => r.processing_state === "done").map((r) => r.id));
@@ -524,6 +526,10 @@ function EventList({ missionId, recording, find }: { missionId: string; recordin
         </select>
         <select value={flag} onChange={(e) => setFlag(e.target.value)} aria-label="Flag">
           <option value="">Any flag</option>{Object.entries(FLAG_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <select value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind of target"
+          title="One kind of target only. A kind not listed here (pedestrians, say) is added under What this mission looks for, on the mission's page; then analyse again.">
+          <option value="">Every kind</option>{kinds.map((k) => <option key={k} value={k}>{k}s only</option>)}
         </select>
         <span className="muted">{filtering ? `${shown.length} of ${evs?.length ?? 0}` : evs?.length ?? 0} events</span>
         <span style={{ flex: 1 }} />

@@ -204,7 +204,7 @@ def join(segs: list[Segment], results: dict[int, SegmentResult], iou_min: float 
                 used_r.add(rk)
                 matched[rk] = open_[lk]
             for lk, j in open_.items():
-                if lk not in used_l:            # reached the cut but nothing on the right agrees: it ended there
+                if lk not in used_l and j.reason == "segment_end":   # nothing on the right agrees: it ended there
                     j.reason = "lost"
         nxt_open: dict[str, Joined] = {}
         for p in res.pieces:
@@ -220,8 +220,10 @@ def join(segs: list[Segment], results: dict[int, SegmentResult], iou_min: float 
                 out.append(j)
             else:
                 continue
-            # Still running at this segment's end (it was closed by the segment, not by the scene): may continue.
-            if p.reason == "segment_end" and s.own_b != float("inf"):
+            # Still running at this segment's end (it was closed by the segment, not by the scene), or seen past the
+            # cut and ended there (it drove out in the overlap, which the next segment saw too): may continue.
+            past = p.reason != "scene_cut" and p.obs and p.obs[-1][0] >= s.own_b - 1e-6
+            if (p.reason == "segment_end" or past) and s.own_b != float("inf"):
                 nxt_open[p.key] = j
         open_ = nxt_open
     return [j for j in out if j.obs]
