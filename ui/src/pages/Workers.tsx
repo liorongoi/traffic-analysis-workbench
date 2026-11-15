@@ -50,12 +50,16 @@ export default function Workers({ embedded = false }: { embedded?: boolean }) {
 
   return (
     <div className={`${embedded ? "" : "page "}grid workers`} style={{ gap: 12 }}>
-      <div className="page-head"><div>{embedded ? <h2 style={{ margin: 0 }}>Other computers that help</h2> : <h1>Workers</h1>}
+      {!embedded && <div className="page-head"><div><h1>Workers</h1>
         <p>Other computers on your network can help analyse long videos. Each one takes a few minutes of a recording at a
-          time, runs the mission's exact model on it and sends back what it found, so an hour of video is done sooner.</p></div></div>
+          time, runs the mission's exact model on it and sends back what it found, so an hour of video is done sooner.</p></div></div>}
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
 
       <div className="card grid" style={{ gap: 10 }}>
+        {/* In Settings the heading and the explanation sit in the card, like every other section there. */}
+        {embedded && <div><h2 style={{ margin: 0 }}>Other computers that help</h2>
+          <p className="muted" style={{ margin: "2px 0 0" }}>Other computers on your network can help analyse long videos. Each one takes a few minutes of a recording at a
+          time, runs the mission's exact model on it and sends back what it found, so an hour of video is done sooner.</p></div>}
         <div className="row">
           <label className="row">Other computers may help
             <select aria-label="Other computers may help" value={st.enabled ? "on" : "off"}
@@ -76,7 +80,7 @@ export default function Workers({ embedded = false }: { embedded?: boolean }) {
         </div>}
         {st.lan && st.discovery && st.discovery !== "on" && <div className="msg warn">Other computers cannot find this
           server by themselves ({st.discovery}). Use a pairing code instead.</div>}
-        {!st.lan && <div className="msg warn">This server accepts connections from this computer only. Start it with network
+        {st.enabled && !st.lan && <div className="msg warn">This server accepts connections from this computer only. Start it with network
           access (<span className="mono">trafficwb-web serve --lan</span>) so other computers can reach it.</div>}
         {fresh && <div className="msg ok grid" style={{ gap: 6 }}>
           <div>Pairing code for <strong>{fresh.label}</strong>: <span className="mono big-code">{fresh.code}</span>
@@ -87,6 +91,7 @@ export default function Workers({ embedded = false }: { embedded?: boolean }) {
           <div className="muted small">This server's address is <span className="mono">{address}</span>{" "}
             <button onClick={() => navigator.clipboard?.writeText(address)}>Copy address</button></div>
         </div>}
+        {embedded && st.helpers.length === 0 && <p style={{ margin: 0 }}>No computer has connected yet.</p>}
         <p className="muted" style={{ margin: 0 }}>Only segments of video missions are shared. A helping computer reads just the part
           of the recording it works on and keeps nothing afterwards. If it stops, its part goes back to the queue after two
           minutes. A computer needs SAM 3.1 installed to help missions that use it.</p>
@@ -110,7 +115,8 @@ export default function Workers({ embedded = false }: { embedded?: boolean }) {
         {!st.enabled && <p className="muted" style={{ marginBottom: 0 }}>A computer you allow starts helping when other computers may help (above).</p>}
       </div>}
 
-      <div className="card">
+      {/* In Settings, an empty list is one line in the card above instead of a card of its own. */}
+      {(!embedded || st.helpers.length > 0) && <div className="card">
         <h2>Computers</h2>
         {st.helpers.length === 0 ? <p className="muted">No computer has connected yet.</p> : (
           <table className="t"><thead><tr><th>Computer</th><th>Status</th><th>Now</th><th className="num">Segments done</th>
@@ -125,7 +131,7 @@ export default function Workers({ embedded = false }: { embedded?: boolean }) {
                 <td className="num">{h.lost || ""}</td>
                 <td className="muted small">{h.info.cpus ? `${h.info.cpus} cores · ` : ""}{h.info.system ?? ""}</td>
               </tr>))}</tbody></table>)}
-      </div>
+      </div>}
 
       {st.queue.length > 0 && <div className="card">
         <h2>Recordings being analysed in segments</h2>

@@ -78,3 +78,31 @@ def test_frames_before_a_target_counts_is_a_video_setting_new_missions_take(tmp_
     with _pytest.raises(ValueError, match="1 to 30"):
         defaults.save(tmp_path, {"video": {"track_min_frames": 31}})
     assert defaults.save(tmp_path, {"video": {"track_min_frames": 0}})["video"]["track_min_frames"] is None
+
+
+def test_what_new_missions_look_for_is_a_setting(tmp_path):
+    from trafficwb.sam3 import VEHICLE_PROMPTS
+    walkers = {**{k: list(v) for k, v in VEHICLE_PROMPTS.items()}, "pedestrian": ["pedestrian", "person"], "tractor": ["tractor"]}
+    d = defaults.save(tmp_path, {"video": {"sam3_words": walkers, "sam3_uncounted": ["tractor", "pedestrian"]}})
+    assert d["video"]["sam3_words"]["pedestrian"] == ["pedestrian", "person"] and d["video"]["sam3_uncounted"] == ["pedestrian", "tractor"]
+    vid, img = defaults.mission_fields(d, "video"), defaults.mission_fields(d, "images")
+    assert vid["sam3_words"]["tractor"] == ["tractor"] and vid["sam3_uncounted"] == ["pedestrian", "tractor"]
+    assert img["sam3_words"] is None and img["sam3_uncounted"] is None        # still images keep their own choice
+    # The default words are kept as "the defaults", and only a class of one's own can be left out of the count.
+    assert defaults.save(tmp_path, {"images": {"sam3_words": {k: list(v) for k, v in VEHICLE_PROMPTS.items()}}})["images"]["sam3_words"] is None
+    for bad in ({"images": {"sam3_uncounted": ["car"]}}, {"images": {"sam3_words": {"Bad Name!": ["x"]}}}):
+        with pytest.raises(ValueError):
+            defaults.save(tmp_path, bad)
+
+
+def test_a_new_mission_looks_for_what_settings_say(env):  # noqa: F811
+    tmp, src, out = env
+    c = direct_access(client(tmp))
+    c.put("/api/settings/missions", json={"both": {"results_folder": str(out)},
+                                          "images": {"sam3_words": {"pedestrian": ["pedestrian"]}, "sam3_uncounted": ["pedestrian"]}}, headers=H1)
+    q = c.post("/api/quick-start", json={"source_dir": str(src)}, headers=H1).json()
+    assert q["settings"]["sam3_words"]["pedestrian"] == ["pedestrian"]
+    body = q["settings"] | {k: q[k] for k in ("name", "input_type", "country", "iana_zone", "source_dir", "output_dir")}
+    c.post("/api/quick-start/output", json={"path": q["output_dir"]}, headers=H1)
+    cfg = c.get(f"/api/missions/{c.post('/api/missions', json=body, headers=H1).json()['id']}").json()["config"]
+    assert cfg["sam3_words"]["pedestrian"] == ["pedestrian"] and cfg["sam3_uncounted"] == ["pedestrian"]
