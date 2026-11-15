@@ -32,17 +32,23 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   const [m, setM] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const [review, setReview] = useState<any>(null);
-  const load = useCallback(() => {
-    // The mission list carries what waits for review, for the one button that is always the next step.
-    api("/missions").then((r) => setReview((r.missions as any[]).find((x) => x.id === missionId)?.review ?? null)).catch(() => undefined);
-    return api(`/missions/${missionId}`).then(setM).catch((e: ApiError) => setErr(e.message));
-  }, [missionId]);
+  const loadMission = useCallback(() => api(`/missions/${missionId}`).then(setM).catch((e: ApiError) => setErr(e.message)), [missionId]);
+  // The mission list carries what waits for review, for the one button that is always the next step. It covers every
+  // mission, so it is read when the page opens, after a change and when processing starts or ends, not on every tick.
+  const loadReview = useCallback(() => api("/missions").then((r) => setReview((r.missions as any[]).find((x) => x.id === missionId)?.review ?? null))
+    .catch(() => undefined), [missionId]);
+  const load = useCallback(() => { loadReview(); return loadMission(); }, [loadReview, loadMission]);
   useEffect(() => { load(); }, [load]);
   const active = m?.job && ["running", "paused"].includes(m.job.state);
+  const jobState = m?.job?.state;
+  useEffect(() => { if (jobState) loadReview(); }, [jobState, loadReview]);
   useEffect(() => {
-    const t = setInterval(load, active ? 1500 : 8000);
-    return () => clearInterval(t);
-  }, [load, active]);
+    // Nothing is asked for while the tab is hidden; coming back to it refreshes at once.
+    const tick = () => { if (!document.hidden) loadMission(); };
+    const t = setInterval(tick, active ? 1500 : 8000);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); };
+  }, [loadMission, active]);
 
   if (err) return <div className="page"><div className="msg err">{err}</div></div>;
   if (!m) return <div className="page muted">Loading…</div>;

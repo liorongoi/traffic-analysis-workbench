@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { api, ApiError, post } from "../api";
-import { DeleteMissionDialog } from "./Mission";
+// The mission page is loaded only when a delete is asked for, so the list opens without it.
+const DeleteMissionDialog = lazy(() => import("./Mission").then((mod) => ({ default: mod.DeleteMissionDialog })));
 
 type Review = { unreviewed: number; first_unreviewed: number | null; approved: number; processed: number; latest: number | null };
 type M = { id: string; name: string; input_type: string; mode: string; processing: string; monitoring: boolean; created_at: string;
@@ -145,8 +146,8 @@ function MissionCard({ m, reload }: { m: M; reload: () => void }) {
         <button className="mdel" disabled={!!job} title={job ? "Cancel processing before deleting this mission." : `Delete ${m.name}`}
           aria-label={`Delete ${m.name}`} onClick={() => setDeleting(true)}>Delete…</button>
       </div>
-      {deleting && <DeleteMissionDialog id={m.id} name={m.name} onClose={() => setDeleting(false)}
-        onDeleted={() => { setDeleting(false); reload(); }} />}
+      {deleting && <Suspense fallback={null}><DeleteMissionDialog id={m.id} name={m.name} onClose={() => setDeleting(false)}
+        onDeleted={() => { setDeleting(false); reload(); }} /></Suspense>}
     </div>
   );
 }

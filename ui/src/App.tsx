@@ -1,17 +1,18 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useRoute } from "./router";
 import { api } from "./api";
 import Logo from "./Logo";
 import JumpBar from "./components/JumpBar";
 import PasswordButton from "./components/PasswordButton";
 import Missions from "./pages/Missions";
-import Wizard from "./pages/Wizard";
-import QuickStart from "./pages/QuickStart";
-import MissionPage from "./pages/Mission";
-import Investigate from "./pages/Investigate";
-import RegionEditor from "./pages/RegionEditor";
-import Settings from "./pages/Settings";
-import GeoPlace from "./pages/GeoPlace";
+// Each screen loads when it is first opened, so the app starts with the missions list alone.
+const Wizard = lazy(() => import("./pages/Wizard"));
+const QuickStart = lazy(() => import("./pages/QuickStart"));
+const MissionPage = lazy(() => import("./pages/Mission"));
+const Investigate = lazy(() => import("./pages/Investigate"));
+const RegionEditor = lazy(() => import("./pages/RegionEditor"));
+const Settings = lazy(() => import("./pages/Settings"));
+const GeoPlace = lazy(() => import("./pages/GeoPlace"));
 
 export default function App() {
   const route = useRoute();
@@ -51,7 +52,7 @@ export default function App() {
           <PasswordButton />
         </div>
       </header>
-      <main id="main-content">{body}</main>
+      <main id="main-content"><Suspense fallback={<div className="page muted">Loading…</div>}>{body}</Suspense></main>
     </>
   );
 }
@@ -70,7 +71,7 @@ function Status() {
       setText({ label: busy ? `${busy} processing · ${where}` : where, busy: busy > 0 });
     }).catch(() => { if (live) setText(null); });
     load();
-    const t = window.setInterval(load, 15000);
+    const t = window.setInterval(() => { if (!document.hidden) load(); }, 15000);
     return () => { live = false; window.clearInterval(t); };
   }, []);
   if (!text) return null;
