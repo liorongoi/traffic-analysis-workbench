@@ -435,6 +435,9 @@ def test_folder_picker_lists_subfolders_and_images(env):
     c = direct_access(client(tmp))
     top = c.get("/api/folders").json()
     assert top["path"] is None and top["roots"]
+    # Grouped like a file explorer: the user's own folders first, then drives (and network drives on Windows).
+    assert top["roots"][0]["group"] == "places" and {r["group"] for r in top["roots"]} <= {"places", "drives", "network"}
+    assert any(r["group"] == "drives" for r in top["roots"])
     r = c.get("/api/folders", params={"path": str(src)}).json()
     assert [f["name"] for f in r["folders"]] == ["day2"] and r["files"] == 7 and r["parent"] == str(src.parent)
     assert c.get("/api/folders", params={"path": str(src / "nope")}).status_code == 400

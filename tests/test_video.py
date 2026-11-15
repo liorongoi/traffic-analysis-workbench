@@ -551,3 +551,69 @@ def test_export_leaves_out_events_under_the_chosen_confidence(two_cars):
     files = vs.export("lior", min_score=top)
     rows = list(csv.DictReader(open(files[0], encoding="utf-8-sig")))
     assert [r["event_id"] for r in rows] == [a.key] and float(rows[0]["score"]) == pytest.approx(a.score)
+
+
+def test_new_videos_after_the_first_run_are_queued_when_the_mission_follows_them(tmp_path):
+    m = mission(tmp_path, {"a.mp4": (1.0, car_scene, False)})
+    assert m.con.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 1
+    make_video(tmp_path / "src" / "b.mp4", 1.0, car_scene)
+    _, run_id = cycle(m, stability_seconds=0)
+    assert run_id is None                       # a one-time mission that does not follow new videos stays as it was
+    m.update_config("lior", "follow new videos", analyse_new=True)
+    _, run_id = cycle(m, stability_seconds=0)
+    assert run_id is not None
+    names = [r[0] for r in m.con.execute(
+        "SELECT f.rel_path FROM run_item i JOIN source_version v ON v.id=i.source_version_id "
+        "JOIN source_file f ON f.id=v.source_file_id WHERE i.run_id=?", (run_id,))]
+    assert names == ["b.mp4"]
+
+
+def test_two_scans_at_once_queue_new_videos_once(tmp_path):
+    import threading as _t
+    m = mission(tmp_path, {"a.mp4": (1.0, car_scene, False)})
+    m.update_config("lior", "follow new videos", analyse_new=True)
+    for n in ("b.mp4", "c.mp4"):
+        make_video(tmp_path / "src" / n, 1.0, car_scene)
+    errors = []
+
+    def scan():
+        own = DataRoot(tmp_path / "data").open_mission(m.id)
+        try:
+            cycle(own, stability_seconds=0)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    ts = [_t.Thread(target=scan) for _ in range(4)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert errors == []
+    assert m.con.execute("SELECT COUNT(*) FROM run_item").fetchone()[0] == 3
+
+
+def test_hidden_files_a_mac_leaves_beside_videos_are_not_listed(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "._a.mp4").write_bytes(b"\x00\x05\x16\x07" + b"\x00" * 4092)      # AppleDouble, not a video
+    (src / ".Trashes").mkdir()
+    make_video(src / ".Trashes" / "old.mp4", 1.0, car_scene)
+    (src / "$RECYCLE.BIN").mkdir()
+    make_video(src / "$RECYCLE.BIN" / "gone.mp4", 1.0, car_scene)
+    m = mission(tmp_path, {"a.mp4": (1.0, car_scene, False)})
+    names = [r[0] for r in m.con.execute("SELECT rel_path FROM source_file")]
+    assert names == ["a.mp4"]
+    from trafficwb.video_catalog import VideoCatalog
+    assert [v["rel_path"] for v in VideoCatalog(m).items()] == ["a.mp4"]
+
+
+def test_hidden_files_taken_in_before_are_left_out_and_not_analysed(tmp_path):
+    m = mission(tmp_path, {"a.mp4": (1.0, car_scene, False)})
+    # as a version before this one did: "._b.mp4" catalogued and queued
+    fid = m.con.execute("INSERT INTO source_file(root_id,rel_path,first_seen) VALUES (1,'._b.mp4','2026-01-01T00:00:00Z')").lastrowid
+    vid = m.con.execute("INSERT INTO source_version(source_file_id,sha256,size,mtime_ns,first_seen,parse_status,integrity) "
+                        "VALUES (?,?,?,?,?,?,?)", (fid, "x" * 64, 4096, 0, "2026-01-01T00:00:00Z", "malformed", "ok")).lastrowid
+    m.con.execute("INSERT INTO run_item(run_id,source_version_id) VALUES (1,?)", (vid,))
+    m.update_config("lior", "follow new videos", analyse_new=True)
+    cycle(m, stability_seconds=0)
+    assert m.con.execute("SELECT processing_state FROM run_item WHERE source_version_id=?", (vid,)).fetchone()[0] == "cancelled"
+    from trafficwb.video_catalog import VideoCatalog
+    assert [v["rel_path"] for v in VideoCatalog(m).items()] == ["a.mp4"]

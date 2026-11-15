@@ -80,7 +80,7 @@ class MissionBody(BaseModel):
     teacher: str = "none"                  # learning: none | sam3
     auto_min_reviews: int = 20
     auto_epochs: int = 30
-    analyse_new: bool = False              # video: new videos analysed as they arrive
+    analyse_new: bool = True               # video: new videos (and those still being copied) analysed as they arrive
     track_min_frames: int | None = None    # video: analysed frames before a target counts (None: the default)
 
     def config(self) -> MissionConfig:
@@ -507,6 +507,9 @@ GENERIC_FOLDERS = {"images", "image", "img", "photos", "pictures", "videos", "vi
                    "source", "input", "export", "exports", "dcim"}
 
 
+from ..inventory import hidden as _hidden, hidden_path as _hidden_path  # noqa: E402
+
+
 def quick_start(source_dir: str, include_subdirs: bool, data_root: Path, limit: int = 5000) -> dict:
     """What a new mission for this folder most likely is, so it can be created on one screen: a name, still images or
     video, how many names give a capture time and over what span, the time zone of the latest mission, and an
@@ -520,7 +523,7 @@ def quick_start(source_dir: str, include_subdirs: bool, data_root: Path, limit: 
     unreadable: list[dict] = []
     more = False
     for p in (root.rglob("*") if include_subdirs else root.glob("*")):
-        if p.name.startswith(".") or p.suffix.lower() not in IMAGE_EXTS or not p.is_file():
+        if _hidden_path(p.relative_to(root)) or p.suffix.lower() not in IMAGE_EXTS or not p.is_file():
             continue
         if images + videos >= limit:
             more = True
@@ -575,29 +578,125 @@ def quick_start(source_dir: str, include_subdirs: bool, data_root: Path, limit: 
     }
 
 
-def folder_roots() -> list[dict]:
-    """Where browsing starts: the drives on Windows, the home folder and / elsewhere, and mounted volumes."""
+# Where Windows keeps a user's own folders (they can be moved, e.g. into OneDrive, so they are asked for by these ids).
+_KNOWN_FOLDERS = (("Desktop", "B4BFCC3A-DB2C-424C-B029-7FE99A87C641"), ("Documents", "FDD39AD0-238F-46AF-ADB4-6C85480369C7"),
+                  ("Downloads", "374DE290-123F-4565-9164-39C4925E467B"), ("Pictures", "33E28130-4E1E-4676-835A-98395C3BC3BB"),
+                  ("Videos", "18989B1D-99B5-455B-841C-AB7C74E4DDFC"))
+
+
+def _windows_known_folder(guid: str) -> str | None:
+    import ctypes
+    import uuid
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD), ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+    u = uuid.UUID(guid)
+    g = GUID(u.time_low, u.time_mid, u.time_hi_version, (ctypes.c_ubyte * 8)(*u.bytes[8:]))
+    out = ctypes.c_wchar_p()
+    try:
+        shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
+        if shell32.SHGetKnownFolderPath(ctypes.byref(g), 0, None, ctypes.byref(out)) != 0:
+            return None
+        path = out.value
+        ctypes.windll.ole32.CoTaskMemFree(out)  # type: ignore[attr-defined]
+        return path
+    except (AttributeError, OSError):
+        return None
+
+
+def _windows_roots() -> list[dict]:
+    """Like File Explorer: this user's own folders (Desktop, Documents, Downloads, Pictures, Videos), every drive
+    Windows reports (local, USB, DVD and mapped network drives, with their labels), and the network drives mapped for
+    this user by their \\\\server\\share path, which works even where the drive letter does not (e.g. when
+    LanePulse was started by the automatic start)."""
+    import ctypes
+    import string
     out: list[dict] = []
+    seen: set[str] = set()
+    letters: set[str] = set()
+
+    def add(name: str, path: str, group: str) -> None:
+        if path.lower() not in seen:
+            seen.add(path.lower())
+            out.append({"name": name, "path": path, "group": group})
+
+    home = Path.home()
+    add("Home", str(home), "places")
+    for name, guid in _KNOWN_FOLDERS:
+        found = _windows_known_folder(guid)
+        d = Path(found) if found else home / name
+        try:
+            if d.is_dir():
+                add(name, str(d), "places")
+        except OSError:
+            pass
+
+    kinds = {2: "USB", 3: "", 4: "network", 5: "DVD"}
+    try:
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        mask = k32.GetLogicalDrives()
+        k32.SetErrorMode(1)  # SEM_FAILCRITICALERRORS: no "insert a disk" box for an empty card reader
+    except (AttributeError, OSError):
+        k32, mask = None, 0
+    for i, letter in enumerate(string.ascii_uppercase):
+        root = f"{letter}:\\"
+        if k32 is not None:
+            if not mask & (1 << i):
+                continue
+            kind = kinds.get(k32.GetDriveTypeW(root), "")
+            label = ctypes.create_unicode_buffer(261)
+            try:
+                k32.GetVolumeInformationW(root, label, 261, None, None, None, None, 0)
+            except OSError:
+                pass
+            extra = " · ".join(x for x in (label.value.strip(), kind) if x)
+            add(f"{letter}:" + (f" {extra}" if extra else ""), root, "network" if kind == "network" else "drives")
+            letters.add(letter)
+        else:
+            try:
+                if Path(root).exists():
+                    add(f"{letter}:", root, "drives")
+                    letters.add(letter)
+            except OSError:
+                pass
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Network") as net:
+            for j in range(winreg.QueryInfoKey(net)[0]):
+                letter = winreg.EnumKey(net, j)
+                with winreg.OpenKey(net, letter) as k:
+                    remote = str(winreg.QueryValueEx(k, "RemotePath")[0]).rstrip("\\")
+                if remote.startswith("\\\\") and letter.upper() not in letters:
+                    add(f"{letter.upper()}: {remote}", remote + "\\", "network")
+    except OSError:
+        pass
+    return out
+
+
+def folder_roots() -> list[dict]:
+    """Where browsing starts, grouped like a file browser: places (home, Desktop, Pictures...), drives, network."""
     if os.name == "nt":
-        import string
-        for letter in string.ascii_uppercase:
-            p = Path(f"{letter}:\\")
-            try:
-                if p.exists():
-                    out.append({"name": f"{letter}:", "path": str(p)})
-            except OSError:
-                pass
-    else:
-        home = Path.home()
-        out.append({"name": "Home", "path": str(home)})
-        for base in (Path("/Volumes"), Path("/mnt"), Path("/media")):
-            try:
-                for d in sorted(base.iterdir()) if base.is_dir() else []:
-                    if d.is_dir() and not d.name.startswith("."):
-                        out.append({"name": d.name, "path": str(d)})
-            except OSError:
-                pass
-        out.append({"name": "/", "path": "/"})
+        return _windows_roots()
+    out: list[dict] = []
+    home = Path.home()
+    out.append({"name": "Home", "path": str(home), "group": "places"})
+    for sub in ("Desktop", "Documents", "Downloads", "Pictures", "Movies", "Videos"):
+        d = home / sub
+        try:
+            if d.is_dir():
+                out.append({"name": sub, "path": str(d), "group": "places"})
+        except OSError:
+            pass
+    for base in (Path("/Volumes"), Path("/mnt"), Path("/media")):
+        try:
+            for d in sorted(base.iterdir()) if base.is_dir() else []:
+                if d.is_dir() and not _hidden(d.name):
+                    out.append({"name": d.name, "path": str(d), "group": "drives"})
+        except OSError:
+            pass
+    out.append({"name": "/", "path": "/", "group": "drives"})
     return out
 
 
@@ -913,7 +1012,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         it = root.rglob("*") if body.include_subdirs else root.glob("*")
         out = []
         for p in it:
-            if not p.is_file():
+            if not p.is_file() or _hidden_path(p.relative_to(root)):
                 continue
             row: dict[str, Any] = {"file": str(p.relative_to(root))}
             try:
@@ -930,6 +1029,45 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
     @app.post("/api/quick-start")
     def quick_start_get(body: QuickBody, _u: User = Depends(user)):
         return quick_start(body.source_dir, body.include_subdirs, data_root)
+
+    @app.post("/api/quick-start/videos")
+    def quick_start_videos(body: QuickBody, _u: User = Depends(user)):
+        """The videos a new mission would analyse, before it exists: name, length, picture size and a small picture,
+        so the person sees at once that the folder is the right one (and which files cannot be opened)."""
+        import base64
+        import cv2
+        from ..inventory import VIDEO_EXT
+        from ..video import frame_at, probe
+        root = Path(body.source_dir).expanduser()
+        if not root.is_dir():
+            raise ApiError(400, "not_found", f"{root} is not a folder on this computer.")
+        walk = root.rglob("*") if body.include_subdirs else root.glob("*")
+        files = []
+        for p in walk:
+            if p.suffix.lower() in VIDEO_EXT and p.is_file() and not _hidden_path(p.relative_to(root)):
+                files.append(p)
+                if len(files) > 200:
+                    break
+        files.sort(key=lambda p: str(p).lower())
+        out = []
+        for n, p in enumerate(files[:60]):
+            pr = probe(p, scan_frames=30)
+            row = {"rel_path": p.relative_to(root).as_posix(), "size_bytes": p.stat().st_size, "duration_s": pr.duration_s,
+                   "width": pr.width, "height": pr.height, "codec": pr.codec, "error": pr.error, "thumb": None}
+            if n < 12 and not pr.error:
+                try:
+                    f = frame_at(p, min(1.0, (pr.duration_s or 0) * 0.1))
+                    if f is not None:
+                        h = 72
+                        w = max(1, round(f.image.shape[1] * h / f.image.shape[0]))
+                        ok, buf = cv2.imencode(".jpg", cv2.resize(f.image, (w, h), interpolation=cv2.INTER_AREA),
+                                               [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        if ok:
+                            row["thumb"] = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+                except Exception:  # noqa: BLE001 (a picture is a nicety; the row stays)
+                    pass
+            out.append(row)
+        return {"videos": out, "more": len(files) > 60}
 
     @app.get("/api/settings/missions")
     def mission_defaults_get(_u: User = Depends(user)):
@@ -996,7 +1134,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             else:
                 names = []
                 for p in (root.rglob("*") if body.include_subdirs else root.glob("*")):
-                    if p.is_file() and p.suffix.lower() in IMAGE_EXT | VIDEO_EXT:
+                    if p.is_file() and p.suffix.lower() in IMAGE_EXT | VIDEO_EXT and not _hidden_path(p.relative_to(root)):
                         names.append(p.name)
                         if len(names) >= 5000:
                             break
@@ -1020,7 +1158,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "no_folder", f"{root} is not a folder on this workstation.")
         unread: list[str] = []
         for p in (root.rglob("*") if body.include_subdirs else root.glob("*")):
-            if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in IMAGE_EXT | VIDEO_EXT:
+            if p.is_file() and not _hidden_path(p.relative_to(root)) and p.suffix.lower() in IMAGE_EXT | VIDEO_EXT:
                 try:
                     parse_capture_time(p.name)
                 except MalformedName:
@@ -1118,6 +1256,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             m = DataRoot(data_root).create_mission(body.config(), u.username)
         except MissionValidationError as exc:
             raise ApiError(400, "invalid", " ".join(exc.validation.errors)) from None
+        if m.input_type == "video":
+            # Videos added later, or still being copied when the mission starts, are picked up by themselves.
+            jobs.watch_new_videos(m.id)
         return {"id": m.id}
 
     @app.get("/api/missions/{mission_id}")
@@ -2286,7 +2427,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         cat = _catalog(m)
         if refresh and not jobs.busy(m.id):
             cat.refresh(stability_seconds=stability_seconds)
-        return cat.overview() | {"busy": jobs.busy(m.id)}
+        job = jobs.current(m.id)
+        live = getattr(job.control, "video_pos", None) if job is not None and job.state in ("running", "paused") else None
+        return cat.overview(live) | {"busy": jobs.busy(m.id)}
 
     @app.post("/api/missions/{mission_id}/catalog/merge")
     def catalog_merge(body: AnalyseBody, m: Mission = Depends(mission), u: User = Depends(user)):
@@ -2495,6 +2638,27 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         if not path.is_file():
             raise ApiError(410, "source_missing", f"{path.name} is no longer in the source folder.")
         return FileResponse(path, headers={"Cache-Control": "private, no-transform"})
+
+    def _playable(m: Mission, version_id: int):
+        from .. import playable
+        src = _video(m).path(_vid(m, version_id))
+        if not src.is_file():
+            raise ApiError(410, "source_missing", f"{src.name} is no longer in the source folder.")
+        return playable, src, playable.target(m.dir / "evidence" / "playable", version_id)
+
+    @app.get("/api/missions/{mission_id}/videos/{version_id}/playable")
+    def video_playable_status(version_id: int, m: Mission = Depends(mission)):
+        """For a recording the browser cannot play: whether its playable copy is ready (it is started if not)."""
+        playable, src, dst = _playable(m, version_id)
+        return playable.status(src, dst) | {"url": f"/api/missions/{m.id}/videos/{version_id}/playable/file"}
+
+    @app.get("/api/missions/{mission_id}/videos/{version_id}/playable/file")
+    def video_playable_file(version_id: int, m: Mission = Depends(mission)):
+        _, _, dst = _playable(m, version_id)
+        if not dst.is_file():
+            raise ApiError(404, "not_ready", "The playable copy is still being made.")
+        return FileResponse(dst, media_type="video/mp4" if dst.suffix == ".mp4" else "video/webm",
+                            headers={"Cache-Control": "private, no-transform"})
 
     @app.get("/api/missions/{mission_id}/videos/{version_id}/frame")
     def video_frame(version_id: int, t: float = Query(..., ge=0), m: Mission = Depends(mission),

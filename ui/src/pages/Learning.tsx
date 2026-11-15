@@ -333,7 +333,7 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
 
       <details className="card learn-later">
         <summary>What can learn, and what comes later</summary>
-        <table className="t"><tbody>{s.adapters.map((a: any) => <tr key={a.algorithm}><td>{a.algorithm}</td><td>{a.adapter}</td><td>{a.status.replace("_", " ")}</td></tr>)}</tbody></table>
+        <table className="t wrap"><tbody>{s.adapters.map((a: any) => <tr key={a.algorithm}><td>{a.algorithm}</td><td>{a.adapter}</td><td>{a.status.replace("_", " ")}</td></tr>)}</tbody></table>
       </details>
     </div>
   );

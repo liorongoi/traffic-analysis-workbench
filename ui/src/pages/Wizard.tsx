@@ -3,6 +3,7 @@ import { api, ApiError, post } from "../api";
 import { go } from "../router";
 import TimezoneMap from "../components/TimezoneMap";
 import FolderPicker from "../components/FolderPicker";
+import NameFormats from "./NameFormats";
 import { NamePick, ZonePick, thisMonth } from "../components/Pick";
 
 type Ref = { countries: Record<string, string>; country_zones: Record<string, string>; modes: Record<string, string[]>; zones: string[];
@@ -44,6 +45,7 @@ export default function Wizard() {
   const [check, setCheck] = useState<{ errors: string[]; warnings: string[] } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [teach, setTeach] = useState(false);   // the filename formats, in a window over the wizard
 
   useEffect(() => {
     let live = true;
@@ -202,7 +204,7 @@ export default function Wizard() {
             )}
             {preview?.some((p) => !p.ok) && (
               <div className="msg warn">Some names have no capture time the app can read, so those files would be skipped.{" "}
-                <a href="#/settings/formats" target="_blank" rel="noreferrer">Show the app how your files are named</a> (opens in a new tab), then press Preview file names again.</div>
+                <button className="linkish" onClick={() => setTeach(true)}>Show the app how your files are named</button>; the preview runs again when you close it.</div>
             )}
           </>
         )}
@@ -243,6 +245,16 @@ export default function Wizard() {
             : <button className="primary" disabled={busy || !check || check.errors.length > 0} onClick={create}>{busy ? "Creating…" : "Create mission"}</button>}
         </div>
       </div>
+      {teach && (
+        <div className="dialog-bg" onClick={() => { setTeach(false); loadPreview(); }}>
+          <div className="dialog dialog-wide" role="dialog" aria-label="Filename formats" onClick={(e) => e.stopPropagation()}>
+            <NameFormats embedded />
+            <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+              <button className="primary" onClick={() => { setTeach(false); loadPreview(); }}>Done, preview again</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

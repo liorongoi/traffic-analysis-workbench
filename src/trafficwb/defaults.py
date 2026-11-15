@@ -29,8 +29,8 @@ BUILT_IN: dict = {
         "auto_epochs": 30,
     },
     "images": {"detector": "standard", "mode": "general_traffic", "vehicle_model": None},
-    "video": {"detector": "standard", "mode": "object_search", "sam3_interval_s": 1.0, "camera": "fixed",
-              "video_workers": 1, "analyse_new": False,
+    "video": {"detector": "standard", "mode": "general_traffic", "sam3_interval_s": 1.0, "camera": "fixed",
+              "video_workers": 1, "analyse_new": True,
               "track_min_frames": None},       # analysed frames before a target counts (None: 5, or 3 with SAM 3.1 alone)
 }
 

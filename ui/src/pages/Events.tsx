@@ -60,7 +60,7 @@ const REVIEW_TEXT: Record<string, string> = {
   full: "Approved: full labels", partial: "Some events reviewed", none: "Not reviewed",
 };
 
-const FLAG_LABEL: Record<string, string> = {
+export const FLAG_LABEL: Record<string, string> = {
   appeared_inside_frame: "appeared inside the frame", ended_inside_frame: "lost inside the frame",
   possible_duplicate: "possible duplicate", class_uncertain: "class uncertain",
   cut_by_scene_change: "cut by a scene change", cut_by_end_of_recording: "cut by the end of the recording",
@@ -79,13 +79,14 @@ const toPicker = (iso: string) => {
 };
 const fromPicker = (v: string) => (v ? `${v.length === 16 ? `${v}:00` : v.slice(0, 19)}Z` : "");
 
-export default function EventsTab({ missionId, extra }: { missionId: string; extra: string | null }) {
+/** find: the Find box (search by description) shown above the list, on a video mission's Results tab. */
+export default function EventsTab({ missionId, extra, find = null }: { missionId: string; extra: string | null; find?: React.ReactNode }) {
   // "#/m/<id>/events/<event id>" opens one event; "#/m/<id>/events/rec-<video id>" opens that video's tab.
   const eventId = extra && /^\d+$/.test(extra) ? Number(extra) : null;
   const recording = extra?.startsWith("rec-") ? extra.slice(4) : "";
   // "#/m/<id>/events/play-<video id>" plays that video with its boxes, to review and edit there.
   if (extra?.startsWith("play-")) return <Player missionId={missionId} versionId={Number(extra.slice(5))} />;
-  return eventId ? <EventDetail missionId={missionId} eventId={eventId} /> : <EventList missionId={missionId} recording={recording} />;
+  return eventId ? <EventDetail missionId={missionId} eventId={eventId} /> : <EventList missionId={missionId} recording={recording} find={find} />;
 }
 
 type Counts = {
@@ -324,7 +325,8 @@ function MapCard({ missionId, versionId, ids }: { missionId: string; versionId: 
   );
 }
 
-function EventList({ missionId, recording }: { missionId: string; recording: string }) {
+function EventList({ missionId, recording, find }: { missionId: string; recording: string; find: React.ReactNode }) {
+  const [finding, setFinding] = useState(false);
   const [recs, setRecs] = useState<any[]>([]);
   const [groups, setGroups] = useState<{ id: number; name: string; members: number[] }[]>([]);
   const [evs, setEvs] = useState<VEvent[] | null>(null);
@@ -457,11 +459,19 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
             <a key={r.id} href={`#/m/${missionId}/events/rec-${r.id}`} className={String(r.id) === rec ? "on" : ""} title={r.rel_path}
               onClick={(e) => { e.preventDefault(); setRec(String(r.id)); }}>{r.rel_path.split("/").pop()}<span className="n">{r.events}</span></a>))}
         </nav>)}
+      {find && <div className="findbar card row">
+        <button className={finding ? "" : "primary"} aria-expanded={finding} onClick={() => setFinding(!finding)}>{finding ? "Close Find" : "Find vehicles by description…"}</button>
+        <span className="muted small">For example "red car", "white vans", "buses at night". The filters below narrow the list straight away.</span>
+      </div>}
+      {find && finding && find}
       <CountsCard missionId={missionId} versionId={rec} refresh={timeRevision} />
-      <InViewCard missionId={missionId} versionId={rec} refresh={timeRevision} />
-      <ZonesCard missionId={missionId} versionId={rec} refresh={timeRevision} />
-      <div className="card">
-        <h2>Recordings</h2>
+      <details className="card fold">
+        <summary><h2>Most in view at once, lines and areas</h2></summary>
+        <InViewCard missionId={missionId} versionId={rec} refresh={timeRevision} />
+        <ZonesCard missionId={missionId} versionId={rec} refresh={timeRevision} />
+      </details>
+      <details className="card fold">
+        <summary><h2>Start times and approval of each video</h2></summary>
         <table className="t"><thead><tr><th>File</th><th>Start (UTC)</th><th className="num">Length</th><th>Frame rate</th><th>Processing</th><th className="num">Events</th><th>For learning</th></tr></thead>
           <tbody>{recs.filter((r) => !rec || (rec.startsWith("g") ? groups.find((g) => `g${g.id}` === rec)?.members.includes(r.id) : String(r.id) === rec)).map((r) => (
             <tr key={r.id}>
@@ -502,7 +512,7 @@ function EventList({ missionId, recording }: { missionId: string; recording: str
         <p className="muted" style={{ marginBottom: 0 }}>Reviewed events teach the vehicle detector on the Learning tab. Approving a
           recording also says that nothing was missed, so the empty road and the rejected detections in its frames are learnt
           as background, as approving a still image does.</p>
-      </div>
+      </details>
       <div className="card row">
         <select value={rec} onChange={(e) => setRec(e.target.value)} aria-label="Recording">
           <option value="">All recordings</option>

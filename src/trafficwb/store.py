@@ -29,7 +29,9 @@ INPUT_TYPES = {"images", "video"}
 MODES = {
     # indoor_outdoor: sort a bundle of images into indoor and outdoor (scenes.py); capture times are not needed.
     "images": {"general_traffic", "object_search", "plate_recognition", "indoor_outdoor"},
-    "video": {"object_search", "plate_recognition"},
+    # Video: every vehicle is tracked whatever the mode; general_traffic (count and track vehicles) is the plain choice,
+    # and the Find box searches its vehicles as in object_search.
+    "video": {"general_traffic", "object_search", "plate_recognition"},
 }
 EXPORT_FORMATS = {"xlsx", "csv"}
 # Detector of a mission (still images and video alike): YOLOX-s (or the model promoted on the learning page), or

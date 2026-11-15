@@ -69,7 +69,6 @@ def test_missions_are_isolated_databases(env):
     [
         (dict(name=" "), "name is empty"),
         (dict(iana_zone="Mars/Olympus"), "not a known IANA time zone"),
-        (dict(input_type="video", mode="general_traffic"), "not available for video"),
         (dict(export_formats=["pdf"]), "xlsx, csv"),
         (dict(country="FI", mode="plate_recognition"), "supported countries"),
         (dict(latitude=32.0), "both latitude and longitude"),
@@ -405,3 +404,9 @@ def test_files_ingested_before_an_interrupted_cycle_are_still_queued(env):
     Ingestor(m).scan(NOW)  # scan finished, then the app stopped before creating a run
     _, run = cycle(m, NOW + timedelta(minutes=1))
     assert m.con.execute("SELECT COUNT(*) FROM run_item WHERE run_id=?", (run,)).fetchone()[0] == 1
+
+
+def test_video_missions_count_and_track_vehicles(env):
+    src, out, root = env
+    m = root.create_mission(cfg(src, out, name="V", input_type="video", mode="general_traffic"), "lior")
+    assert m.config().mode == "general_traffic" and m.config().input_type == "video"
