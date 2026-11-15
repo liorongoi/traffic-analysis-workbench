@@ -12,6 +12,7 @@ Rules:
 """
 from __future__ import annotations
 
+from .inventory import hidden_path
 from .ingest import cycle
 from .store import Mission
 from .video_groups import GroupError, Groups, suggest
@@ -43,6 +44,8 @@ class VideoCatalog:
             "WHERE v.superseded_by IS NULL ORDER BY f.rel_path").fetchall()
         out = []
         for r in rows:
+            if hidden_path(r["rel_path"]):     # "._clip.mp4" and the like, listed by versions before this one
+                continue
             try:
                 p = probe_version(self.con, self.views, r["id"])
             except Exception as exc:          # a file that cannot be read is listed with its reason
@@ -93,7 +96,8 @@ class VideoCatalog:
                 v["progress"] = 0.0
         groups = Groups(self.m).all()
         grouped = {v for g in groups for v in g["members"]}
-        waiting = [r["rel_path"] for r in self.con.execute("SELECT rel_path FROM pending_file ORDER BY rel_path")]
+        waiting = [r["rel_path"] for r in self.con.execute("SELECT rel_path FROM pending_file ORDER BY rel_path")
+                   if not hidden_path(r["rel_path"])]
         return {"videos": vids, "groups": groups, "suggestions": suggest(vids, grouped), "waiting": waiting}
 
     def merge(self, version_ids: list[int], author: str) -> dict:
