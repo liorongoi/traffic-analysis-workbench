@@ -1,12 +1,14 @@
 import pytest
 
+from trafficwb import runtime
 from trafficwb.models import find
-from trafficwb.runtime import CPU, CUDA, DML, AcceleratorError, make_session, wanted
+from trafficwb.runtime import COREML, CPU, CUDA, DML, AcceleratorError, make_session, wanted
 
 
 def test_wanted_order_and_override(monkeypatch):
     monkeypatch.delenv("TWB_ACCELERATOR", raising=False)
-    assert wanted() == [CUDA, DML, CPU]
+    assert wanted() == [CUDA, DML, COREML, CPU]
+    assert wanted("coreml") == [COREML, CPU]
     assert wanted("cpu") == [CPU]
     assert wanted("cuda") == [CUDA, CPU]
     monkeypatch.setenv("TWB_ACCELERATOR", "DirectML")
@@ -63,3 +65,49 @@ def test_gpu_session_that_fails_first_inference_falls_back(monkeypatch):
     monkeypatch.setattr(ort, "InferenceSession", fake)
     _, info = make_session(_weights(), "auto", available=[CUDA, CPU])
     assert info.used == [CPU] and "warm-up inference" in info.notes[-1]
+
+
+def _fake_coreml(monkeypatch, coreml_slower: bool):
+    # Core ML exists only on Macs: a stand-in session that reports Core ML and is slower or faster than the CPU one.
+    import time
+
+    import onnxruntime as ort
+    real = ort.InferenceSession
+
+    class Timed:
+        def __init__(self, inner, providers, delay):
+            self.inner, self.providers, self.delay = inner, providers, delay
+
+        def get_inputs(self):
+            return self.inner.get_inputs()
+
+        def get_providers(self):
+            return self.providers
+
+        def run(self, *a):
+            time.sleep(self.delay)
+            return self.inner.run(*a)
+
+    def fake(path, opts=None, providers=None):
+        names = [p[0] if isinstance(p, tuple) else p for p in providers or []]
+        if names and names[0] == COREML:
+            assert dict(providers[0][1])["MLComputeUnits"] == "ALL"   # GPU, Neural Engine and processor
+            return Timed(real(path, opts, providers=[CPU]), [COREML, CPU], 0.05 if coreml_slower else 0)
+        return Timed(real(path, opts, providers=providers), [CPU], 0 if coreml_slower else 0.05)
+
+    monkeypatch.setattr(ort, "InferenceSession", fake)
+    monkeypatch.setattr(runtime, "_COREML_CHOICE", {})
+
+
+def test_coreml_kept_on_auto_only_when_faster(monkeypatch, tmp_path):
+    monkeypatch.setenv("TWB_COREML_CACHE", str(tmp_path))
+    _fake_coreml(monkeypatch, coreml_slower=False)
+    _, info = make_session(_weights(), "auto", available=[COREML, CPU])
+    assert info.accelerator == "coreml" and any("Core ML" in n and "ms" in n for n in info.notes)
+    _fake_coreml(monkeypatch, coreml_slower=True)
+    _, info = make_session(_weights(), "auto", available=[COREML, CPU])
+    assert info.accelerator == "cpu" and "not faster" in info.notes[-1]
+    _, again = make_session(_weights(), "auto", available=[COREML, CPU])      # remembered: no second measurement
+    assert again.accelerator == "cpu" and again.requested == [CPU]
+    _, forced = make_session(_weights(), "coreml", available=[COREML, CPU])   # asked for by name: not measured
+    assert forced.accelerator == "coreml"

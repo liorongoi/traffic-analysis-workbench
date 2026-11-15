@@ -103,6 +103,9 @@ def levels(hw: dict | None = None) -> dict:
         run = (1 if gpu < 4 else 2 if gpu < 8 else 3 if gpu < 16 else 4, f"{gname} ({gpu:g} GB)")
     elif "DmlExecutionProvider" in (hw.get("onnx") or []):
         run = (2, "the graphics card (DirectML)")
+    elif hw.get("apple_silicon") and "CoreMLExecutionProvider" in (hw.get("onnx") or []):
+        # Core ML: the Apple GPU, Neural Engine and processor together, for each model where that is faster.
+        run = (max(cpu[0], 1), "the Apple GPU, Neural Engine and processor (Core ML)")
     else:
         run = cpu
     if gpu:

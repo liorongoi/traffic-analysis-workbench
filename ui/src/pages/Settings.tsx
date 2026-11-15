@@ -254,7 +254,7 @@ function SizesCard() {
 }
 
 
-const ACCEL: Record<string, string> = { cuda: "NVIDIA GPU (CUDA)", directml: "GPU (DirectML)", cpu: "CPU" };
+const ACCEL: Record<string, string> = { cuda: "NVIDIA GPU (CUDA)", directml: "GPU (DirectML)", coreml: "Apple GPU, Neural Engine and processor (Core ML)", cpu: "CPU" };
 
 function System({ sys, msg, backupNow }: { sys: any; msg: any; backupNow: () => void }) {
   const b = sys.backup;

@@ -2,7 +2,7 @@
 
     trafficwb-speedcheck [--images <folder>] [--n 20] [--out <report.txt>]
 
-For every backend ONNX Runtime offers here (CUDA, DirectML, CPU), the vehicle model is
+For every backend ONNX Runtime offers here (CUDA, DirectML, Core ML, CPU), the vehicle model is
 loaded on that backend and run on the same images: your own when --images is given
 (the first n), otherwise generated road-like test pictures at 1920x1080. It reports
 seconds per image (median and slowest 5%), images per hour, and what that means for a
@@ -61,7 +61,7 @@ def available_backends() -> list[str]:
     import onnxruntime as ort
     have = ort.get_available_providers()
     return [name for name, prov in (("cuda", "CUDAExecutionProvider"), ("directml", "DmlExecutionProvider"),
-                                    ("cpu", "CPUExecutionProvider")) if prov in have]
+                                    ("coreml", "CoreMLExecutionProvider"), ("cpu", "CPUExecutionProvider")) if prov in have]
 
 
 def time_detector(backend: str, imgs: list[np.ndarray]) -> dict:
