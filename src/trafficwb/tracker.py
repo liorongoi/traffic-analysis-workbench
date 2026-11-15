@@ -27,6 +27,11 @@ Rules:
 - Re-entry: a new track that starts within `reentry_s` of a closed track and
   near where that track was last predicted is flagged "possible duplicate" of
   it. The tracker never merges them silently; an operator decides.
+- Leaving: a track whose last box touched the frame's edge while it moved
+  out through that edge (or whose predicted box is now mostly outside the
+  frame) is closed as soon as it is not matched: the target drove out of
+  view, so there is nothing to coast and no new target entering at that edge
+  is taken up under its ID.
 - A scene cut or the end of the recording closes every track. No identity is
   carried across recordings or cameras.
 """
@@ -53,6 +58,9 @@ class TrackerParams:
     # the nearest track of its family whose predicted centre is within this many box sizes per second since it was
     # last seen, if the sizes are within a factor of 2. 0 turns it off (the standard detector sees every frame).
     jump_per_s: float = 0.0
+    # Families that the jump above is not used for: those a detector already sees on every analysed frame (with the
+    # standard detector and SAM 3.1 together, the vehicles), so a lost car never jumps to another car near by.
+    jump_skip: list = field(default_factory=list)
     # "byte" (ByteTrack/BoT-SORT style): a Kalman filter predicts each box; boxes scoring at least high_score are
     # matched first and may start tracks; weaker boxes (down to the detector's threshold) only keep existing tracks
     # alive, at IoU low_iou_min or more. "iou": the earlier tracker (constant velocity), kept for checkpoints
@@ -244,6 +252,22 @@ class Tracker:
         e = self.p.edge_px
         return box[0] <= e or box[1] <= e or box[2] >= self.w - e or box[3] >= self.h - e
 
+    def _leaving(self, tr: Track, pred) -> bool:
+        """Has the target left (or is it leaving) the picture? Its predicted box is mostly outside the frame, or its
+        last box touched an edge while its centre moved out through that edge."""
+        x1, y1, x2, y2 = pred
+        area = max((x2 - x1) * (y2 - y1), 1e-6)
+        inside = max(0.0, min(x2, self.w) - max(x1, 0.0)) * max(0.0, min(y2, self.h) - max(y1, 0.0))
+        if inside < 0.5 * area:
+            return True
+        if tr.hits < 2:
+            return False
+        b, e = tr.box, self.p.edge_px
+        vx, vy = (tr.v[0] + tr.v[2]) / 2, (tr.v[1] + tr.v[3]) / 2
+        out = 0.1 * max(b[3] - b[1], b[2] - b[0], 1.0)       # a tenth of its size a second: really moving out
+        return ((b[0] <= e and vx < -out) or (b[2] >= self.w - e and vx > out)
+                or (b[1] <= e and vy < -out) or (b[3] >= self.h - e and vy > out))
+
     def _predict(self, tr: Track, t: float) -> list[float]:
         if self.p.algo == "byte" and tr.mean is not None:
             m, _ = kalman.predict(tr.mean, tr.cov, (t - tr.kf_t) / self.p.frame_s)
@@ -289,6 +313,9 @@ class Tracker:
         # A confirmed track kept past gap_s only for re-linking is taken up only there, where looks count too.
         late = {i for i, tr in enumerate(self.tracks)
                 if byte and self.p.relink_s > 0 and t - tr.t > self.p.gap_s}
+        # Leaving through the frame's edge: such a track still takes the box that overlaps it, but no box farther
+        # off (a jump or a re-link), and it is closed as soon as nothing overlaps it.
+        leaving = {i for i, (tr, pb) in enumerate(zip(self.tracks, preds)) if self._leaving(tr, pb)}
         pairs = []
         for i, pb in enumerate(preds):
             if i in late:
@@ -315,11 +342,12 @@ class Tracker:
         if self.p.jump_per_s > 0 or first > 0:
             near = []
             for i, (tr, pb) in enumerate(zip(self.tracks, preds)):
-                if i in used_t or i in late:
+                if i in used_t or i in late or i in leaving:
                     continue
                 size = max(pb[2] - pb[0], pb[3] - pb[1], 1.0)
                 dt = max(t - tr.t, 1e-6)
-                reach = max(self.p.jump_per_s * dt * size,
+                jump = 0.0 if tr.family in self.p.jump_skip else self.p.jump_per_s
+                reach = max(jump * dt * size,
                             first * size * dt / self.p.frame_s if tr.hits == 1 else 0.0)
                 if reach <= 0:
                     continue
@@ -360,7 +388,7 @@ class Tracker:
         if byte and self.p.relink_app > 0 and image is not None:
             looks = {j: appearance(image, dets[j][0]) for j in range(len(dets))}
         if byte and self.p.relink_s > 0:      # re-linking: a lost target taken up again
-            for i, j in self._relink(preds, dets, strong, used_t, used_d, looks, t):
+            for i, j in self._relink(preds, dets, strong, used_t | leaving, used_d, looks, t):
                 used_t.add(i)
                 used_d.add(j)
                 tr = self.tracks[i]
@@ -378,7 +406,9 @@ class Tracker:
             if i in used_t:
                 keep.append(tr)
                 continue
-            if t - tr.t > self._hold(tr):
+            if i in leaving:
+                closed.append(self._close(tr, "left_frame"))
+            elif t - tr.t > self._hold(tr):
                 closed.append(self._close(tr, "left_frame" if self._touches_edge(tr.box) else "lost"))
             else:
                 keep.append(tr)
