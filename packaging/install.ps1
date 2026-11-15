@@ -308,25 +308,44 @@ function Install-Env([string]$build) {
   }
   # Its messages and any error go to the log too, so a failed check says why. A check that stops is tried once more
   # (a compiled library can fail once, for example while the running older version is busy), and the log says so.
-  for ($try = 1; $try -le 2; $try++) {
+  # A crash inside the graphics card's library (Windows: "fatal exception: access violation", an old or broken GPU
+  # driver) on both tries: the check runs once more on the CPU, and when that passes LanePulse runs on the CPU here.
+  $script:ForcedCpu = $false
+  $crashed = $false; $where = ""
+  for ($try = 1; $try -le 3; $try++) {
+    if ($try -eq 3) {
+      if (-not $crashed -or $env:TWB_ACCELERATOR -eq "cpu") { break }
+      Write-Host "The check crashed in a compiled library twice; trying it on the CPU only (the graphics driver may be the cause)."
+      $env:TWB_ACCELERATOR = "cpu"
+    }
     $work = Join-Path $env:TEMP ("twb-check-" + [guid]::NewGuid())
     $errFile = "$work.err.txt"
     $lines = & $script:VPy (Join-Path $Bundle "offline_smoke.py") --work $work --models $Models 2> $errFile
     $code = $LASTEXITCODE
     $lines | ForEach-Object { Write-Host $_ }
-    Get-Content $errFile -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\s*$' } | ForEach-Object { Write-Host $_ }
+    $errLines = @(Get-Content $errFile -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\s*$' })
+    $errLines | ForEach-Object { Write-Host $_ }
     Remove-Item $errFile -Force -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
-    if ($code -eq 0) { break }
-    Write-Host ("The install check stopped (exit code {0}, 0x{0:X8})." -f $code)
+    if ($code -eq 0) { if ($try -eq 3) { $script:ForcedCpu = $true }; break }
+    $step = $errLines | Where-Object { $_ -like "check: *" } | Select-Object -Last 1
+    if ($step) { $where = $step.Substring(7) }
+    if (($errLines -match "access violation") -or $code -eq -1073741819) { $crashed = $true }
+    Write-Host ("The install check stopped (exit code {0}, 0x{0:X8}){1}." -f $code, $(if ($where) { " during: $where" } else { "" }))
     if ($try -eq 1) { Write-Host "Trying the install check again." }
   }
-  if ($code -ne 0) { throw "The install check failed; the previous version stays in use." }
+  if ($code -ne 0) {
+    $why = if ($crashed) { "The install check crashed in a compiled library (access violation)$(if ($where) { " during: $where" }), also on the CPU only." } else { "" }
+    throw "$why The install check failed; the previous version stays in use. Details are in install.log."
+  }
+  if ($script:ForcedCpu) {
+    Write-Host "LanePulse will run its models on the CPU on this computer: the graphics card's library crashed. Updating the graphics driver, then running Setup again, lets it use the GPU."
+  }
   $result = ($lines | Select-Object -Last 1) | ConvertFrom-Json
   return $result.accelerator.accelerator
 }
 $used = Install-Env $Choice
-if ($Choice -eq "cuda" -and $used -ne "cuda" -and -not $SkipCheck -and ($Info.wheels | Where-Object { $_ -like "onnxruntime_directml-*" })) {
+if ($Choice -eq "cuda" -and $used -ne "cuda" -and -not $SkipCheck -and -not $script:ForcedCpu -and ($Info.wheels | Where-Object { $_ -like "onnxruntime_directml-*" })) {
   Write-Host "CUDA did not start on this machine (models ran on $used); installing the DirectML build instead."
   Remove-Item -Recurse -Force $Venv
   Remove-Item -Force "$Venv.installing" -ErrorAction SilentlyContinue
@@ -353,6 +372,7 @@ if ($BackupDir) { $backupArgs = "--backup-dir `"$BackupDir`"" }
 @echo off
 rem Starts LanePulse $($Info.version). Open http://127.0.0.1:$Port in a browser.
 set TWB_MODELS=$Models
+$(if ($script:ForcedCpu) { "set TWB_ACCELERATOR=cpu" })
 "$Venv\Scripts\trafficwb-web.exe" serve --data "$Data" --port $Port $backupArgs
 "@ | Set-Content -Encoding ASCII (Join-Path $Target "start.cmd")
 if (Test-Path (Join-Path $Target "current.txt")) { Copy-Item (Join-Path $Target "current.txt") (Join-Path $Target "previous.txt") -Force }
