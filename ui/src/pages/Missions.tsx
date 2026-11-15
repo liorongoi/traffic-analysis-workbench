@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { api, ApiError, post } from "../api";
-import { DeleteMissionDialog } from "./Mission";
+// The mission page is loaded only when a delete is asked for, so the list opens without it.
+const DeleteMissionDialog = lazy(() => import("./Mission").then((mod) => ({ default: mod.DeleteMissionDialog })));
 
 type Review = { unreviewed: number; first_unreviewed: number | null; approved: number; processed: number; latest: number | null };
 type M = { id: string; name: string; input_type: string; mode: string; processing: string; monitoring: boolean; created_at: string;
-  status: Record<string, number>; job: { state: string; done: number; total: number } | null; review: Review | null };
+  status: Record<string, number>; job: { state: string; done: number; total: number } | null; review: Review | null;
+  attention: { severity: string; message: string } | null };
 
 export default function Missions() {
   const [list, setList] = useState<M[] | null>(null);
@@ -39,7 +41,8 @@ export default function Missions() {
   const waiting = sum((m) => m.review?.unreviewed ?? 0);
   const running = (list ?? []).filter((m) => m.job?.state === "running").length;
   const damaged = sum((m) => (m.status.malformed ?? 0) + (m.status.corrupt ?? 0));
-  const notes = (list ?? []).filter((m) => m.status.unacknowledged_notifications > 0);
+  // Only warnings and errors ask for attention here, in their own words; "run finished" and the like stay on the mission page.
+  const notes = (list ?? []).filter((m) => m.attention);
   return (
     <div className="page">
       <div className="page-head">
@@ -71,8 +74,8 @@ export default function Missions() {
                   <div className="attention">
                     {notes.map((m) => (
                       <div className="item" key={m.id}>
-                        <p><b className="bidi">{m.name}</b> has {m.status.unacknowledged_notifications} new notification{m.status.unacknowledged_notifications > 1 ? "s" : ""}.</p>
-                        <a className="btn" href={`#/m/${m.id}`}>Read them</a>
+                        <p><b className="bidi">{m.name}</b>: <span className="bidi">{m.attention!.message}</span></p>
+                        <a className="btn" href={`#/m/${m.id}/overview`}>Open the mission</a>
                       </div>
                     ))}
                     {asking > 0 && <div className="item">
@@ -145,8 +148,8 @@ function MissionCard({ m, reload }: { m: M; reload: () => void }) {
         <button className="mdel" disabled={!!job} title={job ? "Cancel processing before deleting this mission." : `Delete ${m.name}`}
           aria-label={`Delete ${m.name}`} onClick={() => setDeleting(true)}>Delete…</button>
       </div>
-      {deleting && <DeleteMissionDialog id={m.id} name={m.name} onClose={() => setDeleting(false)}
-        onDeleted={() => { setDeleting(false); reload(); }} />}
+      {deleting && <Suspense fallback={null}><DeleteMissionDialog id={m.id} name={m.name} onClose={() => setDeleting(false)}
+        onDeleted={() => { setDeleting(false); reload(); }} /></Suspense>}
     </div>
   );
 }

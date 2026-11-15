@@ -110,8 +110,8 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
       else if (k === "+" || k === "=") zoomAt(1.5);
       else if (k === "-" || k === "_") zoomAt(1 / 1.5);
       else if (k === "0") fit();
-      else if (k === "j" && item.position.next) go(`/m/${missionId}/i/${item.position.next}`);
-      else if (k === "k" && item.position.prev) go(`/m/${missionId}/i/${item.position.prev}`);
+      else if (k === "k" && item.position.next) go(`/m/${missionId}/i/${item.position.next}`);   // K forward, J back
+      else if (k === "j" && item.position.prev) go(`/m/${missionId}/i/${item.position.prev}`);
       else if (k === "a") approve();
       else if (k === "b") setDrawing((d) => !d);
       else if (k === "h") setOverlays((o) => !o);
@@ -465,8 +465,8 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
         <span className="ws-pos"><b>{item.position.index ?? "–"}</b> / {item.position.total}
           {(item.position.unreviewed ?? 0) > 0 && <span className="attn"> · {item.position.unreviewed} to review</span>}</span>
         <span className="sep" aria-hidden="true" />
-        <button disabled={!item.position.prev} onClick={() => go(`/m/${missionId}/i/${item.position.prev}`)}>‹ Prev <kbd>K</kbd></button>
-        <button disabled={!item.position.next} onClick={() => go(`/m/${missionId}/i/${item.position.next}`)}>Next <kbd>J</kbd> ›</button>
+        <button disabled={!item.position.prev} onClick={() => go(`/m/${missionId}/i/${item.position.prev}`)}>‹ Prev <kbd>J</kbd></button>
+        <button disabled={!item.position.next} onClick={() => go(`/m/${missionId}/i/${item.position.next}`)}>Next <kbd>K</kbd> ›</button>
         <span className="sep" aria-hidden="true" />
         <button className={drawing ? "primary" : ""} onClick={() => setDrawing(!drawing)}>{drawing ? "Drag a box…" : "Draw missed"} <kbd>B</kbd></button>
         <select aria-label="Class for a drawn box" value={drawCls} onChange={(e) => { setDrawCls(e.target.value); e.target.blur(); }}>{CLASSES.map((c, i) => <option key={c} value={c}>{i + 1} {c}</option>)}</select>
@@ -483,7 +483,7 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
           <div className="dialog" onClick={(e) => e.stopPropagation()}>
             <h2>Keyboard shortcuts</h2>
             <table className="t"><tbody>
-              {[["J / K", "Next / previous image"], ["A", "Approve this image and move on to the next one to review"], ["B", "Draw a box for a missed vehicle"], ["Del", "Reject the selected object or candidate"],
+              {[["K / J", "Next / previous image"], ["A", "Approve this image and move on to the next one to review"], ["B", "Draw a box for a missed vehicle"], ["Del", "Reject the selected object or candidate"],
                 ["C", "Confirm the selected candidate as a vehicle"], ["G", "Group the chosen lights into one candidate"], ["1–" + CLASSES.length, "Set class: " + CLASSES.join(", ")],
                 ["H", "Hide or show results on the image"], ["Scroll, + / −", "Zoom in or out around the pointer"], ["0", "Fit the whole image"],
                 ["Space + drag", "Move around when zoomed in (or drag with the middle button)"], ["Esc", "Cancel drawing or selection"], ["?", "This help"]].map(([k, v]) => <tr key={k}><td><kbd>{k}</kbd></td><td>{v}</td></tr>)}

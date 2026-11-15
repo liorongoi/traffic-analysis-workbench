@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError, post } from "../api";
 import FolderPicker from "../components/FolderPicker";
 import { ZonePick } from "../components/Pick";
@@ -59,6 +59,29 @@ export default function Settings({ section }: { section?: string }) {
     const id = section && LEGACY[section] ? `set-${section}` : null;
     if (id) window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ block: "start" }), 300);
   }, [section]);
+  // The open part's sections, read from the page itself so the list always matches the cards shown.
+  const mainRef = useRef<HTMLDivElement>(null);
+  const [sections, setSections] = useState<{ title: string; el: HTMLElement }[]>([]);
+  const [seen, setSeen] = useState(0);
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root) return;
+    let list: { title: string; el: HTMLElement }[] = [];
+    const io = new IntersectionObserver((es) => {
+      const top = es.filter((e) => e.isIntersecting).map((e) => list.findIndex((x) => x.el === e.target)).filter((i) => i >= 0);
+      if (top.length) setSeen(Math.min(...top));
+    }, { rootMargin: "-60px 0px -55% 0px" });
+    const scan = () => {
+      io.disconnect();
+      list = [...root.querySelectorAll<HTMLElement>("h2")].filter((h) => !h.closest(".dialog"))
+        .map((h) => ({ title: h.textContent?.trim() ?? "", el: (h.closest("section, .card") as HTMLElement) ?? h })).filter((x) => x.title);
+      setSections(list);
+      list.forEach((x) => io.observe(x.el));
+    };
+    scan();
+    const later = window.setTimeout(scan, 1200);   // parts that load their own data (other computers, map servers) come later
+    return () => { io.disconnect(); window.clearTimeout(later); };
+  }, [part, d]);
 
   return (
     <div className="page settings">
@@ -69,10 +92,17 @@ export default function Settings({ section }: { section?: string }) {
         </div>
         {note && <span className={`msg ${note.kind} settings-note`} role={note.kind === "err" ? "alert" : "status"}>{note.text}</span>}
       </div>
-      <nav className="tabs settings-parts" aria-label="Settings parts">
-        {PARTS.map(([k, l, hint]) => <a key={k} href={`#/settings/${k}`} className={part === k ? "on" : ""} aria-current={part === k ? "page" : undefined}>
-          {l}<small>{hint}</small></a>)}
+      {/* A list beside the settings, as in Windows 11 Settings: the three parts, and under the open one its sections,
+          so any setting is one click away instead of a long scroll (Nielsen #6 and #7). */}
+      <div className="settings-body">
+      <nav className="set-index" aria-label="Settings parts">
+        {PARTS.map(([k, l, hint]) => <div key={k}>
+          <a href={`#/settings/${k}`} className={part === k ? "on" : ""} aria-current={part === k ? "page" : undefined}>{l}<small>{hint}</small></a>
+          {part === k && sections.length > 1 && <ul>{sections.map((sec, i) =>
+            <li key={i}><button className={i === seen ? "on" : ""} onClick={() => sec.el.scrollIntoView({ behavior: "smooth", block: "start" })}>{sec.title}</button></li>)}</ul>}
+        </div>)}
       </nav>
+      <div className="set-main" ref={mainRef}>
       {!d ? <p className="muted">Loading…</p> : <>
         {part === "both" && <div className="set-grid">
           <Card title="Results" id="set-results" lead="Where each mission writes its Excel and CSV files.">
@@ -150,6 +180,8 @@ export default function Settings({ section }: { section?: string }) {
           <Card title="What to find" lead="The kind of analysis a new video mission runs.">
             <Modes kind="video" value={d.video.mode} onChange={(v) => change("video", { mode: v })} />
           </Card>
+          {/* Beside the long camera card, so the two columns come out even. */}
+          <div id="set-colours"><PlayerColours /></div>
           <Card title="Camera and speed" lead="How recordings are analysed.">
             <CameraChoice value={d.video.camera} onChange={(v) => change("video", { camera: v })} />
             <ParallelChoice value={d.video.video_workers} onChange={(v) => change("video", { video_workers: v })} />
@@ -165,13 +197,14 @@ export default function Settings({ section }: { section?: string }) {
           <Card title="Detector" wide lead="Which detectors look at each analysed frame.">
             <DetectorChoice value={d.video.detector} onChange={(v) => change("video", { detector: v })} sam={sam ?? undefined} legend={false} video />
           </Card>
-          <div id="set-colours"><PlayerColours /></div>
           <div className="set-wide" id="set-workers"><Workers embedded /></div>
           <Card title="Map and ground heights" wide id="set-maps" lead="Our own map and height servers, for putting a camera on the map. Set up once; then picked from a list.">
             <MapServers />
           </Card>
         </div>}
       </>}
+      </div>
+      </div>
     </div>
   );
 }

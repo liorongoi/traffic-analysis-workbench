@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, ApiError, Filter, fmtDuration, Job, plausibleFps, post, REVIEW_LABEL, ResultRow } from "../api";
 import { go } from "../router";
+import { useTopSlot } from "../components/TopSlot";
+import DateRange from "../components/DateRange";
 import { ScoreSlider } from "../components/ScoreSlider";
 import SearchTab from "./Search";
 import EventsTab from "./Events";
@@ -32,17 +34,24 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   const [m, setM] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const [review, setReview] = useState<any>(null);
-  const load = useCallback(() => {
-    // The mission list carries what waits for review, for the one button that is always the next step.
-    api("/missions").then((r) => setReview((r.missions as any[]).find((x) => x.id === missionId)?.review ?? null)).catch(() => undefined);
-    return api(`/missions/${missionId}`).then(setM).catch((e: ApiError) => setErr(e.message));
-  }, [missionId]);
+  const slot = useTopSlot();
+  const loadMission = useCallback(() => api(`/missions/${missionId}`).then(setM).catch((e: ApiError) => setErr(e.message)), [missionId]);
+  // The mission list carries what waits for review, for the one button that is always the next step. It covers every
+  // mission, so it is read when the page opens, after a change and when processing starts or ends, not on every tick.
+  const loadReview = useCallback(() => api(`/missions?id=${encodeURIComponent(missionId)}`).then((r) => setReview((r.missions as any[]).find((x) => x.id === missionId)?.review ?? null))
+    .catch(() => undefined), [missionId]);
+  const load = useCallback(() => { loadReview(); return loadMission(); }, [loadReview, loadMission]);
   useEffect(() => { load(); }, [load]);
   const active = m?.job && ["running", "paused"].includes(m.job.state);
+  const jobState = m?.job?.state;
+  useEffect(() => { if (jobState) loadReview(); }, [jobState, loadReview]);
   useEffect(() => {
-    const t = setInterval(load, active ? 1500 : 8000);
-    return () => clearInterval(t);
-  }, [load, active]);
+    // Nothing is asked for while the tab is hidden; coming back to it refreshes at once.
+    const tick = () => { if (!document.hidden) loadMission(); };
+    const t = setInterval(tick, active ? 1500 : 8000);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); };
+  }, [loadMission, active]);
 
   if (err) return <div className="page"><div className="msg err">{err}</div></div>;
   if (!m) return <div className="page muted">Loading…</div>;
@@ -60,23 +69,27 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   const facts = (sorting ? ["Still images", "Indoor and outdoor", m.config.iana_zone]
     : [isVideo ? "Video" : "Still images", cap(m.config.mode.replace(/_/g, " ")), m.config.iana_zone,
       DETECTOR_LABEL[m.config.detector ?? "standard"] ?? "Standard detector"]).join(" · ");
+  const strip = (
+  <div className="mstrip">
+    <a className="mstrip-back" href="#/" aria-label="All missions" title="All missions">‹</a>
+    <h1 className="bidi" title={facts}>{m.config.name}</h1>
+    {job ? <span className="tag live"><i aria-hidden="true" />{job.state === "paused" ? "Paused" : `Processing${pct != null ? ` ${pct}%` : ""}`}</span>
+      : m.config.monitoring_enabled || (isVideo && (m.config.analyse_new || m.config.run_mode === "auto"))
+        ? <span className="tag watch"><i aria-hidden="true" />{isVideo ? "New videos start by themselves" : "Watching the folder"}</span> : null}
+    <nav className="tabs mstrip-tabs" aria-label="Mission">
+      {(sorting ? [tabs[0], ["sort", "Indoor and outdoor"]] : tabs).map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""} aria-current={tab === k ? "page" : undefined}>{l}</a>)}
+    </nav>
+    <span className="grow" />
+    {!isVideo && !sorting && review?.unreviewed > 0 && review.first_unreviewed &&
+      <a className="btn attn" href={`#/m/${missionId}/i/${review.first_unreviewed}`}>Review {review.unreviewed}</a>}
+    <a className={`gear${tab === "setup" ? " on" : ""}`} href={`#/m/${missionId}/setup`} title={`This mission's setup: ${facts}`} aria-label="Mission setup"><GearIcon /></a>
+  </div>
+  );
   return (
     <div className="page">
-      {/* One strip instead of a breadcrumb, a title, a row of facts and a row of tabs: the work below gets the room. */}
-      <div className="mstrip">
-        <a className="mstrip-back" href="#/" aria-label="All missions" title="All missions">‹</a>
-        <h1 className="bidi" title={facts}>{m.config.name}</h1>
-        {job ? <span className="tag live"><i aria-hidden="true" />{job.state === "paused" ? "Paused" : `Processing${pct != null ? ` ${pct}%` : ""}`}</span>
-          : m.config.monitoring_enabled || (isVideo && (m.config.analyse_new || m.config.run_mode === "auto"))
-            ? <span className="tag watch"><i aria-hidden="true" />{isVideo ? "New videos start by themselves" : "Watching the folder"}</span> : null}
-        <nav className="tabs mstrip-tabs" aria-label="Mission">
-          {(sorting ? [tabs[0], ["sort", "Indoor and outdoor"]] : tabs).map(([k, l]) => <a key={k} href={`#/m/${missionId}/${k}`} className={tab === k ? "on" : ""} aria-current={tab === k ? "page" : undefined}>{l}</a>)}
-        </nav>
-        <span className="grow" />
-        {!isVideo && !sorting && review?.unreviewed > 0 && review.first_unreviewed &&
-          <a className="btn attn" href={`#/m/${missionId}/i/${review.first_unreviewed}`}>Review {review.unreviewed}</a>}
-        <a className={`gear${tab === "setup" ? " on" : ""}`} href={`#/m/${missionId}/setup`} title={`This mission's setup: ${facts}`} aria-label="Mission setup"><GearIcon /></a>
-      </div>
+      {/* One strip instead of a breadcrumb, a title, a row of facts and a row of tabs, and it sits in the application bar
+          itself, so mission pages have one bar and the work below gets the room. */}
+      {slot ? createPortal(strip, slot) : strip}
       {tab === "overview" && (isVideo ? <VideosTab m={m} reload={load} /> : <Overview m={m} reload={load} />)}
       {tab === "sort" && sorting && <SortingTab m={m} reload={load} />}
       {tab === "results" && !isVideo && <Results m={m} reload={load} />}
@@ -756,8 +769,9 @@ function Results({ m, reload }: { m: any; reload: () => void }) {
         <select value={q.filter.processing_state ?? ""} onChange={(e) => setF("processing_state", e.target.value)}>
           <option value="">Any processing state</option>{["done", "queued", "running", "failed", "cancelled"].map((s) => <option key={s}>{s}</option>)}
         </select>
-        <label className="row muted">From <input type="date" value={q.filter.local_date_from ?? ""} onChange={(e) => setF("local_date_from", e.target.value)} /></label>
-        <label className="row muted">to <input type="date" value={q.filter.local_date_to ?? ""} onChange={(e) => setF("local_date_to", e.target.value)} /></label>
+        <DateRange from={q.filter.local_date_from ?? ""} to={q.filter.local_date_to ?? ""} country={m.config.country}
+          near={data?.rows?.[0]?.capture_local?.slice(0, 10) ?? null}
+          onChange={(a, b) => { setPage(0); setQ({ ...q, filter: { ...q.filter, local_date_from: a || undefined, local_date_to: b || undefined } }); }} />
         <select aria-label="Vehicles at least" value={q.filter.min_vehicles ?? ""} onChange={(e) => setF("min_vehicles", e.target.value)}>
           <option value="">Any number of vehicles</option>
           {!["", undefined, null, ...MIN_VEHICLES.map(String)].includes(q.filter.min_vehicles as any) && <option value={q.filter.min_vehicles as any}>{q.filter.min_vehicles} or more vehicles</option>}
@@ -773,7 +787,7 @@ function Results({ m, reload }: { m: any; reload: () => void }) {
       {data && data.total === 0 && <div className="card muted">No images match this filter. Clear the filters to see all processed images.</div>}
       {data && data.total > 0 && (
         <>
-          <div className="tablewrap">
+          <div className="tablewrap results-wrap">
             <table className="t">
               <thead><tr><th style={{ width: 100 }}></th>{COLS.map(([k, l, c]) => <th key={l} className={c} onClick={() => sortBy(k)}>{l}{q.sort === k ? (q.desc ? " ▼" : " ▲") : ""}</th>)}<th>Notes</th></tr></thead>
               <tbody>
