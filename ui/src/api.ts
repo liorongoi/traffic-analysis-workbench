@@ -164,9 +164,16 @@ export type Job = {
   result?: { search_run?: number; scan?: { queued: number; notes: string[]; no_capture_time?: number } };
 };
 
+/** A frame rate as stored, or null when it cannot be one (older probes kept the timestamp clock of some WebM files, e.g. 30000). */
+export function plausibleFps(f: number | null | undefined): number | null {
+  return f && f >= 0.5 && f <= 300 ? Number(f) : null;
+}
+
 export function fmtDuration(s: number | null | undefined): string {
   if (s == null) return "–";
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  // Whole seconds, except under ten seconds where one decimal still says something.
+  const r = s < 10 ? Math.round(s * 10) / 10 : Math.round(s);
+  const h = Math.floor(r / 3600), m = Math.floor((r % 3600) / 60), sec = r % 60;
   return h ? `${h} h ${m} min` : m ? `${m} min ${sec} s` : `${sec} s`;
 }
 

@@ -60,15 +60,23 @@ def probe(path: Path, scan_frames: int = 300) -> Probe:
                     break
             pts.sort()
             vfr = None
+            measured = None
             if len(pts) >= 3:
                 d = np.diff(np.array(pts, dtype=np.float64))
                 d = d[d > 0]
                 if len(d):
                     vfr = bool((d.max() - d.min()) / np.median(d) > 0.10)
+                    if vs.time_base:
+                        measured = 1.0 / (float(np.median(d)) * float(vs.time_base))
             rate = vs.average_rate or vs.guessed_rate
+            rate = float(rate) if rate else None
+            # Some WebM and camera files carry a header rate that is really the timestamp clock (for example 30000):
+            # the spacing of the frames themselves is then the rate.
+            if measured and 0.5 <= measured <= 300 and (rate is None or not 0.5 <= rate <= 300 or abs(rate - measured) / measured > 0.5):
+                rate = measured
             created = c.metadata.get("creation_time") or vs.metadata.get("creation_time")
             return Probe(c.format.name, vs.codec_context.name, vs.codec_context.width, vs.codec_context.height, dur,
-                         float(rate) if rate else None, vs.frames or None, vfr, created)
+                         rate, vs.frames or None, vfr, created)
     except Exception as exc:  # corrupt or unsupported: reported, never raised into the run loop
         return Probe(None, None, None, None, None, None, None, None, None, f"{type(exc).__name__}: {exc}")
 
