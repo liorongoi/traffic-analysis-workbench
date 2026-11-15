@@ -272,6 +272,7 @@ class VideoProcessor:
                 continue
             self.con.execute("UPDATE run_item SET processing_state='running', stage='video', attempts=attempts+1 WHERE id=?",
                              (it["id"],))
+            self.control.within = 0.0
             try:
                 ok = self._process_item(it, rep, model_id)
             except RunCancelled:
@@ -298,6 +299,7 @@ class VideoProcessor:
                 rep.done += 1
             else:
                 rep.failed += 1
+            self.control.within = 0.0
             if progress:
                 progress(n, total)
         self.control.stage = "finished"
@@ -312,6 +314,14 @@ class VideoProcessor:
                           f"Run {run_id} finished: {rep.done} recording(s) analysed, {rep.events} events, {failed} failed.",
                           run_id=run_id)
         return rep
+
+    def _where(self, t: float, duration: float | None) -> None:
+        """How far into the recording the analysis is, for the progress bar and the stage line."""
+        if not duration:
+            return
+        self.control.within = min(0.999, max(0.0, t / duration))
+        clock = lambda s: f"{int(s) // 3600}:{int(s) % 3600 // 60:02d}:{int(s) % 60:02d}" if s >= 3600 else f"{int(s) // 60}:{int(s) % 60:02d}"
+        self.control.stage = f"analysing video, {clock(t)} of {clock(duration)}"
 
     def _process_item(self, it, rep: VideoReport, model_id: int) -> bool:
         vid = it["source_version_id"]
@@ -368,6 +378,7 @@ class VideoProcessor:
                     acc = motion
                     last_t, nxt, count = fr.t, nxt_after, count + 1
                     rep.frames += 1
+                    self._where(fr.t, pr["duration_s"])
                     continue
                 acc = None
                 dets, found = [], {}
@@ -388,6 +399,7 @@ class VideoProcessor:
                 self._finish(it, closed, ids, pr, rep)
                 last_t, nxt, count = fr.t, nxt_after, count + 1
                 rep.frames += 1
+                self._where(fr.t, pr["duration_s"])
                 in_chunk += 1
                 if in_chunk >= self.s.chunk_frames or time.monotonic() - chunk_start >= self.s.chunk_seconds:
                     self._checkpoint(it["id"], last_t, nxt, count, tracker, prev, pm)
@@ -480,6 +492,7 @@ class VideoProcessor:
                         "seconds=excluded.seconds, updated_at=excluded.updated_at",
                         (it["id"], s.idx, s.own_a, None if s.own_b == float("inf") else s.own_b, "done",
                          json.dumps(_plain(res) | {"worker": who}), res.frames, res.seconds, utcnow()))
+                    self.control.within = min(0.999, len(done) / len(segs))
                 self.control.checkpoint()          # pause or cancel between segments too
                 if job.error:
                     if self.control.cancelled:

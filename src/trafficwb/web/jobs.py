@@ -105,10 +105,19 @@ class Job:
         elif self.rate_start and self.rate_done >= 3 and self.state in ("running", "paused") and self.total:
             per = (now - self.rate_start) / self.rate_done
             eta = round(per * max(0, self.total - self.done))
+        # How far the whole job is, counting the part of the file in progress (a long video moves the bar before it
+        # ends). With fewer than 3 files finished, the time left is estimated from that.
+        within = getattr(self.control, "within", 0.0) if self.kind != "train" and self.done < self.total else 0.0
+        progress = min(1.0, (self.done + within) / self.total) if self.total else None
+        basis = "measured on this run"
+        if eta is None and self.kind != "train" and progress and progress >= 0.01 and self.state in ("running", "paused"):
+            eta = round((now - self.started) * (1 - progress) / progress)
+            basis = "estimated from the part analysed so far"
         state = "paused" if self.state == "running" and self.control.paused else self.state
         return {"kind": self.kind, "state": state, "stage": self.control.stage, "done": self.done, "total": self.total,
+                "progress": round(progress, 4) if progress is not None else None,
                 "elapsed_s": round(now - self.started), "eta_s": eta, "error": self.error, "result": self.result,
-                "eta_basis": "measured on this run" if eta is not None else
+                "eta_basis": basis if eta is not None else
                 ("not enough training steps yet" if self.kind == "train" else "not enough images yet"),
                 "resource_usage": _resource_usage()}
 

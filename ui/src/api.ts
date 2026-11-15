@@ -155,6 +155,7 @@ export type Job = {
   state: string;
   stage: string;
   done: number;
+  progress?: number | null;     // the whole job, 0 to 1, counting the part of the file in progress
   total: number;
   elapsed_s: number;
   eta_s: number | null;
