@@ -4,6 +4,7 @@ import { go } from "../router";
 import TimezoneMap from "../components/TimezoneMap";
 import FolderPicker from "../components/FolderPicker";
 import NameFormats from "./NameFormats";
+import { TargetsEditor } from "../components/Targets";
 import { NamePick, ZonePick, thisMonth } from "../components/Pick";
 
 type Ref = { countries: Record<string, string>; country_zones: Record<string, string>; modes: Record<string, string[]>; zones: string[];
@@ -28,7 +29,18 @@ export default function Wizard() {
     latitude: null as number | null, longitude: null as number | null,
     source_dir: "", source_dirs: [] as string[], include_subdirs: true, processing: "one_time", output_dir: "", export_formats: ["xlsx", "csv"],
     detector: "standard", vehicle_model: null as string | null, sam3_interval_s: null as number | null, camera: "fixed", video_workers: null as number | null,
+    sam3_words: null as Record<string, string[]> | null, sam3_uncounted: null as string[] | null,
   });
+  const [words, setWords] = useState<any>(null);   // the default words per vehicle class, for "What to look for"
+  useEffect(() => { api("/sam3").then(setWords).catch(() => undefined); }, []);
+  // Settings are the starting point here too: this page changes them for one mission, it never asks them again.
+  const [defs, setDefs] = useState<any>(null);
+  useEffect(() => {
+    api("/settings/missions").then((d) => {
+      setDefs(d);
+      setCfg((c) => ({ ...c, country: d.both.country ?? c.country, iana_zone: d.both.iana_zone ?? c.iana_zone, ...fromSettings(d, c.input_type) }));
+    }).catch(() => setDefs(null));
+  }, []);
   const [saved, setSaved] = useState<any[]>([]);
   useEffect(() => { api("/models/saved").then((r) => setSaved(r.saved ?? [])).catch(() => setSaved([])); }, []);
   const [utcPreview, setUtcPreview] = useState(() => new Date().toISOString().slice(0, 16));
@@ -125,7 +137,7 @@ export default function Wizard() {
           <>
             <label className="field"><span>Mission name</span><NamePick label="Mission name" value={cfg.name} onChange={(v) => set("name", v)} suggestions={nameIdeas} /></label>
             <label className="field"><span>Input type (cannot change later)</span>
-              <select value={cfg.input_type} onChange={(e) => { set("input_type", e.target.value); set("mode", ref.modes[e.target.value][0]); }}>
+              <select value={cfg.input_type} onChange={(e) => { const t = e.target.value; setCfg((c) => ({ ...c, input_type: t, mode: ref.modes[t][0], ...(defs ? fromSettings(defs, t) : {}) })); }}>
                 <option value="images">Still images</option><option value="video">Video recordings</option>
               </select>
             </label>
@@ -136,6 +148,9 @@ export default function Wizard() {
             </label>
             <p className="muted">{MODE_HELP[cfg.mode]}</p>
             {cfg.mode !== "indoor_outdoor" && <DetectorChoice value={cfg.detector} onChange={(d) => set("detector", d)} sam={ref.sam3} video={cfg.input_type === "video"} />}
+            {cfg.mode !== "indoor_outdoor" && words?.vehicle_prompts && <TargetsEditor title="Looks for" words={cfg.sam3_words} uncounted={cfg.sam3_uncounted}
+              defaults={words.vehicle_prompts} busy={false} samOnly={cfg.detector === "sam3"} standardOnly={!usesSam(cfg.detector)} standardKnows={words.standard_knows ?? []}
+              onSave={async (w, u) => setCfg((c) => ({ ...c, sam3_words: w, sam3_uncounted: u.length ? u : null }))} />}
             {cfg.input_type === "video" && <CameraChoice value={cfg.camera} onChange={(v) => set("camera", v)} />}
             {cfg.input_type === "video" && <ParallelChoice value={cfg.video_workers} onChange={(v) => set("video_workers", v)} />}
             {cfg.input_type === "video" && usesSam(cfg.detector) && <SamInterval value={cfg.sam3_interval_s} onChange={(v) => set("sam3_interval_s", v)} both={partsOf(cfg.detector).fast !== null} />}
@@ -485,4 +500,17 @@ export function ModelChoice({ saved, value, onChange, disabled, rfdetr = false }
         : "No saved models yet. Train one on a mission's learning page and save it by name to choose it here."}</small>
     </label>
   );
+}
+
+/** What a new mission takes from Settings (the same fields as the server's defaults.mission_fields). */
+function fromSettings(d: any, inputType: string): Record<string, unknown> {
+  const b = d.both, part = inputType === "video" ? d.video : d.images;
+  const out: Record<string, unknown> = { mode: part.mode, detector: part.detector, export_formats: [...b.export_formats],
+    processing: b.watch ? "continuous" : "one_time", run_mode: b.run_mode, teacher: b.teacher,
+    auto_min_reviews: Number(b.auto_min_reviews), auto_epochs: Number(b.auto_epochs),
+    sam3_words: part.sam3_words ?? null, sam3_uncounted: part.sam3_uncounted ?? null };
+  if (inputType === "video") Object.assign(out, { sam3_interval_s: part.sam3_interval_s, camera: part.camera, video_workers: part.video_workers,
+    analyse_new: !!part.analyse_new, track_min_frames: part.track_min_frames });
+  else out.vehicle_model = part.vehicle_model ?? null;
+  return out;
 }

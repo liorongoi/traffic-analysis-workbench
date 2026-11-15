@@ -1481,7 +1481,7 @@ class Mission:
             "source_files": q("SELECT COUNT(*) FROM source_file"),
             "source_versions": q("SELECT COUNT(*) FROM source_version"),
             "malformed": q("SELECT COUNT(*) FROM source_version WHERE parse_status='malformed' AND superseded_by IS NULL"),
-            "corrupt": q("SELECT COUNT(*) FROM source_version WHERE integrity!='ok' AND superseded_by IS NULL"),
+            "corrupt": q("SELECT COUNT(*) FROM source_version WHERE integrity IN ('corrupt','unsupported') AND superseded_by IS NULL"),
             "pending_stability": q("SELECT COUNT(*) FROM pending_file"),
             "missing": q("SELECT COUNT(*) FROM source_file WHERE missing_since IS NOT NULL"),
             "runs": q("SELECT COUNT(*) FROM run"),

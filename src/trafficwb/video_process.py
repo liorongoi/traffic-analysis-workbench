@@ -28,6 +28,7 @@ from typing import Callable
 
 from .process import RunCancelled, RunControl, register_model
 from .store import Mission, utcnow
+from .detect import family
 from .tracker import Closed, Tracker, TrackerParams
 from .video import compose, camera_motion, frames, is_scene_cut, motion_frame, probe, scene_signature
 from .views import ViewService
@@ -63,6 +64,14 @@ def _low_threshold(detector, score: float):
     if hasattr(detector, "with_threshold"):
         return detector.with_threshold(min(score, detector.settings.score_threshold))
     return detector
+
+
+def _standard_classes(detector) -> list[str]:
+    """The classes the standard detector of a pair looks for on every frame: always the vehicles, and the others it
+    was asked for (a person)."""
+    from .detect import VEHICLE_CLASSES
+    own = getattr(getattr(detector, "standard", None), "classes", None)
+    return [*VEHICLE_CLASSES, *(own.values() if isinstance(own, dict) else [])]
 
 
 def _kind(detector) -> str:
@@ -180,7 +189,10 @@ class VideoProcessor:
         if self.kind != "standard" and not self.s.tracker.jump_per_s:
             # SAM 3.1 sees a target about once a second: a person walks several body widths in that time.
             from dataclasses import replace
-            self.s = replace(self.s, tracker=replace(self.s.tracker, jump_per_s=3.0))
+            # With the standard detector beside it, what that detector knows is seen on every analysed frame: those
+            # tracks never jump (a car that drove out must not take up the next car coming in near by).
+            skip = sorted({family(c) for c in _standard_classes(detector)}) if self.kind == "both" else []
+            self.s = replace(self.s, tracker=replace(self.s.tracker, jump_per_s=3.0, jump_skip=skip))
         own = getattr(mission.config(), "track_min_frames", None)
         if own:
             # the operator's choice: analysed frames a target is seen on before it counts as a target
@@ -455,7 +467,7 @@ class VideoProcessor:
         args = dict(width=pr["width"], height=pr["height"], grid_s=self.grid_s, moving=moving, sam_every=sam_every)
         from .segment_hub import SegmentHub
         hub = self.hub if self.hub is not None and self.remote_spec is not None else SegmentHub()
-        spec = dict(self.remote_spec or {}, **args, tracker=asdict(self.s.tracker), low_score=self.s.low_score,
+        spec = dict(self.remote_spec or {}, **args, tracker={k: v for k, v in asdict(self.s.tracker).items() if v or k != "jump_skip"}, low_score=self.s.low_score,
                     algo=self.s.tracker.algo, needs=["sam3"] if self.kind == "sam3" else
                     ["standard", "sam3"] if self.kind == "both" else ["standard"])
         job = hub.publish(self.m.id, it["id"], it["source_version_id"], todo, spec)

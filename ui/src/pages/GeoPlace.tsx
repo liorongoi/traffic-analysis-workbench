@@ -185,52 +185,54 @@ export default function GeoPlace({ missionId, versionId }: { missionId: string; 
       </div>
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
 
-      <div className="card grid" style={{ gap: 8 }}>
-        <strong className="small">1. The map</strong>
-        <MapSource role="map" cat={cat} path={mapPath} onPath={(p) => { if (p !== mapPath) { setMapPath(p); setCorners(""); } }}
-          centres={centres} onCatalogue={loadCat} />
-        {mapPath && !mapPath.match(/\.tiff?$/i) && <label className="small">Corners: top latitude, left longitude, bottom latitude, right longitude
-          <input value={corners} onChange={(e) => setCorners(e.target.value)} placeholder="32.0805,34.7795,32.0725,34.7875" /></label>}
-        {info && <div className="muted small">{mapPath?.replace(/^.*[\\/]/, "")}: {info.width}×{info.height} pixels, {info.m_per_px} m a pixel, from {info.top.toFixed(5)}°, {info.left.toFixed(5)}° to {info.bottom.toFixed(5)}°, {info.right.toFixed(5)}°</div>}
-      </div>
-
-      <div className="card grid" style={{ gap: 8 }}>
-        <strong className="small">Ground heights <span className="muted">(optional)</span></strong>
-        <MapSource role="terrain" cat={cat} path={dtmPath} onPath={setDtmPath} centres={centres} onCatalogue={loadCat} />
-        {dtm && <div className="muted small">{dtm.name}: heights {dtm.min_m} to {dtm.max_m} m, a height every {dtm.m_per_sample} m.
-          {info && (dtm.top < info.bottom || dtm.bottom > info.top || dtm.right < info.left || dtm.left > info.right) ? " It does not cover the map's area." : ""}</div>}
-      </div>
-
-      {!saved && <div className="card grid" style={{ gap: 8 }}>
-        <strong className="small">Drone or aircraft: platform data <span className="muted">(when the video has none, or it is wrong)</span></strong>
-        <div className="muted small">{tel?.source ? `The video has flight data (${tel.source === "dji-srt" ? "DJI subtitle file" : "KLV, STANAG 4609"}). What you type here wins over it.`
-          : "The video has no flight data. Type what you know, or draw a square on the map where it was flown, and Prepare will search there."}</div>
-        <PlatformForm value={plat} onSave={savePlat} hasDtm={!!dtmPath} />
-        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <button disabled={!info} onClick={() => setBoxMode(boxMode ? null : "start")}>{boxMode ? "Cancel the square" : plat.search_box ? "Draw the search square again" : "Draw a search square on the map"}</button>
-          {plat.search_box && <button onClick={() => savePlat({ ...plat, search_box: null })}>Remove the square</button>}
-          <span className="muted small">{boxMode === "start" ? "Click one corner of the square on the map…" : boxMode ? "…and now the opposite corner." :
-            plat.search_box ? "Without a position, the first frame is looked for only inside the square." : ""}</span>
+      <div className="geo-setup">
+        <div className="card grid" style={{ gap: 8 }}>
+          <strong className="small">1. The map</strong>
+          <MapSource role="map" cat={cat} path={mapPath} onPath={(p) => { if (p !== mapPath) { setMapPath(p); setCorners(""); } }}
+            centres={centres} onCatalogue={loadCat} />
+          {mapPath && !mapPath.match(/\.tiff?$/i) && <label className="small">Corners: top latitude, left longitude, bottom latitude, right longitude
+            <input value={corners} onChange={(e) => setCorners(e.target.value)} placeholder="32.0805,34.7795,32.0725,34.7875" /></label>}
+          {info && <div className="muted small">{mapPath?.replace(/^.*[\\/]/, "")}: {info.width}×{info.height} pixels, {info.m_per_px} m a pixel, from {info.top.toFixed(5)}°, {info.left.toFixed(5)}° to {info.bottom.toFixed(5)}°, {info.right.toFixed(5)}°</div>}
         </div>
-      </div>}
 
-      {!saved && mapPath && info && <div className="card grid" style={{ gap: 8 }}>
-        <strong className="small">Prepare the whole video on the map</strong>
-        <div className="muted small">LanePulse lines up every frame with the map once, now, and keeps the result. Then you can play the video back
-          and watch it move on the map in real time, with nothing to wait for.</div>
-        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <button className={prep.track ? "" : "primary"} disabled={prep.job?.state === "running"} onClick={prepare}>
-            {prep.job?.state === "running" ? "Preparing…" : prep.track ? "Prepare again" : "Prepare"}</button>
-          {prep.track && <button className="primary" onClick={() => setPlaying(!playing)}>{playing ? "Pause" : "▶ Play on the map"}</button>}
-          {prep.job?.state === "running" && <span className="small">{prep.job.done}{prep.job.total ? ` of ${prep.job.total}` : ""} moments</span>}
-          {prep.job?.state === "failed" && <span className="msg err small">{prep.job.error}</span>}
-          {prep.track && <span className="muted small">Lined up with the map: {pct(prep.track.summary["map-match"], prep.track)} ·
-            flight data only: {pct(prep.track.summary["flight-data"], prep.track)} ·
-            {(prep.track.summary.sky ?? 0) > 0 && <> sees the sky (paused): {pct(prep.track.summary.sky, prep.track)} · </>}not placed: {pct(prep.track.summary.lost, prep.track)} ·
-            prepared in {prep.track.seconds} s</span>}
+        <div className="card grid" style={{ gap: 8 }}>
+          <strong className="small">Ground heights <span className="muted">(optional)</span></strong>
+          <MapSource role="terrain" cat={cat} path={dtmPath} onPath={setDtmPath} centres={centres} onCatalogue={loadCat} />
+          {dtm && <div className="muted small">{dtm.name}: heights {dtm.min_m} to {dtm.max_m} m, a height every {dtm.m_per_sample} m.
+            {info && (dtm.top < info.bottom || dtm.bottom > info.top || dtm.right < info.left || dtm.left > info.right) ? " It does not cover the map's area." : ""}</div>}
         </div>
-        {prep.job?.state === "running" && prep.job.total && <div className="progress"><div style={{ width: `${Math.min(100, 100 * prep.job.done / prep.job.total)}%` }} /></div>}
-      </div>}
+
+        {!saved && <div className="card grid" style={{ gap: 8 }}>
+          <strong className="small">Drone or aircraft: platform data <span className="muted">(when the video has none, or it is wrong)</span></strong>
+          <div className="muted small">{tel?.source ? `The video has flight data (${tel.source === "dji-srt" ? "DJI subtitle file" : "KLV, STANAG 4609"}). What you type here wins over it.`
+            : "The video has no flight data. Type what you know, or draw a square on the map where it was flown, and Prepare will search there."}</div>
+          <PlatformForm value={plat} onSave={savePlat} hasDtm={!!dtmPath} />
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <button disabled={!info} onClick={() => setBoxMode(boxMode ? null : "start")}>{boxMode ? "Cancel the square" : plat.search_box ? "Draw the search square again" : "Draw a search square on the map"}</button>
+            {plat.search_box && <button onClick={() => savePlat({ ...plat, search_box: null })}>Remove the square</button>}
+            <span className="muted small">{boxMode === "start" ? "Click one corner of the square on the map…" : boxMode ? "…and now the opposite corner." :
+              plat.search_box ? "Without a position, the first frame is looked for only inside the square." : ""}</span>
+          </div>
+        </div>}
+
+        {!saved && mapPath && info && <div className="card grid" style={{ gap: 8 }}>
+          <strong className="small">Prepare the whole video on the map</strong>
+          <div className="muted small">LanePulse lines up every frame with the map once, now, and keeps the result. Then you can play the video back
+            and watch it move on the map in real time, with nothing to wait for.</div>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <button className={prep.track ? "" : "primary"} disabled={prep.job?.state === "running"} onClick={prepare}>
+              {prep.job?.state === "running" ? "Preparing…" : prep.track ? "Prepare again" : "Prepare"}</button>
+            {prep.track && <button className="primary" onClick={() => setPlaying(!playing)}>{playing ? "Pause" : "▶ Play on the map"}</button>}
+            {prep.job?.state === "running" && <span className="small">{prep.job.done}{prep.job.total ? ` of ${prep.job.total}` : ""} moments</span>}
+            {prep.job?.state === "failed" && <span className="msg err small">{prep.job.error}</span>}
+            {prep.track && <span className="muted small">Lined up with the map: {pct(prep.track.summary["map-match"], prep.track)} ·
+              flight data only: {pct(prep.track.summary["flight-data"], prep.track)} ·
+              {(prep.track.summary.sky ?? 0) > 0 && <> sees the sky (paused): {pct(prep.track.summary.sky, prep.track)} · </>}not placed: {pct(prep.track.summary.lost, prep.track)} ·
+              prepared in {prep.track.seconds} s</span>}
+          </div>
+          {prep.job?.state === "running" && prep.job.total && <div className="progress"><div style={{ width: `${Math.min(100, 100 * prep.job.done / prep.job.total)}%` }} /></div>}
+        </div>}
+      </div>
 
       <div className="card grid" style={{ gap: 8 }}>
         <strong className="small">2. The same spot on the frame, then on the map, four times or more</strong>

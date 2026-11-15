@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError, post } from "../api";
 import FolderPicker from "../components/FolderPicker";
 import { ZonePick } from "../components/Pick";
@@ -7,6 +7,7 @@ import { CameraChoice, DetectorChoice, ModelChoice, ParallelChoice, SamInterval,
 import NameFormats from "./NameFormats";
 import Workers from "./Workers";
 import { PlayerColours } from "../components/TrackMarks";
+import { TargetsEditor } from "../components/Targets";
 
 // Settings: everything decided once, before analysis, so the working pages show only what is done during and after a
 // run. In three parts, as the operator thinks of them: for still images and video alike, for still images only, and
@@ -14,10 +15,11 @@ import { PlayerColours } from "../components/TrackMarks";
 type Defaults = {
   both: { results_folder: string | null; export_formats: string[]; iana_zone: string | null; country: string | null; watch: boolean;
     run_mode: string; teacher: string; auto_min_reviews: number; auto_epochs: number };
-  images: { detector: string; mode: string; vehicle_model: string | null };
-  video: { detector: string; mode: string; sam3_interval_s: number; camera: string; video_workers: number; analyse_new: boolean; track_min_frames: number | null };
+  images: { detector: string; mode: string; vehicle_model: string | null } & Targets;
+  video: Targets & { detector: string; mode: string; sam3_interval_s: number; camera: string; video_workers: number; analyse_new: boolean; track_min_frames: number | null };
 };
 type Part = keyof Defaults;
+type Targets = { sam3_words: Record<string, string[]> | null; sam3_uncounted: string[] | null };
 
 export const MODE_TEXT: Record<string, string> = {
   general_traffic: "Count traffic: every vehicle in each image",
@@ -54,11 +56,45 @@ export default function Settings({ section }: { section?: string }) {
     try { setD(await api("/settings/missions", { method: "PUT", body: { [p]: values } })); setNote({ kind: "ok", text: "Saved. New missions use this." }); }
     catch (e) { setD(before); setNote({ kind: "err", text: (e as ApiError).message }); }
   };
+  // What new missions look for: saved as one change, and an error keeps the editor open with its message.
+  const targets = (p: "images" | "video") => sam?.vehicle_prompts ? (
+    <Card title="What to look for" wide id={`set-targets-${p}`} lead="Vehicles, and anything else a new mission should find: pedestrians, tractors, animals, or a name of your own. Tick several at once.">
+      <TargetsEditor title="Targets" words={d![p].sam3_words} uncounted={d![p].sam3_uncounted} defaults={sam.vehicle_prompts} busy={false}
+        samOnly={d![p].detector === "sam3"} standardOnly={!usesSam(d![p].detector)} standardKnows={sam.standard_knows ?? []}
+        note="Each mission can still change this in its own setup."
+        onSave={async (words, uncounted) => {
+          setD(await api("/settings/missions", { method: "PUT", body: { [p]: { sam3_words: words, sam3_uncounted: uncounted.length ? uncounted : null } } }));
+          setNote({ kind: "ok", text: "Saved. New missions use this." });
+        }} />
+    </Card>) : null;
   useEffect(() => { if (note?.kind !== "ok") return; const t = window.setTimeout(() => setNote(null), 2500); return () => window.clearTimeout(t); }, [note]);
   useEffect(() => {   // #/settings/formats and the like land on their card
     const id = section && LEGACY[section] ? `set-${section}` : null;
     if (id) window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ block: "start" }), 300);
   }, [section]);
+  // The open part's sections, read from the page itself so the list always matches the cards shown.
+  const mainRef = useRef<HTMLDivElement>(null);
+  const [sections, setSections] = useState<{ title: string; el: HTMLElement }[]>([]);
+  const [seen, setSeen] = useState(0);
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root) return;
+    let list: { title: string; el: HTMLElement }[] = [];
+    const io = new IntersectionObserver((es) => {
+      const top = es.filter((e) => e.isIntersecting).map((e) => list.findIndex((x) => x.el === e.target)).filter((i) => i >= 0);
+      if (top.length) setSeen(Math.min(...top));
+    }, { rootMargin: "-60px 0px -55% 0px" });
+    const scan = () => {
+      io.disconnect();
+      list = [...root.querySelectorAll<HTMLElement>("h2")].filter((h) => !h.closest(".dialog"))
+        .map((h) => ({ title: h.textContent?.trim() ?? "", el: (h.closest("section, .card") as HTMLElement) ?? h })).filter((x) => x.title);
+      setSections(list);
+      list.forEach((x) => io.observe(x.el));
+    };
+    scan();
+    const later = window.setTimeout(scan, 1200);   // parts that load their own data (other computers, map servers) come later
+    return () => { io.disconnect(); window.clearTimeout(later); };
+  }, [part, d]);
 
   return (
     <div className="page settings">
@@ -69,10 +105,17 @@ export default function Settings({ section }: { section?: string }) {
         </div>
         {note && <span className={`msg ${note.kind} settings-note`} role={note.kind === "err" ? "alert" : "status"}>{note.text}</span>}
       </div>
-      <nav className="tabs settings-parts" aria-label="Settings parts">
-        {PARTS.map(([k, l, hint]) => <a key={k} href={`#/settings/${k}`} className={part === k ? "on" : ""} aria-current={part === k ? "page" : undefined}>
-          {l}<small>{hint}</small></a>)}
+      {/* A list beside the settings, as in Windows 11 Settings: the three parts, and under the open one its sections,
+          so any setting is one click away instead of a long scroll (Nielsen #6 and #7). */}
+      <div className="settings-body">
+      <nav className="set-index" aria-label="Settings parts">
+        {PARTS.map(([k, l, hint]) => <div key={k}>
+          <a href={`#/settings/${k}`} className={part === k ? "on" : ""} aria-current={part === k ? "page" : undefined}>{l}<small>{hint}</small></a>
+          {part === k && sections.length > 1 && <ul>{sections.map((sec, i) =>
+            <li key={i}><button className={i === seen ? "on" : ""} onClick={() => sec.el.scrollIntoView({ behavior: "smooth", block: "start" })}>{sec.title}</button></li>)}</ul>}
+        </div>)}
       </nav>
+      <div className="set-main" ref={mainRef}>
       {!d ? <p className="muted">Loading…</p> : <>
         {part === "both" && <div className="set-grid">
           <Card title="Results" id="set-results" lead="Where each mission writes its Excel and CSV files.">
@@ -144,12 +187,15 @@ export default function Settings({ section }: { section?: string }) {
           <Card title="Detector" wide lead="Which detectors look at each image.">
             <DetectorChoice value={d.images.detector} onChange={(v) => change("images", { detector: v })} sam={sam ?? undefined} legend={false} />
           </Card>
+          {targets("images")}
         </div>}
 
         {part === "video" && <div className="set-grid">
           <Card title="What to find" lead="The kind of analysis a new video mission runs.">
             <Modes kind="video" value={d.video.mode} onChange={(v) => change("video", { mode: v })} />
           </Card>
+          {/* Beside the long camera card, so the two columns come out even. */}
+          <div id="set-colours"><PlayerColours /></div>
           <Card title="Camera and speed" lead="How recordings are analysed.">
             <CameraChoice value={d.video.camera} onChange={(v) => change("video", { camera: v })} />
             <ParallelChoice value={d.video.video_workers} onChange={(v) => change("video", { video_workers: v })} />
@@ -165,13 +211,15 @@ export default function Settings({ section }: { section?: string }) {
           <Card title="Detector" wide lead="Which detectors look at each analysed frame.">
             <DetectorChoice value={d.video.detector} onChange={(v) => change("video", { detector: v })} sam={sam ?? undefined} legend={false} video />
           </Card>
-          <div id="set-colours"><PlayerColours /></div>
-          <div className="set-wide" id="set-workers"><Workers embedded /></div>
-          <Card title="Map and ground heights" wide id="set-maps" lead="Our own map and height servers, for putting a camera on the map. Set up once; then picked from a list.">
+          {targets("video")}
+          <div id="set-workers"><Workers embedded /></div>
+          <Card title="Map and ground heights" id="set-maps" lead="Our own map and height servers, for putting a camera on the map. Set up once; then picked from a list.">
             <MapServers />
           </Card>
         </div>}
       </>}
+      </div>
+      </div>
     </div>
   );
 }

@@ -28,8 +28,12 @@ BUILT_IN: dict = {
         "auto_min_reviews": 20,
         "auto_epochs": 30,
     },
-    "images": {"detector": "standard", "mode": "general_traffic", "vehicle_model": None},
+    # What a new mission looks for: None, the five vehicle classes with their default words; or {class: [words]},
+    # with classes of its own (a pedestrian, a tractor), and those of its own not counted as vehicles.
+    "images": {"detector": "standard", "mode": "general_traffic", "vehicle_model": None,
+               "sam3_words": None, "sam3_uncounted": None},
     "video": {"detector": "standard", "mode": "general_traffic", "sam3_interval_s": 1.0, "camera": "fixed",
+              "sam3_words": None, "sam3_uncounted": None,
               "video_workers": 1, "analyse_new": True,
               "track_min_frames": None},       # analysed frames before a target counts (None: 5, or 3 with SAM 3.1 alone)
 }
@@ -77,6 +81,8 @@ def check(d: dict) -> list[str]:
             errors.append(f"Detector must be one of {sorted(DETECTORS)}.")
         if part["mode"] not in MODES[kind]:
             errors.append(f"For {kind}, what to find must be one of {sorted(MODES[kind])}.")
+    for part, kind in ((im, "still images"), (vi, "video")):
+        errors += _targets_errors(part, kind)
     if vi["camera"] not in CAMERAS:
         errors.append(f"Camera must be one of {sorted(CAMERAS)}.")
     try:
@@ -90,6 +96,30 @@ def check(d: dict) -> list[str]:
     if n is not None and (not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 30):
         errors.append("Frames before a target counts must be 1 to 30.")
     return errors
+
+
+def _targets_errors(part: dict, kind: str) -> list[str]:
+    from .sam3 import VEHICLE_PROMPTS, vehicle_prompts
+    try:
+        prompts = vehicle_prompts(part["sam3_words"])
+    except ValueError as exc:
+        return [f"What {kind} missions look for: {exc}"]
+    own = set(prompts) - set(VEHICLE_PROMPTS)
+    out = part["sam3_uncounted"]
+    if out is not None and (not isinstance(out, list) or not set(out) <= own):
+        return [f"For {kind}, only a class of your own can be left out of the vehicle count."]
+    return []
+
+
+def _norm_targets(part: dict) -> None:
+    """Default words are kept as None, as on a mission, so a later change of the defaults reaches them."""
+    from .sam3 import VEHICLE_PROMPTS, vehicle_prompts
+    try:
+        prompts = vehicle_prompts(part["sam3_words"])
+    except ValueError:
+        return                                        # check() says what is wrong
+    part["sam3_words"] = None if prompts == dict(VEHICLE_PROMPTS) else {k: list(v) for k, v in prompts.items()}
+    part["sam3_uncounted"] = sorted(set(part["sam3_uncounted"] or [])) or None
 
 
 def save(data_root: Path | str, changes: dict) -> dict:
@@ -106,6 +136,8 @@ def save(data_root: Path | str, changes: dict) -> dict:
             if k == "track_min_frames" and v == 0:
                 v = None                                  # 0: back to the default
             cur[part][k] = v
+    for part in ("images", "video"):
+        _norm_targets(cur[part])
     errors = check(cur)
     if errors:
         raise ValueError(" ".join(errors))
@@ -122,7 +154,8 @@ def mission_fields(d: dict, input_type: str) -> dict:
     b, part = d["both"], d["video" if input_type == "video" else "images"]
     out = {"mode": part["mode"], "detector": part["detector"], "export_formats": list(b["export_formats"]),
            "processing": "continuous" if b["watch"] else "one_time", "run_mode": b["run_mode"], "teacher": b["teacher"],
-           "auto_min_reviews": int(b["auto_min_reviews"]), "auto_epochs": int(b["auto_epochs"])}
+           "auto_min_reviews": int(b["auto_min_reviews"]), "auto_epochs": int(b["auto_epochs"]),
+           "sam3_words": part["sam3_words"], "sam3_uncounted": part["sam3_uncounted"]}
     if input_type == "video":
         out.update(sam3_interval_s=float(part["sam3_interval_s"]), camera=part["camera"],
                    video_workers=int(part["video_workers"]), analyse_new=bool(part["analyse_new"]),

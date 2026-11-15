@@ -373,6 +373,8 @@ def test_video_api_review_flow(api):
     assert len(recs) == 1 and recs[0]["events"] == 2 and recs[0]["processing_state"] == "done"
     vid = recs[0]["id"]
     assert recs[0]["start_source"] == "filename"
+    # A healthy video is not counted as damaged (its integrity is "unverified": the decoder checks it).
+    assert c.get(f"/api/missions/{mid}").json()["status"]["corrupt"] == 0
     manual = c.put(f"/api/missions/{mid}/recordings/{vid}/start-time", headers=H1,
                    json={"action": "set", "utc": "2026-10-21T13:15:00Z", "precision": "minute",
                          "note": "Confirmed against recording log"})

@@ -41,8 +41,10 @@ const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const SHOW = { all: "Every box", review: "Boxes not reviewed yet", none: "No boxes" } as const;
 
 /** The event's box at time t: its box on the nearest analysed frame (within a sixth of a second), else the two
- *  around t blended (an analysed gap of up to 2 s; any gap between the boxes you drew for a target you added). */
-function boxAt(e: PEvent, t: number): number[] | null {
+ *  around t blended (an analysed gap of up to 2 s; any gap between the boxes you drew for a target you added).
+ *  Never blended from a box at the frame's edge (fw x fh): the target drove out there, so a box drawn across the gap
+ *  would float over the empty road. */
+function boxAt(e: PEvent, t: number, fw = 0, fh = 0): number[] | null {
   const b = e.boxes;
   if (!b.length || t < e.first_t - 0.17 || t > e.last_t + 0.17) return null;
   let i = 0;
@@ -51,6 +53,8 @@ function boxAt(e: PEvent, t: number): number[] | null {
   const near = !before ? after : !after ? before : t - before[0] <= after[0] - t ? before : after;
   if (Math.abs(near[0] - t) <= 0.17) return near.slice(1);
   if (!before || !after || (after[0] - before[0] > 2 && e.origin !== "human")) return null;
+  const edge = (b: number[]) => fw > 0 && (b[1] <= 4 || b[2] <= 4 || b[3] >= fw - 4 || b[4] >= fh - 4);
+  if (e.origin !== "human" && after[0] - before[0] > 0.5 && edge(before)) return null;
   const w = (t - before[0]) / (after[0] - before[0]);
   return [1, 2, 3, 4].map((k) => before[k] + w * (after[k] - before[k]));
 }
@@ -83,6 +87,8 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [show, setShow] = useState<keyof typeof SHOW>("all");
+  // Which kind of target to look at (a car, a pedestrian ...): "" every kind. Filters the boxes and the list.
+  const [only, setOnly] = useState("");
   const [sel, setSel] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
   const [addCls, setAddCls] = useState("car");
@@ -226,7 +232,9 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   const inOrder = [...evs].sort((a, b) => a.first_t - b.first_t);
   // Find: every word must match the class, the key, the review state, a flag or the time ("red car", "rejected").
   const words = find.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const listed = words.length ? inOrder.filter((e) => {
+  const kinds = [...new Set(evs.map((e) => e.cls))].sort();
+  const ofKind = (e: PEvent) => !only || e.cls === only;
+  const listed = words.length || only ? inOrder.filter(ofKind).filter((e) => {
     const hay = [e.key, e.cls, e.machine_cls, STATUS_TEXT[e.status] ?? e.status, ...e.flags.map((f) => FLAG_LABEL[f] ?? f), fmtT(e.first_t)].join(" ").replace(/_/g, " ").toLowerCase();
     return words.every((w) => hay.includes(w));
   }) : inOrder;
@@ -339,8 +347,8 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
       if (k === " ") toggle();
       else if (k === "arrowright" || k === ".") { pause(); seek(now + (e.shiftKey ? 1 : frame)); }
       else if (k === "arrowleft" || k === ",") { pause(); seek(now - (e.shiftKey ? 1 : frame)); }
-      else if (k === "j" && toReview.length) pick(toReview[(i + 1) % toReview.length], true);
-      else if (k === "k" && toReview.length) pick(toReview[(i - 1 + toReview.length) % toReview.length], true);
+      else if (k === "k" && toReview.length) pick(toReview[(i + 1) % toReview.length], true);   // K forward, J back
+      else if (k === "j" && toReview.length) pick(toReview[(i - 1 + toReview.length) % toReview.length], true);
       else if (k === "c" && selEv) decide("confirm");
       else if ((k === "x" || k === "delete" || k === "backspace") && selEv) decide("reject");
       else if (k === "b") { setAdding((a) => !a); setSel(null); setMeasuring(false); pause(); }
@@ -370,7 +378,8 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
   const cw = svg.current?.clientWidth || W, ch = svg.current?.clientHeight || H;
   const px = Math.max(W / cw, H / ch);              // video pixels per screen pixel
   const sw = 2 * px;
-  const shown = evs.filter((e) => show === "all" ? true : show === "review" ? e.status === "pending" : false);
+  const shown = evs.filter((e) => ofKind(e) && (show === "all" ? true : show === "review" ? e.status === "pending" : false));
+  const at = (e: PEvent, t: number) => boxAt(e, t, W, H);
   const fs = 12 * px;
 
   return (
@@ -402,10 +411,10 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             <svg ref={svg} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%", cursor: drawing ? "crosshair" : "default" }}
               onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}>
-              <Tails events={shown} now={now} len={tail} sel={sel} px={px} lookOf={lookFor} boxAt={boxAt}
+              <Tails events={shown} now={now} len={tail} sel={sel} px={px} lookOf={lookFor} boxAt={at}
                 fps={plausibleFps(ov.recording.nominal_fps) ?? 25} colour={dotColour} />
               {shown.map((e) => {
-                const b = boxAt(e, now);
+                const b = at(e, now);
                 if (!b) return null;
                 const look = lookFor(e);
                 const on = e.id === sel;
@@ -463,7 +472,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
                     T{mk.id} {mk.cls}{st.score < SURE ? " · unsure" : ""}{mk.state === "confirmed" ? " · confirmed" : ""}</text></g>;
               })}
               {show !== "none" && <Labels events={shown} now={now} sel={sel} px={px} showId={showId} showScore={showScore}
-                boxAt={boxAt} statusText={(e: PEvent) => e.status !== "pending" ? STATUS_TEXT[e.status] : ""} W={W} />}
+                boxAt={at} statusText={(e: PEvent) => e.status !== "pending" ? STATUS_TEXT[e.status] : ""} W={W} />}
               {drag && !measuring && !zoning && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)}
                 height={Math.abs(drag.y1 - drag.y0)} fill="none" stroke="var(--human)" strokeWidth={sw} strokeDasharray={`${4 * sw} ${2 * sw}`} />}
             </svg>
@@ -478,6 +487,11 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             </select>
             <select aria-label="Boxes shown" value={show} onChange={(e) => setShow(e.target.value as keyof typeof SHOW)}>
               {Object.entries(SHOW).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <select aria-label="Kind of target" value={only} onChange={(e) => setOnly(e.target.value)}
+              title="Look at one kind of target only: its boxes on the video and its rows in the list. To find a kind this video has none of (pedestrians, say), add it under What this mission looks for, on the mission's page, and analyse again.">
+              <option value="">Every kind</option>
+              {kinds.map((k) => <option key={k} value={k}>{k}s only</option>)}
             </select>
             <select aria-label="Tail" value={tail} onChange={(e) => setTail(e.target.value as TailLen)}
               title="A line behind each target showing where it has been; a ring where it stood still">
@@ -538,7 +552,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
             : "Pause where the target is clear and drag a box around all of it. The app follows it forwards and backwards and suggests where it enters and leaves."}</div>}
           {adding && <div className="msg">Drag a box around the target the analysis missed. It is added as a confirmed {addCls}.</div>}
           {help && <div className="msg small">
-            Space play or pause · ← → one frame (Shift: one second) · J / K next or previous event to review · C confirm ·
+            Space play or pause · ← → one frame (Shift: one second) · K / J next or previous event to review · C confirm ·
             X or Delete reject · 1–{classes.length} class ({classes.map((c, i) => `${i + 1} ${c}`).join(", ")}) ·
             B missed target · T teach a new target · M measure the camera · L counting line · drag on the paused picture to redraw the picked event's box · A approve for learning ·
             H hide boxes · S show scores · Esc let go</div>}
@@ -568,7 +582,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
               {myBoxHere && <button onClick={() => revise(selEv.id, "clear_box", { t: myBoxHere.t })}>Take back my box on this frame</button>}
               <a href={`#/m/${missionId}/events/${selEv.id}`}>Times, split, merge and clips…</a>
             </> : <div className="grid" style={{ gap: 8 }}>
-              <div className="muted">Click a box on the video, or a vehicle in the list, to check it. J goes to the next one not checked yet.</div>
+              <div className="muted">Click a box on the video, or a vehicle in the list, to check it. K goes to the next one not checked yet.</div>
               {toReview.length > 0 && <button className="primary" onClick={() => pick(toReview[0], true)}>Check the first one ▶</button>}
             </div>}
           </div>
@@ -594,7 +608,7 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
           <div className="card grid" style={{ gap: 6, padding: 8 }}>
             <div className="row" style={{ justifyContent: "space-between" }}>
               <strong className="small">Vehicles in this video</strong>
-              <span className="muted small">{words.length ? `${listed.length} of ${evs.length}` : evs.length}</span>
+              <span className="muted small">{words.length || only ? `${listed.length} of ${evs.length}` : evs.length}</span>
             </div>
             <input type="search" placeholder="Find: car, truck, rejected, 00:15…" aria-label="Find in this video"
               value={find} onChange={(e) => setFind(e.target.value)} />
