@@ -91,7 +91,7 @@ hr { border: 0; border-top: 1px solid var(--line); }
 .password-button { padding: 4px 8px; font-size: 13px; white-space: nowrap; }
 .password-button.nudge { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(76, 215, 246, .25); }
 .build-version { color: var(--muted); font: 500 12px/1 "IBM Plex Mono", monospace; padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 4px; white-space: nowrap; }
-.brand-wordmark small { padding-left: 10px; border-left: 1px solid var(--line-strong); color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.brand-wordmark small { white-space: nowrap; padding-left: 10px; border-left: 1px solid var(--line-strong); color: var(--muted); font-size: 12.5px; font-weight: 500; }
 /* Settings: a small cog beside the name and logo, on every page. */
 .gear { display: inline-grid; place-items: center; width: 34px; height: 34px; flex: none;
   color: var(--muted); border: 1px solid transparent; border-radius: 4px; position: relative; }
@@ -104,7 +104,7 @@ hr { border: 0; border-top: 1px solid var(--line); }
 .home-grid.solo { grid-template-columns: minmax(0, 1fr); }
 .home-grid.solo .home-side { display: none; }
 .top-nav { display: flex; align-items: stretch; align-self: stretch; gap: 2px; }
-.top-nav a { display: flex; align-items: center; padding: 0 14px; color: var(--text-2); font-weight: 600; position: relative; }
+.top-nav a { display: flex; align-items: center; white-space: nowrap; padding: 0 14px; color: var(--text-2); font-weight: 600; position: relative; }
 .top-nav a:hover { color: var(--text); text-decoration: none; background: linear-gradient(180deg, transparent, rgba(76, 215, 246, .06)); }
 .top-nav a[aria-current] { color: var(--text); }
 /* Lane-marking dash under the current place. */
@@ -923,3 +923,57 @@ button.linkish { background: none; border: none; padding: 0; color: var(--accent
    over the rows in the middle of the page while the page scrolls. */
 .catalog-scroll { max-height: min(70vh, 720px); overflow: auto; border: 1px solid var(--line); }
 .catalog-scroll table.t th { top: 0; z-index: 1; }
+
+/* ---- Video mission: one list of videos, each with its own progress ---- */
+.vv-sum { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 22px; align-items: center; }
+.vv-sum-n { display: grid; gap: 2px; min-width: 120px; }
+.vv-sum-n b { font-family: var(--display); font-size: 30px; font-weight: 600; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.vv-sum-n span { color: var(--text-2); font-size: 13px; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vv-sum-bar { display: grid; gap: 6px; min-width: 0; }
+.vv-sum-bar .vv-bar { height: 8px; margin: 0; }
+.vv-bar { position: relative; height: 6px; background: #14243a; overflow: hidden; margin: 7px 0 5px; }
+.vv-bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); box-shadow: 0 0 12px rgba(76, 215, 246, .55); transition: width .6s ease; }
+.vv-bar.done i { background: var(--ok); box-shadow: none; }
+.vv-list { display: grid; gap: 8px; }
+.vv-row { display: grid; grid-template-columns: 128px minmax(0, 1fr) 110px 150px; gap: 16px; align-items: center; padding: 10px 14px;
+  background: var(--surface); border: 1px solid var(--line); }
+.vv-row.now { border-color: rgba(76, 215, 246, .45); background: linear-gradient(90deg, rgba(76, 215, 246, .07), var(--surface) 60%); }
+.vv-row.now .vv-bar i { animation: vv-pulse 1.6s ease-in-out infinite; }
+.vv-row.bad { border-color: rgba(255, 107, 126, .35); }
+@keyframes vv-pulse { 50% { opacity: .6; } }
+@media (prefers-reduced-motion: reduce) { .vv-row.now .vv-bar i { animation: none; } .vv-bar i { transition: none; } }
+.vv-thumb { width: 128px; height: 72px; object-fit: cover; display: block; border: 1px solid var(--line-strong); background: #000; }
+.vv-thumb.ph { background: repeating-linear-gradient(45deg, var(--panel-2), var(--panel-2) 6px, var(--surface) 6px, var(--surface) 12px); }
+.vv-main { min-width: 0; }
+.vv-name { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vv-num { display: grid; justify-items: end; }
+.vv-num b { font-family: var(--display); font-size: 24px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.vv-num b.live { color: var(--accent); }
+.vv-num span { font-size: 12px; color: var(--muted); }
+.vv-state { display: grid; justify-items: end; gap: 4px; }
+.vv-group { display: flex; gap: 10px; align-items: baseline; padding: 6px 2px 0; }
+.badge.live { color: var(--accent); background: var(--accent-soft); border-color: rgba(76, 215, 246, .45); }
+.findbar { gap: 12px; }
+details.fold > summary { cursor: pointer; list-style: none; }
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary h2 { display: inline; margin: 0; font-size: 15px; color: var(--text-2); }
+details.fold > summary::before { content: "▸"; color: var(--accent); margin-right: 8px; }
+details.fold[open] > summary::before { content: "▾"; }
+details.fold[open] > summary { margin-bottom: 12px; }
+details.fold > .card { margin-top: 10px; }
+@media (max-width: 760px) {
+  .vv-sum { grid-template-columns: 1fr; gap: 10px; }
+  .vv-row { grid-template-columns: 96px minmax(0, 1fr); }
+  .vv-thumb { width: 96px; height: 54px; }
+  .vv-num, .vv-state { grid-column: 2; justify-items: start; }
+}
+
+/* New mission, video: the videos themselves, and this mission's own choices */
+.newm-vids { display: grid; gap: 8px; }
+.newm-vlist { display: grid; gap: 4px; max-height: 300px; overflow: auto; border: 1px solid var(--line); padding: 6px; }
+.newm-v { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 3px 4px; }
+.newm-v img, .newm-v .ph { width: 96px; height: 54px; object-fit: cover; display: block; border: 1px solid var(--line-strong); background: #000; }
+.newm-v .ph { background: repeating-linear-gradient(45deg, var(--panel-2), var(--panel-2) 6px, var(--surface) 6px, var(--surface) 12px); }
+.newm-v > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.newm-v.bad > span { color: var(--bad); }
+.newm-own { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line-strong); background: var(--panel-2); }

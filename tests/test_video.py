@@ -549,3 +549,18 @@ def test_export_leaves_out_events_under_the_chosen_confidence(two_cars):
     files = vs.export("lior", min_score=top)
     rows = list(csv.DictReader(open(files[0], encoding="utf-8-sig")))
     assert [r["event_id"] for r in rows] == [a.key] and float(rows[0]["score"]) == pytest.approx(a.score)
+
+
+def test_new_videos_after_the_first_run_are_queued_when_the_mission_follows_them(tmp_path):
+    m = mission(tmp_path, {"a.mp4": (1.0, car_scene, False)})
+    assert m.con.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 1
+    make_video(tmp_path / "src" / "b.mp4", 1.0, car_scene)
+    _, run_id = cycle(m, stability_seconds=0)
+    assert run_id is None                       # a one-time mission that does not follow new videos stays as it was
+    m.update_config("lior", "follow new videos", analyse_new=True)
+    _, run_id = cycle(m, stability_seconds=0)
+    assert run_id is not None
+    names = [r[0] for r in m.con.execute(
+        "SELECT f.rel_path FROM run_item i JOIN source_version v ON v.id=i.source_version_id "
+        "JOIN source_file f ON f.id=v.source_file_id WHERE i.run_id=?", (run_id,))]
+    assert names == ["b.mp4"]
