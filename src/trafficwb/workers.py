@@ -301,7 +301,7 @@ class Worker:
             video = f"{self.server}/api/worker/lease/{lease}/video?code={urllib.request.quote(self.code)}"
             self.log(f"segment {seg.idx + 1} of recording {task['version_id']} ({seg.own_a:.0f} s on)")
             res = vs.analyse(seg, video, spec["width"], spec["height"], vs.make_detect(_kind(det), det), spec["grid_s"],
-                             TrackerParams(**spec["tracker"]), spec["moving"], spec["sam_every"], checkpoint)
+                             _params(TrackerParams, spec["tracker"]), spec["moving"], spec["sam_every"], checkpoint)
             stop.set()
             out = self._call(f"/api/worker/lease/{lease}/result", {"result": _plain(res)}, timeout=300)
             if out and out.get("ok"):
@@ -560,3 +560,10 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _params(cls, d: dict):
+    """Tracker settings from the server, leaving out any this version does not know (a newer server)."""
+    from dataclasses import fields
+    known = {f.name for f in fields(cls)}
+    return cls(**{k: v for k, v in d.items() if k in known})
