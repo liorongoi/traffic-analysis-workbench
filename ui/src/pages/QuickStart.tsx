@@ -3,9 +3,10 @@ import { api, ApiError, post } from "../api";
 import { go } from "../router";
 import FolderPicker from "../components/FolderPicker";
 import { NamePick } from "../components/Pick";
-import { CameraChoice, DETECTOR_LABEL, DetectorChoice } from "./Wizard";
+import { CameraChoice, DETECTOR_LABEL, DetectorChoice, usesSam } from "./Wizard";
 import { fmtDuration } from "../api";
 import { MODE_TEXT as SET_MODE } from "./Settings";
+import { TargetsEditor } from "../components/Targets";
 
 // A new mission is its input folder. The person chooses the folder; LanePulse reads it, names the mission, and takes
 // everything decided before analysis (what to find, the detector, the results folder, the time zone) from Settings.
@@ -59,6 +60,8 @@ export default function QuickStart() {
   const [changing, setChanging] = useState(false);
   const [sam, setSam] = useState<any>(null);
   useEffect(() => { api("/reference").then((r) => setSam(r.sam3 ?? null)).catch(() => undefined); }, []);
+  const [words, setWords] = useState<any>(null);   // the default words per vehicle class, for "What to look for"
+  useEffect(() => { api("/sam3").then(setWords).catch(() => undefined); }, []);
 
   // Read the folder once the path stops changing (the picker reports every key typed in its field).
   useEffect(() => {
@@ -178,6 +181,12 @@ export default function QuickStart() {
             {video ? <button className="linkish" aria-expanded={changing} onClick={() => setChanging(!changing)}>{changing ? "Done" : "Change for this mission"}</button>
               : <a href={`#/settings/${video ? "video" : "images"}`}>Change</a>}
           </div>
+          {/* What to look for, from Settings, changed here for this mission only (pedestrians, tractors, several at once). */}
+          {words?.vehicle_prompts && st.mode !== "indoor_outdoor" && <div className="newm-targets">
+            <TargetsEditor title="Looks for" words={st.sam3_words ?? null} uncounted={st.sam3_uncounted ?? null} defaults={words.vehicle_prompts}
+              busy={busy} samOnly={st.detector === "sam3"} standardOnly={!usesSam(st.detector ?? "standard")} standardKnows={words.standard_knows ?? []}
+              onSave={async (w, u) => setOwn({ ...own, sam3_words: w, sam3_uncounted: u.length ? u : null })} />
+          </div>}
           {video && changing && <div className="newm-own">
             <div className="field"><span>What to find</span>
               <div className="seg" role="radiogroup" aria-label="What to find">

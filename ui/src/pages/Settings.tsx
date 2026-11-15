@@ -7,6 +7,7 @@ import { CameraChoice, DetectorChoice, ModelChoice, ParallelChoice, SamInterval,
 import NameFormats from "./NameFormats";
 import Workers from "./Workers";
 import { PlayerColours } from "../components/TrackMarks";
+import { TargetsEditor } from "../components/Targets";
 
 // Settings: everything decided once, before analysis, so the working pages show only what is done during and after a
 // run. In three parts, as the operator thinks of them: for still images and video alike, for still images only, and
@@ -14,10 +15,11 @@ import { PlayerColours } from "../components/TrackMarks";
 type Defaults = {
   both: { results_folder: string | null; export_formats: string[]; iana_zone: string | null; country: string | null; watch: boolean;
     run_mode: string; teacher: string; auto_min_reviews: number; auto_epochs: number };
-  images: { detector: string; mode: string; vehicle_model: string | null };
-  video: { detector: string; mode: string; sam3_interval_s: number; camera: string; video_workers: number; analyse_new: boolean; track_min_frames: number | null };
+  images: { detector: string; mode: string; vehicle_model: string | null } & Targets;
+  video: Targets & { detector: string; mode: string; sam3_interval_s: number; camera: string; video_workers: number; analyse_new: boolean; track_min_frames: number | null };
 };
 type Part = keyof Defaults;
+type Targets = { sam3_words: Record<string, string[]> | null; sam3_uncounted: string[] | null };
 
 export const MODE_TEXT: Record<string, string> = {
   general_traffic: "Count traffic: every vehicle in each image",
@@ -54,6 +56,17 @@ export default function Settings({ section }: { section?: string }) {
     try { setD(await api("/settings/missions", { method: "PUT", body: { [p]: values } })); setNote({ kind: "ok", text: "Saved. New missions use this." }); }
     catch (e) { setD(before); setNote({ kind: "err", text: (e as ApiError).message }); }
   };
+  // What new missions look for: saved as one change, and an error keeps the editor open with its message.
+  const targets = (p: "images" | "video") => sam?.vehicle_prompts ? (
+    <Card title="What to look for" wide id={`set-targets-${p}`} lead="Vehicles, and anything else a new mission should find: pedestrians, tractors, animals, or a name of your own. Tick several at once.">
+      <TargetsEditor title="Targets" words={d![p].sam3_words} uncounted={d![p].sam3_uncounted} defaults={sam.vehicle_prompts} busy={false}
+        samOnly={d![p].detector === "sam3"} standardOnly={!usesSam(d![p].detector)} standardKnows={sam.standard_knows ?? []}
+        note="Each mission can still change this in its own setup."
+        onSave={async (words, uncounted) => {
+          setD(await api("/settings/missions", { method: "PUT", body: { [p]: { sam3_words: words, sam3_uncounted: uncounted.length ? uncounted : null } } }));
+          setNote({ kind: "ok", text: "Saved. New missions use this." });
+        }} />
+    </Card>) : null;
   useEffect(() => { if (note?.kind !== "ok") return; const t = window.setTimeout(() => setNote(null), 2500); return () => window.clearTimeout(t); }, [note]);
   useEffect(() => {   // #/settings/formats and the like land on their card
     const id = section && LEGACY[section] ? `set-${section}` : null;
@@ -174,6 +187,7 @@ export default function Settings({ section }: { section?: string }) {
           <Card title="Detector" wide lead="Which detectors look at each image.">
             <DetectorChoice value={d.images.detector} onChange={(v) => change("images", { detector: v })} sam={sam ?? undefined} legend={false} />
           </Card>
+          {targets("images")}
         </div>}
 
         {part === "video" && <div className="set-grid">
@@ -197,6 +211,7 @@ export default function Settings({ section }: { section?: string }) {
           <Card title="Detector" wide lead="Which detectors look at each analysed frame.">
             <DetectorChoice value={d.video.detector} onChange={(v) => change("video", { detector: v })} sam={sam ?? undefined} legend={false} video />
           </Card>
+          {targets("video")}
           <div id="set-workers"><Workers embedded /></div>
           <Card title="Map and ground heights" id="set-maps" lead="Our own map and height servers, for putting a camera on the map. Set up once; then picked from a list.">
             <MapServers />

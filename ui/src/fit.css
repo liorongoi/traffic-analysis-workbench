@@ -130,3 +130,10 @@ td.mono.bidi, .mono.bidi { font-family: var(--sans); font-size: inherit; font-va
 /* Segmented choices with a line of explanation wrap that line instead of running out of their panel. */
 .seg button { min-width: 0; flex: 1 1 0; white-space: normal; }
 .seg button small { display: block; }
+
+/* What a mission looks for stands in its own panel now, not under the detector: no rule above it, and in a mission's
+   setup its title is the panel's title. */
+.samwords { margin-top: 0; padding-top: 0; border-top: 0; }
+.card > p + .samwords { margin-top: 10px; }
+#targets .samwords h3 { font-size: 17px; }
+.newm-targets { padding: 12px 14px; border-radius: 10px; background: rgba(255, 255, 255, .03); border: 1px solid var(--line); }

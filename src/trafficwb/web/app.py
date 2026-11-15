@@ -72,6 +72,7 @@ class MissionBody(BaseModel):
     longitude: float | None = None
     detector: str = "standard"
     sam3_words: dict[str, list[str]] | None = None
+    sam3_uncounted: list[str] | None = None   # classes of the mission's own not counted as vehicles
     vehicle_model: str | None = None       # a saved model's name; None: the model in production use
     sam3_interval_s: float | None = None   # video: seconds between SAM 3.1 frames (None: 1 s)
     camera: str = "fixed"                  # video: fixed | moving (PTZ, vehicle, drone, body-worn)
