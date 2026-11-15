@@ -379,6 +379,12 @@ if (Test-Path (Join-Path $Target "current.txt")) { Copy-Item (Join-Path $Target 
 Set-Content -Path (Join-Path $Target "current.txt") -Value $Venv
 Remove-Item -Force "$Venv.installing" -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $Bundle "autostart.ps1") (Join-Path $Target "autostart.ps1") -Force
+# The launch screen the LanePulse icon shows while the server starts.
+if (Test-Path (Join-Path $Bundle "launch\index.html")) {
+  $launchDir = Join-Path $Target "launch"
+  if (Test-Path $launchDir) { Remove-Item -Recurse -Force $launchDir }
+  Copy-Item -Recurse (Join-Path $Bundle "launch") $launchDir
+}
 if (Test-Path (Join-Path $Bundle "pc_check.py")) { Copy-Item (Join-Path $Bundle "pc_check.py") (Join-Path $Target "pc_check.py") -Force }
 @"
 @echo off

@@ -305,7 +305,7 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
 
       <div className="card">
         <h2 style={{ marginTop: 0 }}>What can learn</h2>
-        <table className="t"><tbody>{s.adapters.map((a: any) => <tr key={a.algorithm}><td>{a.algorithm}</td><td>{a.adapter}</td><td>{a.status.replace("_", " ")}</td></tr>)}</tbody></table>
+        <table className="t wrap"><tbody>{s.adapters.map((a: any) => <tr key={a.algorithm}><td>{a.algorithm}</td><td>{a.adapter}</td><td>{a.status.replace("_", " ")}</td></tr>)}</tbody></table>
       </div>
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
     </div>

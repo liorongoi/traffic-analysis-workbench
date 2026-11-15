@@ -184,6 +184,17 @@ jobs:
           if ($second -eq $first -or -not (Test-Path $first)) { throw "same-version repair replaced or lost the prior build" }
           # Uninstall with the server running (Install-Wizard started it), set to start at sign-in, and a model trained here.
           & "$dir\autostart.ps1" -Mode remove -Target $dir | Out-Host
+          # The LanePulse icon with the server stopped: the launch screen is written, the server started, the screen told it is ready.
+          $env:LANEPULSE_NO_BROWSER = "1"
+          & "$dir\autostart.ps1" -Mode open -Target $dir | Out-Host
+          $env:LANEPULSE_NO_BROWSER = $null
+          $page = Get-Content "$dir\launch-screen\index.html" -Raw -ErrorAction SilentlyContinue
+          if (-not $page -or $page -match "__LP_" -or $page -notmatch [regex]::Escape("${{ steps.py.outputs.version }}")) { throw "the launch screen was not written with the version" }
+          if (-not (Test-Path "$dir\launch-screen\fonts\chakra-petch-600.woff2")) { throw "the launch screen has no fonts" }
+          $st = Get-Content "$dir\launch-screen\status.js" -Raw
+          if ($st -notmatch '"state":"ready"') { throw "the launch screen was not told LanePulse is ready: $st" }
+          Wait-Server "started by the LanePulse icon"
+          & "$dir\autostart.ps1" -Mode remove -Target $dir | Out-Host
           & "$dir\autostart.ps1" -Mode signin -Target $dir | Out-Host   # starts it again through the restart loop
           $model = New-TrainedModel $dir
           Uninstall-Wizard $model

@@ -575,29 +575,125 @@ def quick_start(source_dir: str, include_subdirs: bool, data_root: Path, limit: 
     }
 
 
-def folder_roots() -> list[dict]:
-    """Where browsing starts: the drives on Windows, the home folder and / elsewhere, and mounted volumes."""
+# Where Windows keeps a user's own folders (they can be moved, e.g. into OneDrive, so they are asked for by these ids).
+_KNOWN_FOLDERS = (("Desktop", "B4BFCC3A-DB2C-424C-B029-7FE99A87C641"), ("Documents", "FDD39AD0-238F-46AF-ADB4-6C85480369C7"),
+                  ("Downloads", "374DE290-123F-4565-9164-39C4925E467B"), ("Pictures", "33E28130-4E1E-4676-835A-98395C3BC3BB"),
+                  ("Videos", "18989B1D-99B5-455B-841C-AB7C74E4DDFC"))
+
+
+def _windows_known_folder(guid: str) -> str | None:
+    import ctypes
+    import uuid
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD), ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+    u = uuid.UUID(guid)
+    g = GUID(u.time_low, u.time_mid, u.time_hi_version, (ctypes.c_ubyte * 8)(*u.bytes[8:]))
+    out = ctypes.c_wchar_p()
+    try:
+        shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
+        if shell32.SHGetKnownFolderPath(ctypes.byref(g), 0, None, ctypes.byref(out)) != 0:
+            return None
+        path = out.value
+        ctypes.windll.ole32.CoTaskMemFree(out)  # type: ignore[attr-defined]
+        return path
+    except (AttributeError, OSError):
+        return None
+
+
+def _windows_roots() -> list[dict]:
+    """Like File Explorer: this user's own folders (Desktop, Documents, Downloads, Pictures, Videos), every drive
+    Windows reports (local, USB, DVD and mapped network drives, with their labels), and the network drives mapped for
+    this user by their \\\\server\\share path, which works even where the drive letter does not (e.g. when
+    LanePulse was started by the automatic start)."""
+    import ctypes
+    import string
     out: list[dict] = []
+    seen: set[str] = set()
+    letters: set[str] = set()
+
+    def add(name: str, path: str, group: str) -> None:
+        if path.lower() not in seen:
+            seen.add(path.lower())
+            out.append({"name": name, "path": path, "group": group})
+
+    home = Path.home()
+    add("Home", str(home), "places")
+    for name, guid in _KNOWN_FOLDERS:
+        found = _windows_known_folder(guid)
+        d = Path(found) if found else home / name
+        try:
+            if d.is_dir():
+                add(name, str(d), "places")
+        except OSError:
+            pass
+
+    kinds = {2: "USB", 3: "", 4: "network", 5: "DVD"}
+    try:
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        mask = k32.GetLogicalDrives()
+        k32.SetErrorMode(1)  # SEM_FAILCRITICALERRORS: no "insert a disk" box for an empty card reader
+    except (AttributeError, OSError):
+        k32, mask = None, 0
+    for i, letter in enumerate(string.ascii_uppercase):
+        root = f"{letter}:\\"
+        if k32 is not None:
+            if not mask & (1 << i):
+                continue
+            kind = kinds.get(k32.GetDriveTypeW(root), "")
+            label = ctypes.create_unicode_buffer(261)
+            try:
+                k32.GetVolumeInformationW(root, label, 261, None, None, None, None, 0)
+            except OSError:
+                pass
+            extra = " · ".join(x for x in (label.value.strip(), kind) if x)
+            add(f"{letter}:" + (f" {extra}" if extra else ""), root, "network" if kind == "network" else "drives")
+            letters.add(letter)
+        else:
+            try:
+                if Path(root).exists():
+                    add(f"{letter}:", root, "drives")
+                    letters.add(letter)
+            except OSError:
+                pass
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Network") as net:
+            for j in range(winreg.QueryInfoKey(net)[0]):
+                letter = winreg.EnumKey(net, j)
+                with winreg.OpenKey(net, letter) as k:
+                    remote = str(winreg.QueryValueEx(k, "RemotePath")[0]).rstrip("\\")
+                if remote.startswith("\\\\") and letter.upper() not in letters:
+                    add(f"{letter.upper()}: {remote}", remote + "\\", "network")
+    except OSError:
+        pass
+    return out
+
+
+def folder_roots() -> list[dict]:
+    """Where browsing starts, grouped like a file browser: places (home, Desktop, Pictures...), drives, network."""
     if os.name == "nt":
-        import string
-        for letter in string.ascii_uppercase:
-            p = Path(f"{letter}:\\")
-            try:
-                if p.exists():
-                    out.append({"name": f"{letter}:", "path": str(p)})
-            except OSError:
-                pass
-    else:
-        home = Path.home()
-        out.append({"name": "Home", "path": str(home)})
-        for base in (Path("/Volumes"), Path("/mnt"), Path("/media")):
-            try:
-                for d in sorted(base.iterdir()) if base.is_dir() else []:
-                    if d.is_dir() and not d.name.startswith("."):
-                        out.append({"name": d.name, "path": str(d)})
-            except OSError:
-                pass
-        out.append({"name": "/", "path": "/"})
+        return _windows_roots()
+    out: list[dict] = []
+    home = Path.home()
+    out.append({"name": "Home", "path": str(home), "group": "places"})
+    for sub in ("Desktop", "Documents", "Downloads", "Pictures", "Movies", "Videos"):
+        d = home / sub
+        try:
+            if d.is_dir():
+                out.append({"name": sub, "path": str(d), "group": "places"})
+        except OSError:
+            pass
+    for base in (Path("/Volumes"), Path("/mnt"), Path("/media")):
+        try:
+            for d in sorted(base.iterdir()) if base.is_dir() else []:
+                if d.is_dir() and not d.name.startswith("."):
+                    out.append({"name": d.name, "path": str(d), "group": "drives"})
+        except OSError:
+            pass
+    out.append({"name": "/", "path": "/", "group": "drives"})
     return out
 
 
