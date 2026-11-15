@@ -25,7 +25,7 @@ export default function JumpBar() {
   }, []);
   useEffect(() => {
     if (!open) return;
-    api("/missions").then((r) => setList(r.missions)).catch(() => setList([]));
+    api("/missions?brief=true").then((r) => setList(r.missions)).catch(() => setList([]));
     const close = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);

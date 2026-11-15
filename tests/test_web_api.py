@@ -143,6 +143,13 @@ def test_wizard_preview_create_process_review_export(env):
     assert pos["next_unreviewed"] == ids[1] and pos["unreviewed"] == 6 and [a["id"] for a in pos["around"]] == ids
     listed = c.get("/api/missions").json()["missions"][0]["review"]
     assert listed == {"unreviewed": 6, "first_unreviewed": ids[0], "approved": 0, "processed": 6, "latest": ids[-1]}
+    # The polled list leaves the review figures out; one mission can be asked for alone; a warning is said in words.
+    brief = c.get("/api/missions?brief=true").json()["missions"][0]
+    assert brief["review"] is None and brief["id"] == mid
+    one = c.get(f"/api/missions?id={mid}").json()["missions"]
+    assert [x["id"] for x in one] == [mid] and one[0]["review"] == listed
+    assert c.get("/api/missions?id=nope").json()["missions"] == []
+    assert brief["attention"]["severity"] == "warning" and brief["attention"]["message"].startswith("1 file(s)")
     assert item["local"]["time"].endswith("+03:00") and len(item["objects"]) == 2
     uid = item["objects"][0]["uid"]
     assert c.patch(f"/api/missions/{mid}/items/{vid}/objects/{uid}", json={"action": "remove"}, headers=H1).status_code == 200

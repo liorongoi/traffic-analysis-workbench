@@ -35,7 +35,7 @@ export default function MissionPage({ missionId, tab, extra }: { missionId: stri
   const loadMission = useCallback(() => api(`/missions/${missionId}`).then(setM).catch((e: ApiError) => setErr(e.message)), [missionId]);
   // The mission list carries what waits for review, for the one button that is always the next step. It covers every
   // mission, so it is read when the page opens, after a change and when processing starts or ends, not on every tick.
-  const loadReview = useCallback(() => api("/missions").then((r) => setReview((r.missions as any[]).find((x) => x.id === missionId)?.review ?? null))
+  const loadReview = useCallback(() => api(`/missions?id=${encodeURIComponent(missionId)}`).then((r) => setReview((r.missions as any[]).find((x) => x.id === missionId)?.review ?? null))
     .catch(() => undefined), [missionId]);
   const load = useCallback(() => { loadReview(); return loadMission(); }, [loadReview, loadMission]);
   useEffect(() => { load(); }, [load]);

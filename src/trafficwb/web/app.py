@@ -1069,16 +1069,24 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
 
     # ---------- missions ----------
     @app.get("/api/missions")
-    def missions(_u: User = Depends(user)):
+    def missions(brief: bool = False, id: str | None = None, _u: User = Depends(user)):
+        """Every mission with its status. brief: without the review figures (they read every result of a mission), for
+        the status in the top bar and the jump list, which poll. id: that one mission only."""
         root = DataRoot(data_root)
         out = []
         for r in root.missions():
+            if id is not None and r["id"] != id:
+                continue
             m = root.open_mission(r["id"])
             cfg = m.config()
+            # The newest unread warning or error, said in words where the missions list asks for attention.
+            note = m.con.execute("SELECT severity, message FROM notification WHERE acknowledged=0 AND severity IN "
+                                 "('warning','error') ORDER BY id DESC LIMIT 1").fetchone()
             out.append({"id": r["id"], "name": r["name"], "input_type": r["input_type"], "mode": r["mode"],
                         "processing": cfg.processing, "monitoring": cfg.monitoring_enabled, "created_at": r["created_at"],
                         "status": m.status(), "job": jobs.current(r["id"]).snapshot() if jobs.current(r["id"]) else None,
-                        "review": _review_summary(m) if r["input_type"] == "images" else None})
+                        "attention": dict(note) if note else None,
+                        "review": _review_summary(m) if r["input_type"] == "images" and not brief else None})
         return {"missions": out}
 
     def _review_summary(m: Mission) -> dict:

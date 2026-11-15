@@ -64,7 +64,7 @@ function Status() {
   const [text, setText] = useState<{ label: string; busy: boolean } | null>(null);
   useEffect(() => {
     let live = true;
-    const load = () => Promise.all([api("/system"), api("/missions")]).then(([sys, ms]) => {
+    const load = () => Promise.all([api("/system"), api("/missions?brief=true")]).then(([sys, ms]) => {
       if (!live) return;
       const busy = (ms.missions as any[]).filter((m) => m.job?.state === "running").length;
       const where = sys.runtime ? ACCEL[sys.runtime.accelerator] ?? sys.runtime.accelerator : "Detector idle";
