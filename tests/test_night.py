@@ -9,7 +9,7 @@ import pytest
 from trafficwb.detect import Detection
 from trafficwb.export import IMAGE_COLUMNS, OBJECT_COLUMNS, build_tables
 from trafficwb.ingest import cycle
-from trafficwb.night import (GROUP_ALGO, BackgroundParams, glow_contrast, is_soft_glow, BandParams, Light, WidthMap, band_at, band_rows, build_background,
+from trafficwb.night import (GROUP_ALGO, BackgroundParams, find_fixed_sites, glow_contrast, is_soft_glow, BandParams, Light, WidthMap, band_at, band_rows, build_background,
                              covered_by, group_lights, is_glare, light_components, measure_condition, off_vehicle_map,
                              on_vehicle_map, vehicle_map, map_distance)
 from trafficwb.night_service import NightService
@@ -274,7 +274,7 @@ def test_mark_persistent_light_rebuilds_background(mission):
     v = next(r for r in rs.results() if r.candidate_count).source_version_id
     uid = rs.candidates(v)[0].uid
     rs.mark_persistent_light(v, uid, "lior")
-    assert m.con.execute("SELECT COUNT(*) FROM light_label").fetchone()[0] == 1
+    assert m.con.execute("SELECT COUNT(*) FROM light_label").fetchone()[0] == 2     # at night and at dusk alike
     assert m.con.execute("SELECT COUNT(*) FROM background_model").fetchone()[0] == 2
     assert rs.candidates(v)[0].status == "persistent_light"
     assert next(r for r in rs.results() if r.source_version_id == v).candidate_count == 0
@@ -638,3 +638,129 @@ def test_failed_analysis_leaves_no_open_transaction(mission, monkeypatch):
     assert not m.con.in_transaction
     monkeypatch.undo()
     assert NightService(m).refresh()["images_analysed"] > 0
+
+
+# ---------- fixed lights and fixed targets ----------
+
+def _li(x, y, area=30, i=None):
+    r = (area ** 0.5) / 2
+    return Light((x - r, y - r, x + r, y + r), float(x), float(y), area, 255.0, 240.0, 1.0, None, i)
+
+
+def test_fixed_lights_found_whether_lit_or_not():
+    """A lamp lit in only a few images, a reflector lit now and then: fixed. Moving headlights, a parked car inside
+    its box and a chance coincidence of passing lights: not fixed."""
+    rng = np.random.default_rng(0)
+    images, boxes = [], []
+    for k in range(20):
+        lights = []
+        if 3 <= k <= 8:                                    # switched on for an hour, then off: lit in 30% of images
+            lights.append(_li(100 + rng.normal(0, 0.2), 50 + rng.normal(0, 0.2), 40))
+        if k in (2, 9, 15, 19):                            # a reflector lit by passing headlights
+            lights.append(_li(500.0, 80.0, 12))
+        lights += [_li(200 + 23 * k, 250 - 4 * k), _li(220 + 23 * k, 250 - 4 * k)]   # a car driving through
+        if k in (1, 6, 11, 16):                            # passing lights near one spot, not quite still
+            lights.append(_li(300 + rng.normal(0, 1.2), 200 + rng.normal(0, 1.2), 20))
+        lights.append(_li(400.0, 300.0, 25))               # a parked car's lamp, inside its detected box
+        images.append(lights)
+        boxes.append([(380, 280, 430, 320)])
+    sites = find_fixed_sites(images, boxes)
+    found = sorted((round(s["cx"]), round(s["cy"])) for s in sites)
+    assert found == [(100, 50), (500, 80)]
+    lamp = next(s for s in sites if round(s["cx"]) == 100)
+    assert lamp["images"] == 6
+    # The operator's "not persistent" drops a site.
+    assert len(find_fixed_sites(images, boxes, [("not_persistent", [[90, 40], [110, 40], [110, 60], [90, 60]])])) == 1
+    # Background reading: a light on the lamp is fixed, a light elsewhere is not.
+    bg = build_background([np.zeros((H, W), np.uint8)] * 10, p=BackgroundParams())
+    bg.fixed_sites = sites
+    assert bg.reading(_li(100.3, 49.8, 35), BackgroundParams())[0] == "fixed"
+    assert bg.reading(_li(150, 50, 35), BackgroundParams())[0] != "fixed"
+
+
+def test_lamp_switched_on_part_of_the_night_is_not_a_candidate(mission):
+    """Street lamps on only part of the night are never persistent, so before they were night candidates. Learned as
+    fixed lights they are left out, and the moving car's lights stay candidates."""
+    m, src = mission
+    extra = [(450, 120), (500, 120)]                       # two lamps lit only in night images 2-5 of 12
+    for k in range(6):
+        write(src, f"CAM1_{ts(k)}.jpg", day_frame(k))
+    for k in range(12):
+        g = night_frame(k, pairs=[(200 + 20 * k, 300)] if k % 2 == 0 else [])
+        if 2 <= k <= 5:
+            for (x, y) in extra:
+                cv2.circle(g, (x, y), 4, (255, 255, 255), -1)
+        write(src, f"CAM1_{ts(100 + k)}.jpg", g)
+    cycle(m)
+    ViewService(m).assign_or_propose()
+    Processor(m, RedBoxDetector()).process_all()
+    rs = ReviewService(m)
+    night = [r for r in rs.results() if r.condition == "night"]
+    lit = night[2:6]
+    for r in lit:
+        boxes = [c.box for c in rs.candidates(r.source_version_id) if c.status == "unresolved"]
+        assert not any(b[1] < 130 and b[3] > 110 and b[0] < 510 and b[2] > 440 for b in boxes)   # lamps left out
+    with_car = [r for r in night if r.candidate_count]
+    assert len(with_car) == 6                                # every image with the car still has it as a candidate
+    flags = [json.loads(g["flags"]) for g in m.con.execute("SELECT flags FROM light_group WHERE explained_by_background=1")]
+    assert any("fixed_light_here" in f for f in flags)
+    sites = json.loads(m.con.execute("SELECT fixed_sites FROM background_model ORDER BY id DESC").fetchone()[0])
+    assert {(round(s["cx"] / 10), round(s["cy"] / 10)) for s in sites} >= {(45, 12), (50, 12)}
+
+
+def test_fixed_target_leaves_out_every_box_there_at_once(mission):
+    """A street light the detector takes for a car, in every image: marking it once removes it from all results,
+    without running detection again; moving cars stay; restoring one box keeps it; removing the mark undoes it."""
+    m, src = mission
+    for k in range(5):
+        img = day_frame(k)
+        cv2.rectangle(img, (580, 20), (600, 36), (0, 0, 255), -1)     # the 'lamp', always at the same place
+        write(src, f"CAM1_{ts(k)}.jpg", img)
+    cycle(m)
+    ViewService(m).assign_or_propose()
+    Processor(m, RedBoxDetector()).process_all()
+    rs = ReviewService(m)
+    before = {r.source_version_id: r.vehicle_count for r in rs.results()}
+    vids = sorted(before)
+    lamp = lambda v: next(o for o in rs.objects(v) if o.box[0] >= 575 and o.box[1] < 40)
+    rs.approve(vids[3], "lior")
+    tid = rs.mark_fixed(vids[0], lamp(vids[0]).uid, "lior")
+    after = {r.source_version_id: r.vehicle_count for r in rs.results()}
+    assert all(after[v] == before[v] - 1 for v in vids)          # exactly the lamp, in every image
+    assert all(lamp(v).status == "removed" and lamp(v).correction == "fixed_target" and lamp(v).fixed_target_id == tid
+               for v in vids)
+    assert rs.review_status(vids[3]) == "unreviewed"             # the result changed, so the approval is reopened
+    assert m.con.execute("SELECT COUNT(*) FROM detection").fetchone()[0] == sum(before.values())   # machine output kept
+    rs.restore(vids[2], lamp(vids[2]).uid, "lior")               # the operator overrules it in one image
+    assert lamp(vids[2]).status == "present"
+    with pytest.raises(ValueError):
+        rs.mark_fixed(vids[1], rs.add(vids[1], (10, 10, 40, 40), "car", "lior"), "lior")   # hand-drawn: just remove it
+    rs.unmark_fixed(tid, "lior")
+    assert all(lamp(v).status == "present" for v in vids)
+    assert [t["id"] for t in rs.fixed_targets(ViewService(m).views()[0]["id"], include_removed=True)] == [tid]
+
+
+def test_fixed_target_api(mission, tmp_path):
+    from fastapi.testclient import TestClient
+    from trafficwb.web.app import create_app
+    m, src = mission
+    for k in range(3):
+        img = day_frame(k)
+        cv2.rectangle(img, (580, 20), (600, 36), (0, 0, 255), -1)
+        write(src, f"CAM1_{ts(k)}.jpg", img)
+    cycle(m)
+    ViewService(m).assign_or_propose()
+    Processor(m, RedBoxDetector()).process_all()
+    rs = ReviewService(m)
+    v = rs.results()[0].source_version_id
+    uid = next(o.uid for o in rs.objects(v) if o.box[0] >= 575)
+    view = ViewService(m).views()[0]["id"]
+    c = TestClient(create_app(tmp_path / "data", start_monitoring=False, stability_seconds=0), headers={"X-TWB": "1"})
+    r = c.patch(f"/api/missions/{m.id}/items/{v}/objects/{uid}", json={"action": "fixed"})
+    assert r.status_code == 200, r.text
+    item = c.post(f"/api/missions/{m.id}/items/{v}").json()
+    assert len(item["fixed_targets"]) == 1 and next(o for o in item["objects"] if o["uid"] == uid)["status"] == "removed"
+    lst = c.get(f"/api/missions/{m.id}/views/{view}/fixed-targets").json()
+    assert lst[0]["boxes_left_out"] == 3
+    assert c.delete(f"/api/missions/{m.id}/fixed-targets/{lst[0]['id']}").status_code == 200
+    assert c.get(f"/api/missions/{m.id}/views/{view}/fixed-targets").json() == []

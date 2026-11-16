@@ -74,7 +74,10 @@ export type Obj = {
   correction: string;
   counted: boolean;
   found_by?: string | null;  // the model that found a machine box
+  fixed_target_id?: number | null;  // left out: it sits on a place marked as a fixed target
 };
+
+export type FixedTarget = { id: number; box: Box; author: string; created_at: string; source_version_id: number | null };
 
 export type Candidate = {
   uid: string;
@@ -137,6 +140,7 @@ export type Item = {
   empty_background: boolean;
   objects: Obj[];
   candidates: Candidate[];
+  fixed_targets?: FixedTarget[];
   lights: Light[];
   bands: NightBands | null;
   regions: Region[];

@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 
 from .night import (COND_ALGO, GROUP_ALGO, is_soft_glow, Background, BackgroundParams, BandParams, Condition, GroupingParams, Light, LightParams,
-                    WidthMap, band_rows, build_background, covered_by, dumps, group_lights, light_components,
+                    WidthMap, band_rows, build_background, covered_by, dumps, find_fixed_sites, group_lights, light_components,
                     map_distance, off_vehicle_map, on_vehicle_map, png, unpng, vehicle_map)
 from .night_learn import NightLearner, measure, vector
 from .regions import RegionSet
@@ -189,6 +189,18 @@ class NightService:
             "(SELECT 1 FROM run_item i WHERE i.source_version_id=v.id AND i.processing_state='done') "
             "ORDER BY v.capture_utc, v.id", (view_id, condition))]
 
+    def _times(self, versions: list[int]) -> list[float | None]:
+        """Capture times in seconds, for telling which images were taken one after the other."""
+        from datetime import datetime
+        out = []
+        for v in versions:
+            r = self.con.execute("SELECT capture_utc FROM source_version WHERE id=?", (v,)).fetchone()
+            try:
+                out.append(datetime.fromisoformat(r[0].replace("Z", "+00:00")).timestamp() if r and r[0] else None)
+            except ValueError:
+                out.append(None)
+        return out
+
     def _labels(self, view_id: int, condition: str) -> list[sqlite3.Row]:
         return self.con.execute("SELECT * FROM light_label WHERE view_id=? AND condition=? AND deleted=0 ORDER BY id",
                                 (view_id, condition)).fetchall()
@@ -216,20 +228,24 @@ class NightService:
             params = json.loads(cur["params"])
             prev = json.loads(cur["input_ids"])
             grew = len(versions) - len(prev)
-            if params.get("label_ids") == label_key and (
+            # A model built before fixed lights were learned (fixed_sites NULL) is rebuilt once.
+            if params.get("label_ids") == label_key and (cur["state"] != "ready" or cur["fixed_sites"] is not None) and (
                     grew <= 0 or (cur["state"] == "ready" and grew < REBUILD_GROWTH * len(prev))):
                 return cur
         size = self.con.execute("SELECT ref_width, ref_height FROM camera_view WHERE id=?", (view_id,)).fetchone()
         w, h = size["ref_width"], size["ref_height"]
-        masks, vboxes = [], []
+        masks, vboxes, lights = [], [], []
         for v in versions:
             m = np.zeros((h, w), np.uint8)
-            for li in self.lights(v):
+            lights.append(self.lights(v))
+            for li in lights[-1]:
                 x1, y1, x2, y2 = (int(c) for c in li.box)
                 cv2.ellipse(m, (((x1 + x2) / 2, (y1 + y2) / 2), (max(1, x2 - x1), max(1, y2 - y1)), 0), 1, -1)
             masks.append(m)
             vboxes.append(self._vehicle_boxes(v))
-        bg = build_background(masks, vboxes, [(r["kind"], json.loads(r["polygon"])) for r in labels], self.bp)
+        lab = [(r["kind"], json.loads(r["polygon"])) for r in labels]
+        bg = build_background(masks, vboxes, lab, self.bp)
+        sites = find_fixed_sites(lights, vboxes, lab, self.bp, self._times(versions)) if bg is not None else []
         params = dict(self.bp.record(), label_ids=label_key, light_mask="filled ellipses from stored light components")
         if bg is None:
             rid = self.con.execute(
@@ -239,10 +255,10 @@ class NightService:
         else:
             rid = self.con.execute(
                 "INSERT INTO background_model(view_id,condition,image_count,state,persistent_mask,frequency,new_lights,"
-                "params,input_ids,built_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "params,input_ids,built_at,fixed_sites) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (view_id, condition, bg.image_count, "ready", png(bg.persistent * 255),
                  png((bg.frequency * 255).astype(np.uint8)), dumps(bg.new_lights), dumps(params), dumps(versions),
-                 utcnow())).lastrowid
+                 utcnow(), dumps(sites))).lastrowid
             prev_new = json.loads(cur["new_lights"]) if cur is not None and cur["new_lights"] else []
             if bg.new_lights and len(bg.new_lights) != len(prev_new):
                 self.m.notify("info", "new_persistent_light",
@@ -256,7 +272,8 @@ class NightService:
         if row is None or row["state"] != "ready":
             return None
         return Background((unpng(row["persistent_mask"]) > 0).astype(np.uint8), unpng(row["frequency"]) / 255.0,
-                          row["image_count"], [tuple(b) for b in json.loads(row["new_lights"])])
+                          row["image_count"], [tuple(b) for b in json.loads(row["new_lights"])],
+                          json.loads(row["fixed_sites"] or "[]"))
 
     # ---------- groups ----------
     def analyse(self, version_id: int, bg_row) -> int:
@@ -279,7 +296,19 @@ class NightService:
         self._decision_rev = self.decision_rev(view_id)
         places = self.decision_places(view_id)
         readings = [bg.reading(li, self.bp) if bg else ("no_background", 0.0) for li in lights]
-        explained = [r[0] in ("persistent", "attached") for r in readings]
+        targets = [(t["x1"], t["y1"], t["x2"], t["y2"]) for t in ReviewService(self.m).fixed_targets(view_id)] \
+            if view_id is not None and not borrowed else []
+        for k, li in enumerate(lights):
+            # Lights on a place the operator marked as a fixed target are that target, lit or not.
+            if any(a1 <= li.cx <= a2 and b1 <= li.cy <= b2 for (a1, b1, a2, b2) in targets):
+                readings[k] = ("fixed_target", 1.0)
+        for k, (li, r) in enumerate(zip(lights, readings)):
+            # A fixed light where operators confirmed vehicles before stays a possible vehicle: they know best.
+            if r[0] == "fixed":
+                rej, conf = self.decided_here(places, version_id, li.box)
+                if conf >= self.bp.confirmed_min and conf >= rej:
+                    readings[k] = ("recurring", r[1])
+        explained = [r[0] in ("persistent", "attached", "fixed", "fixed_target") for r in readings]
         live = [li for li, e in zip(lights, explained) if not e]
         live_reading = [r for r, e in zip(readings, explained) if not e]
         regions = None
@@ -292,10 +321,12 @@ class NightService:
         now = utcnow()
         bg_id = bg_row["id"] if bg_row is not None else None
         self._region_rev = self._region_revision(view_id)
+        self._fixed_rev = None if borrowed else self._fixed_revision(view_id)
         rows = 0
         for li, e, r in zip(lights, explained, readings):
             if e:
-                fl = ["attached_to_background_light"] if r[0] == "attached" else []
+                fl = {"attached": ["attached_to_background_light"], "fixed": ["fixed_light_here"],
+                      "fixed_target": ["marked_fixed_target"]}.get(r[0], [])
                 self._insert(version_id, bg_id, "single", [li.id], li.box, 0.0, 0.0, 1, None, None, 0, 0, 0, [], fl, now,
                              None, r[1])
                 rows += 1
@@ -376,12 +407,19 @@ class NightService:
         self.con.execute(
             "INSERT INTO light_group(source_version_id,background_model_id,region_revision_id,kind,member_ids,x1,y1,x2,y2,score,reflection,"
             "explained_by_background,in_region,covered_by_detection,is_candidate,count_min,count_max,alternatives,flags,"
-            "created_at,band,recurrence,setting_id,decision_rev,algo,features,model_id) VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "created_at,band,recurrence,setting_id,decision_rev,algo,features,model_id,fixed_rev) VALUES "
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (version_id, bg_id, self._region_rev, kind, dumps(sorted(ids)), *(float(v) for v in box), float(score), float(refl), explained,
              inside, cov, cand, cmin, cmax, dumps(alts), dumps(flags), now, band,
              None if recurrence is None else round(float(recurrence), 3), self._setting_id, self._decision_rev, GROUP_ALGO,
-             dumps(features) if features is not None else None, model_id))
+             dumps(features) if features is not None else None, model_id, self._fixed_rev))
+
+    def _fixed_revision(self, view_id: int | None) -> str | None:
+        """Changes when a fixed target is marked or removed in the view, so its images are grouped again."""
+        if view_id is None:
+            return None
+        r = self.con.execute("SELECT MAX(id), COUNT(removed_at) FROM fixed_target WHERE view_id=?", (view_id,)).fetchone()
+        return None if r[0] is None else f"{r[0]}:{r[1]}"
 
     def _region_revision(self, view_id: int | None) -> int | None:
         if view_id is None:
@@ -394,12 +432,12 @@ class NightService:
         if last is None:
             return []
         latest = self.con.execute(
-            "SELECT background_model_id, region_revision_id, setting_id, decision_rev, algo FROM light_group "
+            "SELECT background_model_id, region_revision_id, setting_id, decision_rev, algo, fixed_rev FROM light_group "
             "WHERE source_version_id=? ORDER BY id DESC LIMIT 1", (version_id,)).fetchone()
         return self.con.execute(
             "SELECT * FROM light_group WHERE source_version_id=? AND background_model_id IS ? AND region_revision_id IS ? "
-            "AND setting_id IS ? AND decision_rev IS ? AND algo IS ? AND created_at=? ORDER BY id",
-            (version_id, latest[0], latest[1], latest[2], latest[3], latest[4], last)).fetchall()
+            "AND setting_id IS ? AND decision_rev IS ? AND algo IS ? AND fixed_rev IS ? AND created_at=? ORDER BY id",
+            (version_id, latest[0], latest[1], latest[2], latest[3], latest[4], latest[5], last)).fetchall()
 
     def refresh(self, with_decisions: bool = False) -> dict:
         """Bring backgrounds and groups up to date for all processed dusk and night images.
@@ -422,17 +460,19 @@ class NightService:
             if before is None or bg["id"] != before["id"]:
                 stats["backgrounds_built"] += 1
             region_rev = self._region_revision(view_id)
+            fixed_rev = self._fixed_revision(view_id)
             setting = self.band_setting(view_id)[0]
             decided = self.decision_rev(view_id) if with_decisions else None
             for v in self._versions(view_id, cond):
                 if with_decisions:
                     done = self.con.execute("SELECT 1 FROM light_group WHERE source_version_id=? AND background_model_id=? "
-                                            "AND region_revision_id IS ? AND setting_id IS ? AND decision_rev IS ? AND algo IS ? LIMIT 1",
-                                            (v, bg["id"], region_rev, setting, decided, GROUP_ALGO)).fetchone()
+                                            "AND region_revision_id IS ? AND setting_id IS ? AND decision_rev IS ? AND algo IS ? "
+                                            "AND fixed_rev IS ? LIMIT 1",
+                                            (v, bg["id"], region_rev, setting, decided, GROUP_ALGO, fixed_rev)).fetchone()
                 else:
                     done = self.con.execute("SELECT 1 FROM light_group WHERE source_version_id=? AND background_model_id=? "
-                                            "AND region_revision_id IS ? AND setting_id IS ? AND algo IS ? LIMIT 1",
-                                            (v, bg["id"], region_rev, setting, GROUP_ALGO)).fetchone()
+                                            "AND region_revision_id IS ? AND setting_id IS ? AND algo IS ? AND fixed_rev IS ? LIMIT 1",
+                                            (v, bg["id"], region_rev, setting, GROUP_ALGO, fixed_rev)).fetchone()
                 if done or not self.lights(v):
                     continue
                 self._analyse_tx(v, bg)

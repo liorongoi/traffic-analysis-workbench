@@ -812,7 +812,7 @@ function ApplyNightDecisions({ missionId }: { missionId: string }) {
   return (
     <div className="card">
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <span className="muted">Night candidates learn from your decisions: a place where you said “Not a vehicle” several times is scored down in the view's other images, and a place where you confirmed vehicles is kept. This is applied at every processing run, or now:</span>
+        <span className="muted">Night candidates learn from your decisions: a place where you said “Not a vehicle” several times is scored down in the view's other images, and a place where you confirmed vehicles is kept. Lights that come back to exactly the same spot (street lamps, lit signs, reflectors), even when they are off part of the night, are learned as fixed lights and left out. This is applied at every processing run, or now:</span>
         <button onClick={run} disabled={busy}>{busy ? "Re-checking…" : "Apply my night decisions now"}</button>
       </div>
       {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`}>{msg.text}</div>}

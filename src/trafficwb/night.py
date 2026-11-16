@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 
 COND_ALGO = "cond-v1"
-GROUP_ALGO = "groups-v3"   # v2: soft glow scored down; v3: measurements stored, learned scoring per view
+GROUP_ALGO = "groups-v4"   # v2: soft glow scored down; v3: measurements stored, learned scoring per view; v4: fixed lights
 
 # Proposed thresholds, chosen from the Fintraffic sample; operator-adjustable later.
 MONO_SATURATION = 5.0      # mean HSV saturation below this: infrared / monochrome
@@ -168,6 +168,18 @@ class BackgroundParams:
     soft_peak_below: float = 250.0
     soft_contrast_below: float = 35.0
     soft_factor: float = 0.4
+    # fixed lights: a light at exactly the same spot (centroid within fixed_px, similar size) in at least
+    # fixed_min_images images, with its position spread no more than fixed_max_sd px. Counted only over the
+    # images where it is lit, so a street lamp that is switched off part of the time is still found. Headlights do
+    # not come back to the same pixel image after image; a stopped vehicle's lights are left out by its box.
+    fixed_px: float = 2.0
+    fixed_min_images: int = 4
+    fixed_max_sd: float = 1.0
+    fixed_area_ratio: float = 2.0
+    # A site seen only a few times, scattered over the night and not quite still, could be vehicles passing the same
+    # spot by chance: it is fixed only when also seen in two images in a row, or seen often, or very still.
+    fixed_often: int = 6
+    fixed_still_sd: float = 0.5
 
     def record(self) -> dict:
         return dict(self.__dict__)
@@ -179,6 +191,11 @@ class Background:
     frequency: np.ndarray            # float 0..1
     image_count: int
     new_lights: list[tuple[int, int, int, int]] = field(default_factory=list)
+    fixed_sites: list[dict] = field(default_factory=list)
+
+    def fixed_site(self, light: Light, p: "BackgroundParams | None" = None) -> dict | None:
+        """The learned fixed light this light sits on, if any."""
+        return match_site(self.fixed_sites, light, p or BackgroundParams())
 
     def explains(self, light: Light, share: float = 0.5) -> bool:
         x1, y1, x2, y2 = (int(round(v)) for v in light.box)
@@ -204,10 +221,14 @@ class Background:
         return float(win.max()) if win.size else 0.0
 
     def reading(self, light: Light, p: "BackgroundParams") -> tuple[str, float]:
-        """How the background explains a light: persistent, attached (to a persistent light), recurring,
-        occasional or rare. Returns the state and the light's recurrence at its place."""
+        """How the background explains a light: persistent, fixed (a light learned to come back to exactly this
+        spot, on or off), attached (to a persistent light), recurring, occasional or rare. Returns the state and the
+        light's recurrence at its place."""
         if self.explains(light, p.explained_share):
             return "persistent", 1.0
+        site = self.fixed_site(light, p)
+        if site is not None:
+            return "fixed", round(float(site["images"]) / max(1, self.image_count), 3)
         x1, y1, x2, y2 = (int(round(v)) for v in light.box)
         h, w = self.persistent.shape
         d = self._distance()[max(0, y1):min(h, y2 + 1), max(0, x1):min(w, x2 + 1)]
@@ -270,6 +291,99 @@ def build_background(masks_in_time_order: list[np.ndarray], vehicle_boxes: list[
     new_boxes = [(int(st[i][0]), int(st[i][1]), int(st[i][0] + st[i][2]), int(st[i][1] + st[i][3]))
                  for i in range(1, nn) if st[i][4] >= 6]
     return Background(persistent, freq, n, new_boxes)
+
+
+def _inside_any(cx: float, cy: float, boxes) -> bool:
+    return any(x1 <= cx <= x2 and y1 <= cy <= y2 for (x1, y1, x2, y2) in boxes or [])
+
+
+def find_fixed_sites(lights_in_time_order: list[list[Light]], vehicle_boxes: list[list[tuple]] | None = None,
+                     labels: list[tuple[str, list]] | None = None, p: BackgroundParams | None = None,
+                     times: list[float | None] | None = None) -> list[dict]:
+    """Fixed lights of one view: places where a light comes back to exactly the same spot, image after image.
+
+    The persistent mask asks how often a place is lit across all images, so a street lamp that is on for only part
+    of the night (or a reflector lit only when a vehicle passes) is never persistent. Here only the images where a
+    light is there count: a light is fixed when it was seen at least fixed_min_images times with its centre within
+    fixed_px of the same point, its size about the same, and its position spread at most fixed_max_sd px. Vehicle
+    lights move from image to image, so they never pile up on one pixel. Lights inside a vehicle box of their image
+    (detected, drawn or confirmed) are left out, so a parked vehicle's lights never become fixed. Operator labels
+    win: 'not persistent' drops a site. `times` (seconds, in the same order) tell which images are in a row: two
+    captures closer than 1.5 times the usual interval; without them, neighbours in the list are."""
+    p = p or BackgroundParams()
+    gaps = [b - a for a, b in zip(times or [], (times or [])[1:]) if a is not None and b is not None and b > a]
+    usual = float(np.median(gaps)) if gaps else None
+
+    def in_a_row(i: int, j: int) -> bool:
+        if j != i + 1:
+            return False
+        if usual is None or times[i] is None or times[j] is None:
+            return usual is None
+        return times[j] - times[i] <= 1.5 * usual
+
+    cell = max(1.0, p.fixed_px)
+    grid: dict[tuple[int, int], list[int]] = {}
+    sites: list[dict] = []
+    for idx, lights in enumerate(lights_in_time_order):
+        boxes = vehicle_boxes[idx] if vehicle_boxes else []
+        for li in lights:
+            if is_glare(li) and li.area > 4 * LightParams().glare_min_area:
+                continue                     # a vast clipped region is a close vehicle's glare, never a site
+            if _inside_any(li.cx, li.cy, boxes):
+                continue
+            gx, gy = int(li.cx // cell), int(li.cy // cell)
+            best = None
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for si in grid.get((gx + dx, gy + dy), []):
+                        s = sites[si]
+                        if s["last"] == idx:
+                            continue
+                        d = math.hypot(s["cx"] - li.cx, s["cy"] - li.cy)
+                        r = s["area"] / max(1, li.area)
+                        if d <= p.fixed_px and 1 / p.fixed_area_ratio <= r <= p.fixed_area_ratio and (best is None or d < best[0]):
+                            best = (d, si)
+            if best is None:
+                sites.append({"pts": [], "cx": li.cx, "cy": li.cy, "area": li.area, "last": -2, "run": False})
+                si = len(sites) - 1
+                grid.setdefault((gx, gy), []).append(si)
+            else:
+                si = best[1]
+            s = sites[si]
+            s["pts"].append((li.cx, li.cy, li.area))
+            s["run"] = s["run"] or in_a_row(s["last"], idx)
+            s["last"] = idx
+            n = len(s["pts"])
+            s["cx"] += (li.cx - s["cx"]) / n
+            s["cy"] += (li.cy - s["cy"]) / n
+            s["area"] = float(np.median([q[2] for q in s["pts"]]))
+    out = []
+    for s in sites:
+        if len(s["pts"]) < p.fixed_min_images:
+            continue
+        a = np.array(s["pts"], dtype=float)
+        sd = float(max(a[:, 0].std(), a[:, 1].std()))
+        if sd > p.fixed_max_sd:
+            continue
+        if not (s["run"] or len(s["pts"]) >= p.fixed_often or sd <= p.fixed_still_sd):
+            continue
+        out.append({"cx": round(float(a[:, 0].mean()), 1), "cy": round(float(a[:, 1].mean()), 1),
+                    "area": round(float(np.median(a[:, 2])), 1), "images": len(s["pts"]), "sd": round(sd, 2)})
+    for kind, poly in labels or []:
+        if kind == "persistent":
+            continue
+        pts = np.array(poly, np.float32)
+        out = [s for s in out if cv2.pointPolygonTest(pts, (s["cx"], s["cy"]), False) < 0]
+    return out
+
+
+def match_site(sites: list[dict], light: Light, p: BackgroundParams) -> dict | None:
+    for s in sites:
+        r = s["area"] / max(1, light.area)
+        if math.hypot(s["cx"] - light.cx, s["cy"] - light.cy) <= p.fixed_px and \
+                1 / p.fixed_area_ratio <= r <= p.fixed_area_ratio:
+            return s
+    return None
 
 
 # ---------- where vehicles drive ----------
