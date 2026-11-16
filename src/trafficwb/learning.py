@@ -31,6 +31,7 @@ import json
 import os
 import shutil
 import stat
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -85,6 +86,11 @@ TEACH_FLOOR = 0.30            # the teacher reports boxes from this score up ...
 TEACH_SURE = 0.50             # ... a box this sure is a label; a less sure one is ignored (neither label nor background)
 TEACH_OVERLAP = 0.30          # a teacher box this close to a reviewed box (or one the operator removed) gives way to it
 TEACHER_NAMES = {"sam3": "SAM 3.1"}
+_APPROVING = threading.Lock()
+# Recordings from fewer than this many camera views and days (groups) would put everything in one split, often test,
+# so nothing is left to train on: their frames are then grouped by this many seconds of recording instead.
+FEW_GROUPS = 3
+SEGMENT_S = 30.0
 
 
 def learnt(cls: str | None) -> str | None:
@@ -246,6 +252,12 @@ class LearningService:
             raise LearningError("Only a recording can be approved here.")
         if self._latest_item(vid) is None:
             raise LearningError("Only an analysed recording can be approved.")
+        with _APPROVING:       # a second press while the first one works waits for it, then finds it done
+            if self.review_kind(vid) == "full":
+                return {"source_version_id": vid, "review": "full"}
+            return self._approve_recording(vid, author, confirm_rest)
+
+    def _approve_recording(self, vid: int, author: str, confirm_rest: bool) -> dict:
         if confirm_rest:
             from .video_review import VideoService
             svc = VideoService(self.m)
@@ -644,13 +656,37 @@ class LearningService:
 
         members, seen_sha, dupes, skipped = [], {}, 0, {"bulk": 0, "none": 0, "no_labels": 0}
         taught = {"samples": 0, "objects": 0, "kept_out_of_test": 0}
-        for r in self._images():
-            g = self._group(r, block_days)
-            samples = self._samples(r)
-            if teacher is not None:
-                if split_for(g) != "test":
-                    samples = self._teacher_samples(r, teacher, samples)
-                elif self.review_kind(r["id"]) != "full":
+        rows = self._images()
+        base = {r["id"]: self._group(r, block_days) for r in rows}
+        # Few recordings (one camera on one day, say): each one in parts of SEGMENT_S, so some go to training.
+        segmented = self.video and len(set(base.values())) < FEW_GROUPS
+        if not segmented:
+            for r in rows:     # a recording with parts in an earlier test split stays wholly in test
+                if ("vid", str(r["id"])) in frozen:
+                    frozen[base[r["id"]]] = "test"
+
+        def group_of(r, frame_t):
+            g = base[r["id"]]
+            if not segmented or frame_t is None:
+                return g
+            return g[0], f"{g[1]}/rec{r['id']}@{int(frame_t // SEGMENT_S) * int(SEGMENT_S)}s"
+        for r in rows:
+            g = base[r["id"]]
+            plain = self._samples(r)
+            if teacher is None:
+                samples = plain
+            elif segmented:
+                # the teacher's labels in parts going to training and validation; the test parts keep reviews only
+                both = self._teacher_samples(r, teacher, plain)
+                samples = ([x for x in both if split_for(group_of(r, x[1])) != "test"]
+                           + [x for x in plain if split_for(group_of(r, x[1])) == "test"])
+                taught["kept_out_of_test"] += sum(1 for x in both if split_for(group_of(r, x[1])) == "test"
+                                                  and x[0].review == "sam")
+            elif split_for(g) != "test":
+                samples = self._teacher_samples(r, teacher, plain)
+            else:
+                samples = plain
+                if self.review_kind(r["id"]) != "full":
                     taught["kept_out_of_test"] += len(self._teacher_rows(r["id"], teacher))
             for lab, frame_t, sha in samples:
                 if lab.review in ("bulk", "none"):
@@ -666,7 +702,7 @@ class LearningService:
                 if lab.review == "sam":
                     taught["samples"] += 1
                     taught["objects"] += sum(1 for p in lab.positives if p["source"] == "sam")
-                members.append((r, lab, g, frame_t, sha))
+                members.append((r, lab, group_of(r, frame_t), frame_t, sha))
         groups = sorted({m[2] for m in members})
         split_of = {g: split_for(g) for g in groups}
         cond = {r[0]: r[1] for r in self.con.execute("SELECT source_version_id, condition FROM image_condition")}
@@ -677,6 +713,7 @@ class LearningService:
                                       "marked": 0}
                                   for s in SPLITS},
                        **({"teacher": {"name": teacher, **taught}} if teacher else {}),
+                       **({"segmented_s": SEGMENT_S} if segmented else {}),
                        "by_condition": {}, "by_view": {}}
         for g in groups:
             stats["splits"][split_of[g]]["groups"] += 1
