@@ -22,7 +22,7 @@ other benchmarks. Raw results: `results/*-{480,360,240}p-*.json`, `results/track
 
 ## Tracking (MOT17, 7 videos, people; HOTA / IDF1, counted vs really there)
 
-| Detector | Original (5 analysed/s) | 480p | 360p | 2 frames/s | 1 frame/s |
+| Detector | Original (5 analysed/s, rerun today) | 480p | 360p | 2 frames/s | 1 frame/s |
 |---|---|---|---|---|---|
 | YOLOX s | 47.2 / 57.5, 387 of 331 | 45.4 / 55.0, 236 | 45.3 / 55.0, 235 | 43.5 / 51.3, 202 of 325 | 36.5 / 38.0, 77 of 317 |
 | YOLO26 s | 48.6 / 57.8, 323 | 44.7 / 52.6, 206 | 44.6 / 52.9, 209 | 44.1 / 49.9, 166 | 35.5 / 35.7, 74 |
@@ -38,3 +38,6 @@ other benchmarks. Raw results: `results/*-{480,360,240}p-*.json`, `results/track
 
 Shrinking the picture does not make YOLOX, YOLO26 or RF-DETR faster on street-sized frames (they always see 640 px).
 On 1080p drone frames, 480p is 4 to 5 times faster, because the tiles are skipped.
+
+The "original" tracking and RF-DETR figures here are today's reruns (`*-rerun-20261116.json`), made with the current
+tracker so every column compares like with like; the earlier files are kept as they were.
