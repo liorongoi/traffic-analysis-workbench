@@ -632,3 +632,33 @@ def test_hidden_files_taken_in_before_are_left_out_and_not_analysed(tmp_path):
     assert m.con.execute("SELECT processing_state FROM run_item WHERE source_version_id=?", (vid,)).fetchone()[0] == "cancelled"
     from trafficwb.video_catalog import VideoCatalog
     assert [v["rel_path"] for v in VideoCatalog(m).items()] == ["a.mp4"]
+
+
+@pytest.mark.parametrize("analyse_new", [False, True])
+def test_only_the_videos_ticked_when_the_mission_is_made_are_analysed(tmp_path, analyse_new):
+    src, out = tmp_path / "src", tmp_path / "out"
+    (src / "sub").mkdir(parents=True)
+    out.mkdir()
+    for p in (src / "a.mp4", src / "b.mp4", src / "sub" / "c.mp4"):
+        make_video(p, 2.0)
+    app = create_app(tmp_path / "data", detector_factory=lambda: (RedDetector(), {"task": "vehicle_detection"}),
+                     start_monitoring=False, stability_seconds=0)
+    c = TestClient(app)
+    body = {"name": "Picked", "input_type": "video", "mode": "general_traffic", "country": "IL",
+            "iana_zone": "Asia/Jerusalem", "source_dir": str(src), "include_subdirs": True, "processing": "one_time",
+            "output_dir": str(out), "export_formats": ["csv"], "analyse_new": analyse_new,
+            "analyse_only": ["a.mp4", "sub\\c.mp4"]}
+    assert c.post("/api/missions/validate", json=body, headers=H1).json()["errors"] == []
+    mid = c.post("/api/missions", json=body, headers=H1).json()["id"]
+    c.post(f"/api/missions/{mid}/job", headers=H1)
+    wait(c, mid)
+    st = {v["rel_path"]: v for v in c.get(f"/api/missions/{mid}/catalog?refresh=false", headers=H1).json()["videos"]}
+    assert st["a.mp4"]["analysed"] and st["sub/c.mp4"]["analysed"]
+    assert not st["b.mp4"]["analysed"] and st["b.mp4"]["selected"]          # waits, ticked on the video page
+    assert "analyse_only" not in c.get(f"/api/missions/{mid}", headers=H1).text
+
+    # Ticked later on the video page, it is analysed then.
+    c.post(f"/api/missions/{mid}/catalog/analyse", json={"version_ids": [st["b.mp4"]["id"]]}, headers=H1)
+    wait(c, mid)
+    st = {v["rel_path"]: v for v in c.get(f"/api/missions/{mid}/catalog?refresh=false", headers=H1).json()["videos"]}
+    assert all(v["analysed"] for v in st.values())

@@ -287,7 +287,7 @@ function VideoRow({ v, mid, busy, paused, again }: { v: any; mid: string; busy: 
           : v.error ? <span className="badge failed">cannot open</span>
           : now ? <span className="badge live">{paused ? "paused" : "analysing"}</span>
           : v.state === "failed" ? <span className="badge failed" title="Its analysis stopped with an error; see Details">failed</span>
-          : v.state === "cancelled" ? <span className="badge">stopped</span>
+          : v.state === "cancelled" ? <span className="badge" title="Stopped, or left unticked when the mission was made; tick it to analyse it">not analysed</span>
           : <span className="badge">{busy ? "queued" : "not analysed"}</span>}
       </div>
     </div>

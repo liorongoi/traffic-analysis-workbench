@@ -58,6 +58,9 @@ class User:
 
 class MissionBody(BaseModel):
     name: str
+    # Video, at creation only: the videos (paths in the input folder) ticked to analyse. The others wait in the
+    # mission, not analysed, until they are ticked on its video page. None: every video.
+    analyse_only: list[str] | None = Field(None, max_length=100000)
     input_type: str = "images"
     mode: str = "general_traffic"
     country: str
@@ -86,6 +89,7 @@ class MissionBody(BaseModel):
 
     def config(self) -> MissionConfig:
         d = self.model_dump()
+        d.pop("analyse_only", None)
         dirs = [x.strip() for x in (d.pop("source_dirs") or []) if x and x.strip()]
         first = d["source_dir"].strip() or (dirs[0] if dirs else "")
         rest = [x for x in dirs if x != first]
@@ -1244,6 +1248,19 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             v.errors.append(f"There is no saved model named “{body.vehicle_model}”.")
         return {"errors": v.errors, "warnings": v.warnings}
 
+    def _leave_out(m: Mission, ticked: list[str]) -> None:
+        """Queue the videos found now, then set aside those not ticked: they stay in the mission, not analysed, and
+        are analysed when ticked on its video page. Videos that arrive later are new and follow the mission's settings."""
+        from ..video_catalog import VideoCatalog
+        VideoCatalog(m).refresh(stability_seconds=stability_seconds)
+        want = {t.replace("\\", "/").strip("/") for t in ticked}
+        rows = m.con.execute(
+            "SELECT i.id, f.rel_path FROM run_item i JOIN source_version v ON v.id=i.source_version_id "
+            "JOIN source_file f ON f.id=v.source_file_id WHERE i.processing_state='queued'").fetchall()
+        out = [(r[0],) for r in rows if r[1].replace("\\", "/") not in want]
+        if out:
+            m.con.executemany("UPDATE run_item SET processing_state='cancelled' WHERE id=?", out)
+
     @app.post("/api/missions")
     def mission_create(body: MissionBody, u: User = Depends(user)):
         if uses_sam(body.detector) and not sam_info()["installed"]:
@@ -1257,6 +1274,8 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             m = DataRoot(data_root).create_mission(body.config(), u.username)
         except MissionValidationError as exc:
             raise ApiError(400, "invalid", " ".join(exc.validation.errors)) from None
+        if m.input_type == "video" and body.analyse_only is not None:
+            _leave_out(m, body.analyse_only)
         if m.input_type == "video":
             # Videos added later, or still being copied when the mission starts, are picked up by themselves.
             jobs.watch_new_videos(m.id)
