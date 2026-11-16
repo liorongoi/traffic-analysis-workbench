@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 
-from .detect import Detection, _iou, accepts_area, family
+from .detect import Detection, _iou, accepts_area, drop_occupants, family
 
 
 @dataclass
@@ -90,4 +90,4 @@ class CombinedDetector:
     def detect(self, img_bgr: np.ndarray, area=None) -> list[Detection]:
         a = self.standard.detect(img_bgr, area=area) if area is not None and self._std_area else self.standard.detect(img_bgr)
         b = self.sam.detect(img_bgr, area=area) if area is not None and self._sam_area else self.sam.detect(img_bgr)
-        return merge(a, b, self.settings)
+        return drop_occupants(merge(a, b, self.settings))

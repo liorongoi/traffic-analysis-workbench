@@ -40,10 +40,23 @@ const LOOK: Record<string, { stroke: string; dash: string }> = {
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const SHOW = { all: "Every box", review: "Boxes not reviewed yet", none: "No boxes" } as const;
 
-/** The event's box at time t: its box on the nearest analysed frame (within a sixth of a second), else the two
- *  around t blended (an analysed gap of up to 2 s; any gap between the boxes you drew for a target you added).
- *  Never blended from a box at the frame's edge (fw x fh): the target drove out there, so a box drawn across the gap
- *  would float over the empty road. */
+/** The usual time between an event's analysed frames (its median gap), worked out once per box list. */
+const stepOf = new WeakMap<PBox[], number>();
+function step(b: PBox[]): number {
+  let v = stepOf.get(b);
+  if (v === undefined) {
+    const d = b.slice(1).map((x, i) => x[0] - b[i][0]).filter((g) => g > 0.01).sort((x, y) => x - y);
+    v = d.length ? d[Math.floor(d.length / 2)] : 0.2;
+    stepOf.set(b, v);
+  }
+  return v;
+}
+
+/** The event's box at time t: the two analysed boxes around t blended, so the box keeps up with the target between
+ *  analysed frames; at the ends of the event, its first or last box (within a sixth of a second). A target the
+ *  detector lost for longer than a couple of its usual frame steps (at most 2 s) has no box until it is found again:
+ *  a box slid across that gap would float over the empty road. Any gap between the boxes you drew for a target you
+ *  added is blended. Never blended from a box at the frame's edge (fw x fh): the target drove out there. */
 function boxAt(e: PEvent, t: number, fw = 0, fh = 0): number[] | null {
   const b = e.boxes;
   if (!b.length || t < e.first_t - 0.17 || t > e.last_t + 0.17) return null;
@@ -51,11 +64,15 @@ function boxAt(e: PEvent, t: number, fw = 0, fh = 0): number[] | null {
   while (i < b.length && b[i][0] < t) i++;
   const after = b[i], before = b[i - 1];
   const near = !before ? after : !after ? before : t - before[0] <= after[0] - t ? before : after;
-  if (Math.abs(near[0] - t) <= 0.17) return near.slice(1);
-  if (!before || !after || (after[0] - before[0] > 2 && e.origin !== "human")) return null;
-  const edge = (b: number[]) => fw > 0 && (b[1] <= 4 || b[2] <= 4 || b[3] >= fw - 4 || b[4] >= fh - 4);
-  if (e.origin !== "human" && after[0] - before[0] > 0.5 && edge(before)) return null;
-  const w = (t - before[0]) / (after[0] - before[0]);
+  if (Math.abs(near[0] - t) <= 0.02) return near.slice(1);
+  if (!before || !after) return Math.abs(near[0] - t) <= 0.17 ? near.slice(1) : null;
+  const gap = after[0] - before[0];
+  if (e.origin !== "human") {
+    if (gap > Math.min(2, Math.max(0.5, 2.5 * step(b)))) return null;
+    const edge = (x: number[]) => fw > 0 && (x[1] <= 4 || x[2] <= 4 || x[3] >= fw - 4 || x[4] >= fh - 4);
+    if (gap > 0.5 && edge(before)) return null;
+  }
+  const w = (t - before[0]) / gap;
   return [1, 2, 3, 4].map((k) => before[k] + w * (after[k] - before[k]));
 }
 

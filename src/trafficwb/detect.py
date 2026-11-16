@@ -116,6 +116,53 @@ def _iou(a, b) -> float:
     return inter / union if union > 0 else 0.0
 
 
+CARRIERS = ("car", "bus", "truck")      # vehicles people sit inside (a rider on a bicycle or motorcycle is outside)
+
+
+def _is_person(cls: str) -> bool:
+    return COCO_ALIASES.get(cls, cls) == "person"
+
+
+def _inside(b, h) -> float:
+    """How much of box b lies inside box h (0 to 1)."""
+    ix = max(0.0, min(b[2], h[2]) - max(b[0], h[0]))
+    iy = max(0.0, min(b[3], h[3]) - max(b[1], h[1]))
+    return ix * iy / max(1e-6, (b[2] - b[0]) * (b[3] - b[1]))
+
+
+def _area(b) -> float:
+    return (b[2] - b[0]) * (b[3] - b[1])
+
+
+def drop_occupants(dets: list[Detection], inside: float = 0.85, size: float = 0.35, carrier_score: float = 0.30,
+                   rider: float = 0.40) -> list[Detection]:
+    """Leave out what is part of another target, so each road user is counted once:
+    - people seen through a vehicle's windows (the driver, a passenger), and a wheel or a mirror taken for a bicycle
+      or motorcycle: a person, bicycle or motorcycle box lying almost wholly inside a confidently found car, bus or
+      truck box, and small beside it. A pedestrian or cyclist passing a car is only partly inside its box, or about
+      as large as it from above, and is kept;
+    - the rider of a bicycle or motorcycle: a person box whose centre is over a confidently found bicycle or
+      motorcycle and which overlaps it (by ``rider`` of the smaller box). The rider and the ride are one target, the
+      bicycle or motorcycle; a person on foot beside a bicycle overlaps it little."""
+    hosts = [d.box for d in dets if d.cls in CARRIERS and d.score >= carrier_score]
+    rides = [d.box for d in dets if d.cls in ("bicycle", "motorcycle") and d.score >= carrier_score]
+    if not hosts and not rides:
+        return dets
+
+    def occupant(b) -> bool:
+        return any(_inside(b, h) >= inside and _area(b) <= size * _area(h) for h in hosts)
+
+    def riding(b) -> bool:
+        cx = (b[0] + b[2]) / 2
+        return any(r[0] <= cx <= r[2] and _inside(b, r) * _area(b) >= rider * min(_area(b), _area(r)) for r in rides)
+
+    def part(d: Detection) -> bool:
+        if _is_person(d.cls):
+            return occupant(d.box) or riding(d.box)
+        return d.cls in ("bicycle", "motorcycle") and occupant(d.box)
+    return [d for d in dets if not part(d)]
+
+
 def _merge_across_classes(dets: list[Detection], iou: float) -> list[Detection]:
     """Keep the higher-scoring box when two boxes of different classes of one family cover the same object."""
     kept: list[Detection] = []
@@ -226,7 +273,8 @@ class _OnnxDetector:
                         continue
                     dets += [d for d in self._run(img_bgr[y1:y2, x1:x2], x1, y1)
                              if not _touches_inner_edge(d.box, (x1, y1, x2, y2), (w, h))]
-        return _merge_across_classes(_nms_per_class(dets, self.settings.nms_iou), self.settings.cross_class_iou)
+        return drop_occupants(_merge_across_classes(_nms_per_class(dets, self.settings.nms_iou),
+                                                    self.settings.cross_class_iou))
 
 
 class YoloxDetector(_OnnxDetector):
