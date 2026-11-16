@@ -282,6 +282,11 @@ jobs:
       - name: Install and run LanePulse on bare Windows
         shell: pwsh
         run: |
+          # The Docker service is not always running on the runner image: start it and wait for the engine.
+          if ((Get-Service docker).Status -ne 'Running') { Start-Service docker }
+          foreach ($i in 1..30) { docker version *> $null; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 5 }
+          docker version
+          if ($LASTEXITCODE -ne 0) { throw "The Docker engine did not start on the runner" }
           docker pull mcr.microsoft.com/windows/servercore:ltsc2022
           docker run --rm --isolation process -v "${PWD}\setup:C:\setup" -v "${PWD}\.github\scripts:C:\check" `
             mcr.microsoft.com/windows/servercore:ltsc2022 `
