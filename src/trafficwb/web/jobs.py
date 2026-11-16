@@ -253,6 +253,8 @@ class JobManager:
         std = None
         if choice != "sam3":
             std = self._with_classes(self.standard_for(m), words)
+            if getattr(cfg, "look_closer", False) and hasattr(std[0], "looking_closer"):
+                std = (std[0].looking_closer(), std[1])
         from ..detectors import uses_sam
         if uses_sam(choice):
             from ..sam3 import Sam3Detector, vehicle_prompts

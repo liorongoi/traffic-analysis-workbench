@@ -449,11 +449,13 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
   useEffect(() => { setWorkers(m.config.video_workers ?? 1); }, [m.config.video_workers]);
   const [minFrames, setMinFrames] = useState<number>(m.config.track_min_frames ?? 0);
   useEffect(() => { setMinFrames(m.config.track_min_frames ?? 0); }, [m.config.track_min_frames]);
-  const changed = value !== (m.config.detector ?? "standard") || (video && (every !== (m.config.sam3_interval_s ?? 1) || camera !== (m.config.camera ?? "fixed") || workers !== (m.config.video_workers ?? 1) || minFrames !== (m.config.track_min_frames ?? 0)));
+  const [closer, setCloser] = useState<boolean>(!!m.config.look_closer);
+  useEffect(() => { setCloser(!!m.config.look_closer); }, [m.config.look_closer]);
+  const changed = value !== (m.config.detector ?? "standard") || closer !== !!m.config.look_closer || (video && (every !== (m.config.sam3_interval_s ?? 1) || camera !== (m.config.camera ?? "fixed") || workers !== (m.config.video_workers ?? 1) || minFrames !== (m.config.track_min_frames ?? 0)));
   const saveIt = async () => {
     setErr(null);
     setSaving(true);
-    try { await api(`/missions/${m.id}/detector`, { method: "PUT", body: { detector: value, ...(video ? { sam3_interval_s: every, camera, video_workers: workers, track_min_frames: minFrames } : {}) } }); reload(); }
+    try { await api(`/missions/${m.id}/detector`, { method: "PUT", body: { detector: value, look_closer: closer, ...(video ? { sam3_interval_s: every, camera, video_workers: workers, track_min_frames: minFrames } : {}) } }); reload(); }
     catch (e) { setErr((e as ApiError).message); }
     finally { setSaving(false); }
   };
@@ -467,14 +469,29 @@ function DetectorCard({ m, reload }: { m: any; reload: () => void }) {
       {video && <ParallelChoice value={workers} onChange={setWorkers} disabled={busy} />}
       {video && <TrackFrames value={minFrames || null} onChange={setMinFrames} disabled={busy}
         step={value === "sam3" ? every : 0.2} auto={value === "sam3" ? 3 : 5} />}
+      {value !== "sam3" && <LookCloser value={closer} onChange={setCloser} disabled={busy} video={video} />}
       {value !== "sam3" && <ModelChoice saved={saved} value={m.config.vehicle_model ?? null} onChange={setModel} disabled={busy} rfdetr={partsOf(value).fast === "rfdetr"} />}
       {changed && <p className="muted">{video ? "Recordings already processed keep their detections; the change applies to the next run." : "Images already processed keep their detections until you run them again (the button appears once the detector is saved)."} Each detection records the model that made it.</p>}
       {busy && <p className="muted">The detector can be changed when processing has finished.</p>}
       {!video && !changed && <RerunButton m={m} reload={reload} />}
       {changed && <div className="row"><button className="primary" disabled={busy || saving} onClick={saveIt}>{saving ? "Saving…" : value !== (m.config.detector ?? "standard") ? "Use this detector" : "Save"}</button>
-        <button onClick={() => { setValue(m.config.detector ?? "standard"); setEvery(m.config.sam3_interval_s ?? 1); setCamera(m.config.camera ?? "fixed"); setWorkers(m.config.video_workers ?? 1); setMinFrames(m.config.track_min_frames ?? 0); }}>Cancel</button></div>}
+        <button onClick={() => { setValue(m.config.detector ?? "standard"); setEvery(m.config.sam3_interval_s ?? 1); setCamera(m.config.camera ?? "fixed"); setWorkers(m.config.video_workers ?? 1); setMinFrames(m.config.track_min_frames ?? 0); setCloser(!!m.config.look_closer); }}>Cancel</button></div>}
       {err && <div className="msg err" role="alert">{err}</div>}
     </div>
+  );
+}
+
+/** Low-resolution pictures: the frame is cut into tiles so small, far vehicles are seen larger, but tiles under
+ *  360 px are normally skipped. Ticked, they are searched down to 160 px: 480p drone views find about 20 points more
+ *  vehicles (AP50 28.5 to 48.0 with YOLOX s), at about 6 times the time on such pictures. */
+function LookCloser({ value, onChange, disabled, video }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean; video: boolean }) {
+  return (
+    <label className="field check">
+      <span><input type="checkbox" checked={value} disabled={disabled} onChange={(e) => onChange(e.target.checked)} /> Look closer at low-resolution {video ? "video" : "images"}</span>
+      <small className="muted">For {video ? "recordings" : "pictures"} of 480p or less, such as drone or far cameras: the detector also searches
+        smaller parts of each {video ? "frame" : "picture"}, so small, far vehicles are found. About 6 times slower on those
+        {video ? " recordings" : " pictures"}; sharper ones are not affected. Applies to the next analysis.</small>
+    </label>
   );
 }
 

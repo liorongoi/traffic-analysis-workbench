@@ -64,6 +64,9 @@ class Detection:
     found_by: str | None = None             # with two detectors: "standard", "sam3" or "both"
 
 
+LOOK_CLOSER_TILE = 160               # smallest tile side when a mission looks closer at low-resolution pictures
+
+
 @dataclass
 class DetectorSettings:
     score_threshold: float = 0.30
@@ -164,6 +167,17 @@ class _OnnxDetector:
         from dataclasses import replace
         other = copy.copy(self)
         other.settings = replace(self.settings, score_threshold=score)
+        return other
+
+    def looking_closer(self, side: int = LOOK_CLOSER_TILE):
+        """The same loaded model still looking at tiles down to ``side`` pixels: on low-resolution pictures (480p
+        and less) the tiles would otherwise be skipped and small, far vehicles missed. Slower on such pictures
+        (about 6 times); pictures whose tiles are already large enough are not affected."""
+        if self.settings.min_tile_side <= side:
+            return self
+        from dataclasses import replace
+        other = copy.copy(self)
+        other.settings = replace(self.settings, min_tile_side=side)
         return other
 
     def _preprocessing(self) -> dict:

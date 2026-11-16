@@ -86,6 +86,7 @@ class MissionBody(BaseModel):
     auto_epochs: int = 30
     analyse_new: bool = True               # video: new videos (and those still being copied) analysed as they arrive
     track_min_frames: int | None = None    # video: analysed frames before a target counts (None: the default)
+    look_closer: bool = False              # search small tiles of low-resolution pictures (slower)
 
     def config(self) -> MissionConfig:
         d = self.model_dump()
@@ -103,6 +104,7 @@ class DetectorBody(BaseModel):
     video_workers: int | None = None       # video: segments analysed side by side; None leaves it as it is
     track_min_frames: int | None = None    # video: analysed frames before a target counts; 0 back to the default,
                                            # None leaves it as it is
+    look_closer: bool | None = None        # search small tiles of low-resolution pictures; None leaves it as it is
 
 
 class SizeBody(BaseModel):
@@ -1375,9 +1377,13 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             n = body.track_min_frames or None
             m.update_config(u.username, f"a target counts after {n} analysed frames" if n else
                             "frames before a target counts back to the default", track_min_frames=n)
+        if body.look_closer is not None and body.look_closer != getattr(cfg, "look_closer", False):
+            m.update_config(u.username, "looks closer at low-resolution pictures" if body.look_closer else
+                            "no longer looks closer at low-resolution pictures", look_closer=body.look_closer)
         c2 = m.config()
         return {"detector": body.detector, "sam3_interval_s": c2.sam3_interval_s, "camera": c2.camera,
-                "video_workers": c2.video_workers, "track_min_frames": c2.track_min_frames}
+                "video_workers": c2.video_workers, "track_min_frames": c2.track_min_frames,
+                "look_closer": c2.look_closer}
 
     def _detector_ready(detector: str, cfg) -> None:
         if uses_sam(detector) and not sam_info()["installed"]:

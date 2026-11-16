@@ -146,7 +146,8 @@ def remote_spec(jobs, m) -> dict:
     """What another computer needs to run this mission's detector exactly as this one does."""
     cfg = m.config()
     choice = getattr(cfg, "detector", "standard")
-    spec = {"detector": choice, "words": getattr(cfg, "sam3_words", None), "standard": None}
+    spec = {"detector": choice, "words": getattr(cfg, "sam3_words", None), "standard": None,
+            "look_closer": bool(getattr(cfg, "look_closer", False))}
     if choice != "sam3":
         det, card = jobs.standard_for(m)
         pack = getattr(det, "pack", None)
@@ -212,7 +213,8 @@ class Worker:
 
     # ---------- the detector ----------
     def detector(self, spec: dict):
-        key = json.dumps({k: spec.get(k) for k in ("detector", "words", "standard", "algo", "low_score")}, sort_keys=True)
+        key = json.dumps({k: spec.get(k) for k in ("detector", "words", "standard", "algo", "low_score",
+                                                     "look_closer")}, sort_keys=True)
         if key not in self._detectors:
             self._detectors[key] = (self.detector_factory(spec) if self.detector_factory else self._build(spec))
         return self._detectors[key]
@@ -251,6 +253,8 @@ class Worker:
                 raise RuntimeError("The server did not say which model to use.")
             pack = self._pack(spec["standard"])
             std = JobManager._with_classes((make_detector(pack), pack.card), spec.get("words"))
+            if spec.get("look_closer"):
+                std = (std[0].looking_closer(), std[1])
         det = std[0] if std else None
         from .detectors import uses_sam
         if uses_sam(spec["detector"]):
