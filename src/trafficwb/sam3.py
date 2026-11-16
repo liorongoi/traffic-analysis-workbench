@@ -35,7 +35,7 @@ import cv2
 import numpy as np
 
 from .detect import (COCO_VEHICLES, Detection, family, VEHICLE_CLASSES, _iou, _merge_across_classes, _nms_per_class,
-                     _touches_inner_edge, tile_grid)
+                     _touches_inner_edge, drop_occupants, tile_grid)
 from .models import ModelPack, ModelPackError
 
 PACK_NAME = "sam3.1-w8a16"
@@ -449,7 +449,8 @@ class Sam3Detector:
                         continue
                     dets += [d for d in self._pass(img_bgr[y1:y2, x1:x2], x1, y1)
                              if not _touches_inner_edge(d.box, (x1, y1, x2, y2), (w, h))]
-        return _merge_across_classes(_nms_per_class(dets, self.settings.nms_iou), self.settings.cross_class_iou)
+        return drop_occupants(_merge_across_classes(_nms_per_class(dets, self.settings.nms_iou),
+                                                    self.settings.cross_class_iou))
 
 
 # ---------- scan areas from words ----------
