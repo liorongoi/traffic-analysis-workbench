@@ -31,6 +31,7 @@ import json
 import os
 import shutil
 import stat
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -85,6 +86,7 @@ TEACH_FLOOR = 0.30            # the teacher reports boxes from this score up ...
 TEACH_SURE = 0.50             # ... a box this sure is a label; a less sure one is ignored (neither label nor background)
 TEACH_OVERLAP = 0.30          # a teacher box this close to a reviewed box (or one the operator removed) gives way to it
 TEACHER_NAMES = {"sam3": "SAM 3.1"}
+_APPROVING = threading.Lock()
 # Recordings from fewer than this many camera views and days (groups) would put everything in one split, often test,
 # so nothing is left to train on: their frames are then grouped by this many seconds of recording instead.
 FEW_GROUPS = 3
@@ -250,6 +252,12 @@ class LearningService:
             raise LearningError("Only a recording can be approved here.")
         if self._latest_item(vid) is None:
             raise LearningError("Only an analysed recording can be approved.")
+        with _APPROVING:       # a second press while the first one works waits for it, then finds it done
+            if self.review_kind(vid) == "full":
+                return {"source_version_id": vid, "review": "full"}
+            return self._approve_recording(vid, author, confirm_rest)
+
+    def _approve_recording(self, vid: int, author: str, confirm_rest: bool) -> dict:
         if confirm_rest:
             from .video_review import VideoService
             svc = VideoService(self.m)

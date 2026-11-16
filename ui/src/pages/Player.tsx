@@ -291,10 +291,23 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
     if (selEv && selEv.cls !== cls) revise(selEv.id, "set_class", { cls });
     else setAddCls(cls);
   };
-  const approve = () => act(() => post(`/missions/${missionId}/recordings/${versionId}/review`,
-    { action: ov?.recording.approved ? "reopen" : ov?.recording.pending ? "confirm_rest_and_approve" : "approve" }),
-    ov?.recording.approved ? "Reopened: only the events you reviewed teach now." :
-      "Approved for learning: every target here teaches, and the empty road and rejected boxes teach as background.");
+  // Approving can take a few seconds on a long video: the button says so and takes no second press, and the answer
+  // shows right under it (the message area further down may be out of sight).
+  const [approving, setApproving] = useState(false);
+  const [approved, setApproved] = useState<{ kind: string; text: string } | null>(null);
+  const approve = async () => {
+    if (approving) return;
+    setApproving(true); setApproved(null);
+    const reopen = !!ov?.recording.approved, n = ov?.recording.pending ?? 0;
+    try {
+      await post(`/missions/${missionId}/recordings/${versionId}/review`,
+        { action: reopen ? "reopen" : n ? "confirm_rest_and_approve" : "approve" });
+      await load();
+      setApproved({ kind: "ok", text: reopen ? "Reopened: only the events you reviewed teach now."
+        : `Approved${n ? `: the ${n} events not reviewed are confirmed` : ""}. Every target here now teaches the detector, and the empty road and rejected boxes teach as background. Make a new dataset version on the Learning tab to use it.` });
+    } catch (e) { setApproved({ kind: "err", text: (e as ApiError).message }); }
+    finally { setApproving(false); }
+  };
 
   // Screen point to video pixels, through the letterboxed picture.
   const toImage = (ev: React.PointerEvent) => {
@@ -412,10 +425,11 @@ export default function Player({ missionId, versionId }: { missionId: string; ve
         <span className="muted">{toReview.length ? `${toReview.length} of ${evs.length} to check` : `all ${evs.length} checked`}</span>
         <span style={{ flex: 1 }} />
         <button className="iconbtn" aria-pressed={panel} onClick={togglePanel} title="Show or hide the events panel, so the video can take the whole width">{panel ? "Hide list" : "Vehicles"}</button>
-        <button className={rec.approved ? "" : "primary"} onClick={approve}
+        <button className={rec.approved ? "" : "primary"} onClick={approve} disabled={approving}
           title="Say every target in this video is marked and every box is right; it then teaches the detector (A)">
-          {rec.approved ? "Reopen" : rec.pending ? `Confirm ${rec.pending} left and approve this video` : "Approve this video"}</button>
+          {approving ? (rec.approved ? "Reopening…" : "Approving…") : rec.approved ? "Reopen" : rec.pending ? `Confirm ${rec.pending} left and approve this video` : "Approve this video"}</button>
       </div>
+      {approved && <div className={`msg ${approved.kind}`} role="status">{approved.text}</div>}
       <div className="grid" style={{ gridTemplateColumns: panel ? "minmax(0, 1fr) 320px" : "minmax(0, 1fr)", gap: 10 }}>
         <div className="card" style={{ padding: 8 }}>
           <div className="stage" style={{ position: "relative", background: "#000", aspectRatio: `${W} / ${H}`, maxHeight: "calc(100vh - 330px)", minHeight: 240 }}>

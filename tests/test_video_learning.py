@@ -264,3 +264,13 @@ def test_a_single_recording_is_split_in_parts_so_something_is_left_to_train_on(t
     assert ds["stats"]["splits"]["train"]["images"] > 0
     assert all(r["split"] != "test" for r in mem if r["review"] == "sam")          # test keeps reviews only
     assert ds["stats"]["teacher"]["kept_out_of_test"] > 0
+
+
+def test_approving_a_recording_twice_adds_nothing_the_second_time(tmp_path):
+    m = analysed(tmp_path, {"CAM1_20261021T120000Z.mp4": (6.0, crowd, False)})
+    ls, svc = LearningService(m), VideoService(m)
+    (vid,) = [r["id"] for r in svc.recordings()]
+    ls.approve_recording(vid, "lior", confirm_rest=True)
+    n = [m.con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("recording_review", "event_revision")]
+    assert ls.approve_recording(vid, "lior", confirm_rest=True)["review"] == "full"
+    assert [m.con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("recording_review", "event_revision")] == n
