@@ -95,8 +95,8 @@ def test_wrap_an_exported_detector_into_a_pack(tmp_path):
 
 def test_people_seen_through_a_vehicles_windows_are_left_out():
     """A driver or passenger seen through the windscreen is not a pedestrian: a small person box inside a confidently
-    found car, bus or truck is dropped. A pedestrian beside the car, a cyclist, and a person inside a weak (0.15)
-    car box are kept."""
+    found car, bus or truck is dropped, as is a cyclist's own box (the bicycle is the target). A pedestrian beside
+    the car or the bicycle, and a person inside a weak (0.15) car box, are kept."""
     from trafficwb.detect import Detection, drop_occupants
 
     def d(cls, box, score=0.9):
@@ -105,10 +105,11 @@ def test_people_seen_through_a_vehicles_windows_are_left_out():
     driver = d("pedestrian", (150, 140, 190, 180), 0.33)
     walker = d("person", (280, 120, 330, 260))           # partly in front of the car
     bike, rider = d("bicycle", (500, 200, 560, 300)), d("person", (505, 150, 555, 260))
+    beside = d("person", (565, 180, 605, 300))            # on foot beside the bicycle
     weak = d("car", (600, 100, 800, 300), 0.15)
     inside_weak = d("person", (650, 140, 690, 180))
     bus = d("bus", (0, 400, 400, 600))
     wheel = d("motorcycle", (40, 540, 90, 590), 0.4)       # a wheel of the bus
-    out = drop_occupants([car, driver, walker, bike, rider, weak, inside_weak, bus, wheel])
-    assert driver not in out and wheel not in out
-    assert all(x in out for x in (car, walker, bike, rider, weak, inside_weak, bus))
+    out = drop_occupants([car, driver, walker, bike, rider, beside, weak, inside_weak, bus, wheel])
+    assert driver not in out and wheel not in out and rider not in out     # the rider is part of the bicycle
+    assert all(x in out for x in (car, walker, bike, beside, weak, inside_weak, bus))
