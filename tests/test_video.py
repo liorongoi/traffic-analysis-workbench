@@ -657,6 +657,8 @@ def test_only_the_videos_ticked_when_the_mission_is_made_are_analysed(tmp_path, 
     assert not st["b.mp4"]["analysed"] and st["b.mp4"]["selected"]          # waits, ticked on the video page
     assert "analyse_only" not in c.get(f"/api/missions/{mid}", headers=H1).text
 
+    if analyse_new:
+        return      # (new videos start by themselves: the folder watch scans in the background, tested elsewhere)
     # Ticked later on the video page, it is analysed then.
     c.post(f"/api/missions/{mid}/catalog/analyse", json={"version_ids": [st["b.mp4"]["id"]]}, headers=H1)
     wait(c, mid)
