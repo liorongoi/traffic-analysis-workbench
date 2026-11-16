@@ -245,3 +245,22 @@ def test_full_auto_lets_sam_label_then_trains(tmp_path, monkeypatch):
     ds = ls.dataset(started[1][1]["datasets"][-1]["dataset_id"])
     assert ds["stats"]["teacher"]["samples"] > 0 and ds["params"]["teacher"]["name"] == "sam3"
     assert jobs.auto_learn(m.id)["state"] == "waiting"          # nothing new to label or learn
+
+
+def test_a_single_recording_is_split_in_parts_so_something_is_left_to_train_on(tmp_path, monkeypatch):
+    """One camera on one day is one group: it used to go wholly to one split (here test, where SAM's labels never
+    go), leaving nothing to train on. With fewer than FEW_GROUPS groups, a recording is split by SEGMENT_S of
+    recording; SAM's labels go to the training and validation parts only."""
+    from trafficwb import learning
+    m = analysed(tmp_path, {"CAM1_20261021T120000Z.mp4": (6.0, crowd, False)})
+    ls = LearningService(m)
+    ls.teach(RedDetector(), "sam3", "k1")
+    monkeypatch.setattr(learning, "SEGMENT_S", 1.0)
+    monkeypatch.setattr(LearningService, "_bucket",               # whole-recording groups: test; parts by their second
+                        staticmethod(lambda seed, key: 0.95 if "@" not in key else (0.1 if key.endswith(("@0s", "@1s")) else 0.95)))
+    ds = ls.create_dataset("parts", "lior", teacher="sam3")
+    mem = ls.members(ds["id"])
+    assert ds["stats"]["segmented_s"] == 1.0
+    assert ds["stats"]["splits"]["train"]["images"] > 0
+    assert all(r["split"] != "test" for r in mem if r["review"] == "sam")          # test keeps reviews only
+    assert ds["stats"]["teacher"]["kept_out_of_test"] > 0
