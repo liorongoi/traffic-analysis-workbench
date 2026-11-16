@@ -180,14 +180,16 @@ function VideosTab({ m, reload }: { m: any; reload: () => void }) {
   const name = (id: number) => vids.find((v) => v.id === id)?.rel_path.split(/[\\/]/).pop() ?? id;
   const todo = vids.filter((v) => !v.error && !v.analysed);
   const notStarted = todo.filter((v) => ["queued", "new", "cancelled", "failed"].includes(v.state));
-  // Overall progress: seconds of video analysed out of the seconds to analyse (the analysed ones and the rest).
-  const inRun = vids.filter((v) => !v.error && (v.analysed || v.progress != null));
-  const total = inRun.reduce((a, v) => a + (v.duration_s ?? 0), 0);
-  const doneS = inRun.reduce((a, v) => a + (v.duration_s ?? 0) * (v.progress ?? 0), 0);
-  const overall = total ? doneS / total : 0;
+  // Overall progress: seconds of video analysed out of the seconds to analyse: those already analysed, and every video
+  // this job will still analyse (the one running and those queued after it). The time left covers the same videos,
+  // at the speed the running video goes, so the percentage and the time left always tell the same story.
   const running = vids.find((v) => v.state === "running");
-  const leftS = running?.eta_s != null ? running.eta_s + todo.filter((v) => v !== running).reduce((a, v) => a + (v.duration_s ?? 0) * (1 - (v.progress ?? 0)), 0)
-    * (running.eta_s / Math.max(1, (running.duration_s ?? 0) * (1 - (running.progress ?? 0)))) : null;
+  const ahead = todo.filter((v) => v.state === "running" || v.state === "queued");
+  const leftOf = (v: any) => (v.duration_s ?? 0) * (1 - (v.progress ?? 0));
+  const doneS = vids.filter((v) => !v.error).reduce((a, v) => a + (v.duration_s ?? 0) * (v.analysed ? 1 : v.state === "running" ? (v.progress ?? 0) : 0), 0);
+  const aheadS = ahead.reduce((a, v) => a + leftOf(v), 0);
+  const overall = doneS + aheadS ? doneS / (doneS + aheadS) : 0;
+  const leftS = running?.eta_s != null ? running.eta_s + (aheadS - leftOf(running)) * (running.eta_s / Math.max(1, leftOf(running))) : null;
   const errors = vids.filter((v) => v.error);
   const events = vids.reduce((a, v) => a + (v.events ?? 0), 0);
   const rows: any[] = [];
