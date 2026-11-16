@@ -1166,12 +1166,30 @@ def transaction(con: sqlite3.Connection):
     con.execute("COMMIT")
 
 
+def _open(path: Path) -> sqlite3.Connection:
+    con = sqlite3.connect(path, isolation_level=None, check_same_thread=False)  # explicit transactions
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError:
+        con.close()
+        raise
+    return con
+
+
 def connect(path: Path) -> sqlite3.Connection:
     # One connection is never used by two threads at once, but web requests may open and close it
     # on different worker threads, so the same-thread check is off.
-    con = sqlite3.connect(path, isolation_level=None, check_same_thread=False)  # explicit transactions
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
+    try:
+        con = _open(path)
+    except sqlite3.OperationalError as exc:
+        if "unable to open" not in str(exc):
+            raise
+        # Out of open files: connections no longer used but not yet freed (held in reference cycles) still hold
+        # theirs. Free them and try once more.
+        import gc
+        gc.collect()
+        con = _open(path)
     con.execute("PRAGMA synchronous=FULL")
     con.execute("PRAGMA foreign_keys=ON")
     con.execute("PRAGMA busy_timeout=5000")
