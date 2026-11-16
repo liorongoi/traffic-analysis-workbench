@@ -194,6 +194,7 @@ class VideoProcessor:
             skip = sorted({family(c) for c in _standard_classes(detector)}) if self.kind == "both" else []
             self.s = replace(self.s, tracker=replace(self.s.tracker, jump_per_s=3.0, jump_skip=skip))
         own = getattr(mission.config(), "track_min_frames", None)
+        self._own_min = bool(own)
         if own:
             # the operator's choice: analysed frames a target is seen on before it counts as a target
             from dataclasses import replace
@@ -203,6 +204,19 @@ class VideoProcessor:
             from dataclasses import replace
             self.s = replace(self.s, tracker=replace(self.s.tracker, min_hits=3))
 
+
+    def _tracker_for(self, pr: dict):
+        """The tracker's settings for one video. A camera recording fewer frames a second than are analysed (2 or 1 a
+        second, say) gives every frame, further apart: the tracker then steps by that time, and a target needs the
+        same time in sight, not the same number of frames, before it counts (at least 2 frames)."""
+        from dataclasses import replace
+        t = self.s.tracker
+        fps = pr.get("nominal_fps") or 0
+        step = 1.0 / fps if fps > 0 else 0.0
+        if step <= self.grid_s * 1.25:
+            return t
+        hits = t.min_hits if self._own_min else max(2, round(t.min_hits * self.grid_s / step))
+        return replace(t, frame_s=round(step, 4), min_hits=hits)
 
     def process_all(self, progress: Callable[[int, int], None] | None = None) -> list[VideoReport]:
         reps = [self.process_run(r, progress) for r in self.pending_runs()]
@@ -356,7 +370,7 @@ class VideoProcessor:
             prev = np.frombuffer(cp["prev_signature"], np.uint8).reshape(36, 64) if cp["prev_signature"] else None
             pm = _unpack(cp["prev_motion"]) if "prev_motion" in cp.keys() else None
         else:
-            tracker = Tracker(pr["width"], pr["height"], self.s.tracker)
+            tracker = Tracker(pr["width"], pr["height"], self._tracker_for(pr))
             last_t, nxt, count, prev, pm = None, 0.0, 0, None, None
         moving = self.camera == "moving"
         ids = {r["track_key"]: r["id"] for r in self.con.execute(
@@ -464,10 +478,11 @@ class VideoProcessor:
         sam_every = self.sam_every
 
         detect = vs.make_detect(self.kind, self.detector)
+        tp = self._tracker_for(pr)
         args = dict(width=pr["width"], height=pr["height"], grid_s=self.grid_s, moving=moving, sam_every=sam_every)
         from .segment_hub import SegmentHub
         hub = self.hub if self.hub is not None and self.remote_spec is not None else SegmentHub()
-        spec = dict(self.remote_spec or {}, **args, tracker={k: v for k, v in asdict(self.s.tracker).items() if v or k != "jump_skip"}, low_score=self.s.low_score,
+        spec = dict(self.remote_spec or {}, **args, tracker={k: v for k, v in asdict(tp).items() if v or k != "jump_skip"}, low_score=self.s.low_score,
                     algo=self.s.tracker.algo, needs=["sam3"] if self.kind == "sam3" else
                     ["standard", "sam3"] if self.kind == "both" else ["standard"])
         job = hub.publish(self.m.id, it["id"], it["source_version_id"], todo, spec)
@@ -482,7 +497,7 @@ class VideoProcessor:
                         hub.cond.wait(0.5)
                     continue
                 try:
-                    res = vs.analyse(ls.seg, path, pr["width"], pr["height"], detect, self.grid_s, self.s.tracker,
+                    res = vs.analyse(ls.seg, path, pr["width"], pr["height"], detect, self.grid_s, tp,
                                      moving, sam_every, self._seg_checkpoint(stop))
                 except BaseException as exc:          # noqa: BLE001 (a cancel comes out as an error here)
                     hub.give_back(ls.id, f"{type(exc).__name__}: {exc}")
@@ -533,7 +548,7 @@ class VideoProcessor:
             closed = []
             from .tracker import Closed
             for n, j in enumerate(joined, 1):
-                tr, ok = vs.to_track(j, f"T{n}", self.s.tracker.min_hits)
+                tr, ok = vs.to_track(j, f"T{n}", self._tracker_for(pr).min_hits)
                 tr.related = sorted({keys[tuple(r)] for r in j.related if tuple(r) in keys} - {tr.key})
                 ids[tr.key] = self.con.execute("INSERT INTO track(run_item_id,track_key,state) VALUES (?,?,?)",
                                                (it["id"], tr.key, tr.state)).lastrowid

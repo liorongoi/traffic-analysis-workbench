@@ -3,6 +3,8 @@
  "suite": "mot17",
  "detector": "standard",
  "rate": "app",
+ "height": null,
+ "source_fps": null,
  "grid_s": 0.2,
  "sequences": [
   "MOT17-02",
@@ -15,109 +17,109 @@
  ],
  "metrics": {
   "combined": {
-   "HOTA": 0.45246075331986285,
-   "DetA": 0.4117154896772397,
-   "AssA": 0.5086941219050927,
-   "MOTA": 0.2635397506642142,
-   "IDF1": 0.5364502902177964,
-   "IDSW": 290,
-   "MT": 95,
-   "ML": 69,
-   "FP": 3062,
-   "FN": 3855,
-   "Frag": 373
+   "HOTA": 0.47235627742459674,
+   "DetA": 0.4219426923239326,
+   "AssA": 0.5381819002257583,
+   "MOTA": 0.34416513386470465,
+   "IDF1": 0.5750942546845985,
+   "IDSW": 193,
+   "MT": 83,
+   "ML": 89,
+   "FP": 2212,
+   "FN": 4013,
+   "Frag": 339
   },
   "per_sequence": {
    "MOT17-02": {
-    "HOTA": 0.3071178712825017,
-    "DetA": 0.29800138605659454,
-    "AssA": 0.32665528718088815,
-    "MOTA": 0.06957047791893527,
-    "IDF1": 0.3698492462311558,
-    "IDSW": 79,
-    "MT": 7,
-    "ML": 13,
-    "FP": 569,
-    "FN": 890,
-    "Frag": 108
-   },
-   "MOT17-04": {
-    "HOTA": 0.5368593929729574,
-    "DetA": 0.47672577078795814,
-    "AssA": 0.6167226548198221,
-    "MOTA": 0.34441161989167896,
-    "IDF1": 0.620474892954457,
-    "IDSW": 26,
-    "MT": 24,
-    "ML": 18,
-    "FP": 1110,
-    "FN": 1527,
-    "Frag": 69
-   },
-   "MOT17-05": {
-    "HOTA": 0.43789530919316466,
-    "DetA": 0.4664116168304311,
-    "AssA": 0.4158182254614548,
-    "MOTA": 0.47117794486215536,
-    "IDF1": 0.5404887398179204,
-    "IDSW": 38,
-    "MT": 23,
-    "ML": 12,
-    "FP": 144,
-    "FN": 451,
-    "Frag": 33
-   },
-   "MOT17-09": {
-    "HOTA": 0.3345627369416911,
-    "DetA": 0.3222122509509906,
-    "AssA": 0.36149702124355465,
-    "MOTA": -0.21074380165289255,
-    "IDF1": 0.3822463768115942,
+    "HOTA": 0.2861087167704755,
+    "DetA": 0.2723110275406292,
+    "AssA": 0.3054183920848634,
+    "MOTA": 0.18874773139745918,
+    "IDF1": 0.36136096988658584,
     "IDSW": 46,
-    "MT": 5,
-    "ML": 3,
-    "FP": 338,
-    "FN": 202,
-    "Frag": 40
-   },
-   "MOT17-10": {
-    "HOTA": 0.4895336370673567,
-    "DetA": 0.4593985238309096,
-    "AssA": 0.5271698501521994,
-    "MOTA": 0.4145854145854146,
-    "IDF1": 0.6466239526860522,
-    "IDSW": 35,
-    "MT": 16,
-    "ML": 1,
-    "FP": 289,
-    "FN": 262,
+    "MT": 6,
+    "ML": 20,
+    "FP": 273,
+    "FN": 1022,
     "Frag": 70
    },
-   "MOT17-11": {
-    "HOTA": 0.3194587884774663,
-    "DetA": 0.30744123585377736,
-    "AssA": 0.33783630234531264,
-    "MOTA": -0.1285140562248996,
-    "IDF1": 0.3665893271461717,
-    "IDSW": 47,
-    "MT": 10,
-    "ML": 13,
-    "FP": 513,
-    "FN": 283,
+   "MOT17-04": {
+    "HOTA": 0.5469924330437064,
+    "DetA": 0.4775251926231926,
+    "AssA": 0.6383420057872645,
+    "MOTA": 0.3663220088626292,
+    "IDF1": 0.6376887721602101,
+    "IDSW": 19,
+    "MT": 24,
+    "ML": 18,
+    "FP": 1023,
+    "FN": 1532,
+    "Frag": 70
+   },
+   "MOT17-05": {
+    "HOTA": 0.48292987359585926,
+    "DetA": 0.4730983238461124,
+    "AssA": 0.49560343016113756,
+    "MOTA": 0.5221386800334169,
+    "IDF1": 0.62782859894078,
+    "IDSW": 19,
+    "MT": 19,
+    "ML": 21,
+    "FP": 118,
+    "FN": 435,
+    "Frag": 37
+   },
+   "MOT17-09": {
+    "HOTA": 0.31453439421467266,
+    "DetA": 0.3333336427820056,
+    "AssA": 0.30340621982430793,
+    "MOTA": -0.0371900826446281,
+    "IDF1": 0.38190954773869346,
+    "IDSW": 37,
+    "MT": 4,
+    "ML": 3,
+    "FP": 246,
+    "FN": 219,
     "Frag": 36
    },
-   "MOT17-13": {
-    "HOTA": 0.4385570853066019,
-    "DetA": 0.41749693991567843,
-    "AssA": 0.4636230426532778,
-    "MOTA": 0.4423676012461059,
-    "IDF1": 0.6071741032370953,
-    "IDSW": 19,
+   "MOT17-10": {
+    "HOTA": 0.5076686233466295,
+    "DetA": 0.47127791851783224,
+    "AssA": 0.5514039348828198,
+    "MOTA": 0.4865134865134865,
+    "IDF1": 0.6859547606522882,
+    "IDSW": 21,
     "MT": 10,
-    "ML": 9,
-    "FP": 99,
-    "FN": 240,
-    "Frag": 17
+    "ML": 5,
+    "FP": 196,
+    "FN": 297,
+    "Frag": 72
+   },
+   "MOT17-11": {
+    "HOTA": 0.35926787834201707,
+    "DetA": 0.35032896013112147,
+    "AssA": 0.3727729822070668,
+    "MOTA": 0.14323962516733602,
+    "IDF1": 0.4468371467025572,
+    "IDSW": 40,
+    "MT": 8,
+    "ML": 17,
+    "FP": 296,
+    "FN": 304,
+    "Frag": 40
+   },
+   "MOT17-13": {
+    "HOTA": 0.49784426758487826,
+    "DetA": 0.47645415641795613,
+    "AssA": 0.52335850186095,
+    "MOTA": 0.5716510903426791,
+    "IDF1": 0.6912280701754386,
+    "IDSW": 11,
+    "MT": 12,
+    "ML": 5,
+    "FP": 60,
+    "FN": 204,
+    "Frag": 14
    }
   }
  },
@@ -125,8 +127,8 @@
   "MOT17-02": {
    "gt_people": 49,
    "gt_boxes": 1653,
-   "counted": 115,
-   "flagged_possible_duplicate": 52,
+   "counted": 75,
+   "flagged_possible_duplicate": 4,
    "frames_analysed": 50,
    "frames_in_subset": 299,
    "moving_camera": false
@@ -134,8 +136,8 @@
   "MOT17-04": {
    "gt_people": 69,
    "gt_boxes": 4062,
-   "counted": 107,
-   "flagged_possible_duplicate": 22,
+   "counted": 93,
+   "flagged_possible_duplicate": 8,
    "frames_analysed": 88,
    "frames_in_subset": 524,
    "moving_camera": false
@@ -143,8 +145,8 @@
   "MOT17-05": {
    "gt_people": 70,
    "gt_boxes": 1197,
-   "counted": 86,
-   "flagged_possible_duplicate": 34,
+   "counted": 45,
+   "flagged_possible_duplicate": 31,
    "frames_analysed": 149,
    "frames_in_subset": 418,
    "moving_camera": true
@@ -152,8 +154,8 @@
   "MOT17-09": {
    "gt_people": 22,
    "gt_boxes": 484,
-   "counted": 66,
-   "flagged_possible_duplicate": 24,
+   "counted": 39,
+   "flagged_possible_duplicate": 10,
    "frames_analysed": 44,
    "frames_in_subset": 262,
    "moving_camera": false
@@ -161,8 +163,8 @@
   "MOT17-10": {
    "gt_people": 36,
    "gt_boxes": 1001,
-   "counted": 69,
-   "flagged_possible_duplicate": 17,
+   "counted": 45,
+   "flagged_possible_duplicate": 7,
    "frames_analysed": 55,
    "frames_in_subset": 326,
    "moving_camera": true
@@ -170,8 +172,8 @@
   "MOT17-11": {
    "gt_people": 41,
    "gt_boxes": 747,
-   "counted": 106,
-   "flagged_possible_duplicate": 39,
+   "counted": 49,
+   "flagged_possible_duplicate": 26,
    "frames_analysed": 75,
    "frames_in_subset": 449,
    "moving_camera": true
@@ -179,7 +181,7 @@
   "MOT17-13": {
    "gt_people": 44,
    "gt_boxes": 642,
-   "counted": 60,
+   "counted": 41,
    "flagged_possible_duplicate": 0,
    "frames_analysed": 75,
    "frames_in_subset": 374,
@@ -188,40 +190,49 @@
  },
  "count_total": {
   "gt_people": 331,
-  "counted": 609,
-  "ratio": 1.84
+  "counted": 387,
+  "ratio": 1.169
  },
  "tracker": {
   "iou_min": 0.25,
-  "min_hits": 3,
+  "min_hits": 5,
   "gap_s": 1.5,
   "reentry_s": 3.0,
   "reentry_dist": 2.0,
   "edge_px": 4.0,
   "velocity_smoothing": 0.5,
   "jump_per_s": 0.0,
+  "jump_skip": [],
   "algo": "byte",
   "high_score": 0.3,
   "low_iou_min": 0.5,
   "frame_s": 0.2,
-  "first_jump": 1.0
+  "first_jump": 1.0,
+  "relink_s": 1.5,
+  "relink_dist": 0.5,
+  "relink_app": 0.85,
+  "nested_ioa": 0.8,
+  "still_hold_s": 6.0,
+  "still_speed": 0.25,
+  "fuse_ioa": 0.7
  },
  "model": {
   "name": "yolox-s",
   "version": "0.1.1rc0",
-  "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063"
+  "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063",
+  "family": "yolox"
  },
  "seconds_per_frame": {
-  "MOT17-02": 0.532,
-  "MOT17-04": 0.525,
-  "MOT17-05": 0.088,
-  "MOT17-09": 0.558,
-  "MOT17-10": 0.543,
-  "MOT17-11": 0.509,
-  "MOT17-13": 0.486
+  "MOT17-02": 0.552,
+  "MOT17-04": 0.554,
+  "MOT17-05": 0.104,
+  "MOT17-09": 0.634,
+  "MOT17-10": 0.604,
+  "MOT17-11": 0.601,
+  "MOT17-13": 0.592
  },
  "machine": {
-  "os": "Linux-6.18.44-fc-v445-x86_64-with-glibc2.39",
+  "os": "Linux-6.18.44-fc-v470-x86_64-with-glibc2.39",
   "python": "3.13.18",
   "cpus": 4
  },

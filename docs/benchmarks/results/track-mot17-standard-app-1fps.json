@@ -1,0 +1,240 @@
+{
+ "kind": "track",
+ "suite": "mot17",
+ "detector": "standard",
+ "rate": "app",
+ "height": null,
+ "source_fps": 1.0,
+ "grid_s": 1.0,
+ "sequences": [
+  "MOT17-02",
+  "MOT17-04",
+  "MOT17-05",
+  "MOT17-09",
+  "MOT17-10",
+  "MOT17-11",
+  "MOT17-13"
+ ],
+ "metrics": {
+  "combined": {
+   "HOTA": 0.36545981164537483,
+   "DetA": 0.23717375116992412,
+   "AssA": 0.5696588974599835,
+   "MOTA": 0.196285140562249,
+   "IDF1": 0.37973760932944606,
+   "IDSW": 23,
+   "MT": 23,
+   "ML": 244,
+   "FP": 169,
+   "FN": 1409,
+   "Frag": 18
+  },
+  "per_sequence": {
+   "MOT17-02": {
+    "HOTA": 0.11927588757652738,
+    "DetA": 0.03829576750701198,
+    "AssA": 0.37579881094505957,
+    "MOTA": 0.029850746268656716,
+    "IDF1": 0.08379888268156424,
+    "IDSW": 1,
+    "MT": 0,
+    "ML": 45,
+    "FP": 6,
+    "FN": 318,
+    "Frag": 1
+   },
+   "MOT17-04": {
+    "HOTA": 0.4954208363165657,
+    "DetA": 0.4036772391527958,
+    "AssA": 0.6158737401445875,
+    "MOTA": 0.33573141486810554,
+    "IDF1": 0.5697924123120973,
+    "IDSW": 11,
+    "MT": 16,
+    "ML": 29,
+    "FP": 136,
+    "FN": 407,
+    "Frag": 11
+   },
+   "MOT17-05": {
+    "HOTA": 0.253665692318613,
+    "DetA": 0.15770659614062393,
+    "AssA": 0.409577819571982,
+    "MOTA": 0.15416666666666667,
+    "IDF1": 0.25170068027210885,
+    "IDSW": 1,
+    "MT": 2,
+    "ML": 57,
+    "FP": 8,
+    "FN": 194,
+    "Frag": 3
+   },
+   "MOT17-09": {
+    "HOTA": 0.23098646343716425,
+    "DetA": 0.1810530501263413,
+    "AssA": 0.3035914266135382,
+    "MOTA": 0.0707070707070707,
+    "IDF1": 0.2028985507246377,
+    "IDSW": 4,
+    "MT": 2,
+    "ML": 11,
+    "FP": 14,
+    "FN": 74,
+    "Frag": 0
+   },
+   "MOT17-10": {
+    "HOTA": 0.33307228589862364,
+    "DetA": 0.2107801005100869,
+    "AssA": 0.529238919201851,
+    "MOTA": 0.23039215686274508,
+    "IDF1": 0.3712121212121212,
+    "IDSW": 3,
+    "MT": 3,
+    "ML": 29,
+    "FP": 5,
+    "FN": 149,
+    "Frag": 3
+   },
+   "MOT17-11": {
+    "HOTA": 0.10982010314411539,
+    "DetA": 0.060084444126859454,
+    "AssA": 0.2071686545371867,
+    "MOTA": 0.06711409395973154,
+    "IDF1": 0.09876543209876543,
+    "IDSW": 3,
+    "MT": 0,
+    "ML": 32,
+    "FP": 0,
+    "FN": 136,
+    "Frag": 0
+   },
+   "MOT17-13": {
+    "HOTA": 0.0,
+    "DetA": 0.0,
+    "AssA": 0.0,
+    "MOTA": 0.0,
+    "IDF1": 0.0,
+    "IDSW": 0,
+    "MT": 0,
+    "ML": 41,
+    "FP": 0,
+    "FN": 131,
+    "Frag": 0
+   }
+  }
+ },
+ "counts": {
+  "MOT17-02": {
+   "gt_people": 49,
+   "gt_boxes": 335,
+   "counted": 4,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 10,
+   "frames_in_subset": 299,
+   "moving_camera": false
+  },
+  "MOT17-04": {
+   "gt_people": 69,
+   "gt_boxes": 834,
+   "counted": 49,
+   "flagged_possible_duplicate": 2,
+   "frames_analysed": 18,
+   "frames_in_subset": 524,
+   "moving_camera": false
+  },
+  "MOT17-05": {
+   "gt_people": 65,
+   "gt_boxes": 240,
+   "counted": 5,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 30,
+   "frames_in_subset": 418,
+   "moving_camera": true
+  },
+  "MOT17-09": {
+   "gt_people": 21,
+   "gt_boxes": 99,
+   "counted": 7,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 9,
+   "frames_in_subset": 262,
+   "moving_camera": false
+  },
+  "MOT17-10": {
+   "gt_people": 36,
+   "gt_boxes": 204,
+   "counted": 10,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 11,
+   "frames_in_subset": 326,
+   "moving_camera": true
+  },
+  "MOT17-11": {
+   "gt_people": 36,
+   "gt_boxes": 149,
+   "counted": 2,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 15,
+   "frames_in_subset": 449,
+   "moving_camera": true
+  },
+  "MOT17-13": {
+   "gt_people": 41,
+   "gt_boxes": 131,
+   "counted": 0,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 15,
+   "frames_in_subset": 374,
+   "moving_camera": true
+  }
+ },
+ "count_total": {
+  "gt_people": 317,
+  "counted": 77,
+  "ratio": 0.243
+ },
+ "tracker": {
+  "iou_min": 0.25,
+  "min_hits": 5,
+  "gap_s": 1.5,
+  "reentry_s": 3.0,
+  "reentry_dist": 2.0,
+  "edge_px": 4.0,
+  "velocity_smoothing": 0.5,
+  "jump_per_s": 0.0,
+  "jump_skip": [],
+  "algo": "byte",
+  "high_score": 0.3,
+  "low_iou_min": 0.5,
+  "frame_s": 0.2,
+  "first_jump": 1.0,
+  "relink_s": 1.5,
+  "relink_dist": 0.5,
+  "relink_app": 0.85,
+  "nested_ioa": 0.8,
+  "still_hold_s": 6.0,
+  "still_speed": 0.25,
+  "fuse_ioa": 0.7
+ },
+ "model": {
+  "name": "yolox-s",
+  "version": "0.1.1rc0",
+  "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063",
+  "family": "yolox"
+ },
+ "seconds_per_frame": {
+  "MOT17-02": 0.542,
+  "MOT17-04": 0.6,
+  "MOT17-05": 0.11,
+  "MOT17-09": 0.669,
+  "MOT17-10": 0.612,
+  "MOT17-11": 0.58,
+  "MOT17-13": 0.53
+ },
+ "machine": {
+  "os": "Linux-6.18.44-fc-v470-x86_64-with-glibc2.39",
+  "python": "3.13.18",
+  "cpus": 4
+ },
+ "standard_pack": "yolox-s"
+}

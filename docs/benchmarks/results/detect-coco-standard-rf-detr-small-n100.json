@@ -109,7 +109,7 @@
  "model": {
   "name": "rf-detr-small",
   "version": "1.12.1",
-  "sha256": "8ddddc49a9ac24a51d84e8d29c68cdb7430095b0681f914ebf9d09ae43ebc998",
+  "sha256": "70ba705671c08154e422480c7fd369eddd60618c56c835f8c4a742917e4b6d9c",
   "family": "detr"
  },
  "preprocessing": {
@@ -147,13 +147,14 @@
    "7": "truck"
   }
  },
- "seconds_per_image": 0.248,
- "wall_s": 25.1,
+ "seconds_per_image": 0.221,
+ "wall_s": 22.5,
  "machine": {
-  "os": "Linux-6.18.44-fc-v445-x86_64-with-glibc2.39",
-  "python": "3.12.3",
+  "os": "Linux-6.18.44-fc-v470-x86_64-with-glibc2.39",
+  "python": "3.13.18",
   "cpus": 4
  },
+ "height": null,
  "classes": {
   "AP": 0.5085,
   "AP50": 0.7072,
