@@ -58,6 +58,8 @@ export default function QuickStart() {
   const [vids, setVids] = useState<{ videos: any[]; more: boolean } | null>(null);
   const [own, setOwn] = useState<Record<string, any>>({});
   const [changing, setChanging] = useState(false);
+  // The ticked videos (by path in the folder); every video that opens is ticked when the list arrives.
+  const [pick, setPick] = useState<Set<string>>(new Set());
   const [sam, setSam] = useState<any>(null);
   useEffect(() => { api("/reference").then((r) => setSam(r.sam3 ?? null)).catch(() => undefined); }, []);
   const [words, setWords] = useState<any>(null);   // the default words per vehicle class, for "What to look for"
@@ -77,7 +79,8 @@ export default function QuickStart() {
         setG(r); setName((n) => (again && n ? n : r.name)); setErr([]);
         setVids(null);
         if (r.input_type === "video") post("/quick-start/videos", { source_dir: r.source_dir, include_subdirs: true })
-          .then((v) => live && setVids(v)).catch(() => undefined);
+          .then((v) => { if (!live) return; setVids(v); setPick(new Set(v.videos.filter((x: any) => !x.error).map((x: any) => x.rel_path))); })
+          .catch(() => undefined);
         // Names this app cannot read yet: guess their format straight away, so one press teaches it.
         if (r.readable < r.images + r.videos) {
           post("/name-formats/learn", { folder: r.source_dir, zone: "UTC" }).then((l) => live && setLearn(l)).catch(() => undefined);
@@ -92,6 +95,10 @@ export default function QuickStart() {
   const files = g ? g.images + g.videos : 0;
   const video = g?.input_type === "video";
   const st = { ...(g?.settings ?? {}), ...own };
+  const openable = vids ? vids.videos.filter((v) => !v.error) : [];
+  // Some videos unticked: only those ticked are analysed; the others wait in the mission, to be ticked later.
+  const some = video && !!vids && openable.some((v) => !pick.has(v.rel_path));
+  const toggle = (rel: string) => setPick((p) => { const n = new Set(p); if (n.has(rel)) n.delete(rel); else n.add(rel); return n; });
 
   const remember = async () => {
     if (!g) return;
@@ -106,7 +113,8 @@ export default function QuickStart() {
     try {
       if (!g.output_exists) await post("/quick-start/output", { path: g.output_dir });
       const body = { ...st, name: name.trim() || g.name, input_type: g.input_type, country: g.country, iana_zone: g.iana_zone,
-        source_dir: g.source_dir, include_subdirs: true, output_dir: g.output_dir, ...(mode ? { mode } : {}) };
+        source_dir: g.source_dir, include_subdirs: true, output_dir: g.output_dir, ...(mode ? { mode } : {}),
+        ...(some ? { analyse_only: [...pick] } : {}) };
       const check = await post("/missions/validate", body);
       if (check.errors.length) { setErr(check.errors); return; }
       const r = await post("/missions", body);
@@ -120,7 +128,7 @@ export default function QuickStart() {
 
   // Videos need no date or time in their names: they are analysed by their own clock, and a start time can be set
   // for each one later on the mission's video page.
-  const ready = !!g && !reading && files > 0 && (video || g.readable > 0);
+  const ready = !!g && !reading && files > 0 && (video || g.readable > 0) && (!video || !vids || pick.size > 0);
   return (
     <div className="page newm">
       <div className="newm-hero">
@@ -144,13 +152,21 @@ export default function QuickStart() {
               <span className="muted small">{g.readable ? `${g.readable} with a start time in the name; the rest are timed from their own start` : "Timed from the start of each video; no date is needed in the names"}</span>
             </div>
             {!vids && <p className="muted small" role="status">Opening the videos…</p>}
+            {vids && openable.length > 1 && <div className="row newm-pickbar">
+              <span className="muted small">{pick.size} of {openable.length}{vids.more ? "+" : ""} ticked to analyse</span>
+              <button className="linkish" onClick={() => setPick(new Set(openable.map((v) => v.rel_path)))}>Tick all</button>
+              <button className="linkish" onClick={() => setPick(new Set())}>Untick all</button>
+              {some && <span className="muted small">The others wait in the mission; tick them there to analyse them later.</span>}
+            </div>}
             {vids && <div className="newm-vlist">{vids.videos.map((v) => (
-              <div key={v.rel_path} className={`newm-v${v.error ? " bad" : ""}`}>
+              <label key={v.rel_path} className={`newm-v${v.error ? " bad" : ""}${!v.error && !pick.has(v.rel_path) ? " off" : ""}`}>
+                <input type="checkbox" disabled={!!v.error} checked={!v.error && pick.has(v.rel_path)} onChange={() => toggle(v.rel_path)}
+                  aria-label={`Analyse ${v.rel_path}`} />
                 {v.thumb ? <img src={v.thumb} alt="" /> : <div className="ph" />}
                 <span className="mono bidi" title={v.rel_path}>{v.rel_path}</span>
                 <span className="muted small">{v.error ? "cannot be opened" : `${fmtDuration(v.duration_s)}${v.width ? ` · ${v.width}×${v.height}` : ""}${v.codec ? ` · ${v.codec}` : ""}`}</span>
-              </div>))}
-              {vids.more && <div className="muted small">and more…</div>}
+              </label>))}
+              {vids.more && <div className="muted small">and more{some ? ", which wait in the mission" : ""}…</div>}
             </div>}
             {vids && vids.videos.some((v) => v.error) && <div className="msg warn">{vids.videos.filter((v) => v.error).length} file(s) cannot be opened and will be listed as such: {vids.videos.filter((v) => v.error).map((v) => v.rel_path).join(", ")}.</div>}
           </div>}
@@ -204,7 +220,7 @@ export default function QuickStart() {
             <span className="grow" />
             {!video && <button className="big" disabled={!g || reading || files === 0 || busy} onClick={() => create("indoor_outdoor")}
               title="Split these images into indoor and outdoor instead; file names need no capture time">Sort into indoor and outdoor</button>}
-            <button className="primary big" disabled={!ready || busy} onClick={() => create()}>{busy ? "Starting…" : video && g && g.videos > 0 ? `Start analysing ${g.videos.toLocaleString()}${g.more ? "+" : ""} video${g.videos === 1 ? "" : "s"}` : "Start"}</button>
+            <button className="primary big" disabled={!ready || busy} onClick={() => create()}>{busy ? "Starting…" : some ? `Start analysing ${pick.size} of ${g.videos.toLocaleString()}${g.more ? "+" : ""} videos` : video && g && g.videos > 0 ? `Start analysing ${g.videos.toLocaleString()}${g.more ? "+" : ""} video${g.videos === 1 ? "" : "s"}` : "Start"}</button>
           </div>
         </div>
       )}
