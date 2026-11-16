@@ -810,12 +810,27 @@ def _host_allowlist(listening: dict) -> Callable[[str], bool] | None:
     return ok
 
 
+def _more_open_files(want: int = 8192) -> None:
+    """A Mac app opened from Finder gets launchd's limit of 256 open files: polling screens, a running job, model
+    files and each mission's database (with its -wal and -shm files) can use them all up, and opening a database then
+    fails ("unable to open database file"). Raise the soft limit towards the hard one; nothing on Windows."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        cap = want if hard == resource.RLIM_INFINITY else min(want, hard)
+        if soft != resource.RLIM_INFINITY and soft < cap:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (cap, hard))
+    except (ImportError, ValueError, OSError):
+        pass
+
+
 def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                monitor_interval: float = 60, stability_seconds: int = 30, start_monitoring: bool = True,
                plate_factory: Callable | None = None, model_loader: Callable | None = None,
                backup_dir: Path | str | None = None, backup_at: str = "02:00",
                sam_factory: Callable | None = None, sam_status: Callable[[], dict] | None = None,
                listening: dict | None = None) -> FastAPI:
+    _more_open_files()
     data_root = Path(data_root)
     listening = dict(listening or {})       # how the server was started (for the Workers screen)
     DataRoot(data_root)  # create folders and control.db
