@@ -304,3 +304,50 @@ def test_train_dfine_and_rtdetr_on_the_learning_page(tmp_path, monkeypatch):
     job = run({"start_from": f"{m['name']}/{m['version']}"})                    # continues as D-FINE, same size
     assert job["state"] == "finished", job
     assert seen[-1]["arch"] == "d-fine" and seen[-1]["size"] == "small" and seen[-1]["init"].endswith(m["version"])
+
+
+def test_looking_closer_at_low_resolution_pictures(tmp_path, monkeypatch):
+    """The mission setting (off by default) lets the standard detector search tiles down to 160 px: a 480p picture,
+    whose 3x2 tiles are under 360 px, is then searched tile by tile; a sharper picture is searched as before. Other
+    computers analysing a segment are told to do the same."""
+    from fastapi.testclient import TestClient
+
+    from test_web_api import H1, Fake, direct_access, mission
+    from trafficwb.store import DataRoot
+    from trafficwb.web.app import create_app
+    from trafficwb.workers import remote_spec
+
+    root = tmp_path / "models"
+    monkeypatch.setenv("TWB_MODELS", str(root))
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    app = create_app(tmp_path / "data", detector_factory=lambda: (Fake(), {"task": "vehicle_detection"}),
+                     start_monitoring=False, stability_seconds=0)
+    c = direct_access(TestClient(app))
+    mid = mission(c, src, out)
+    _rfdetr_pack(root, "rf-detr-small")
+    url = f"/api/missions/{mid}/detector"
+    assert c.put(url, json={"detector": "rfdetr"}, headers=H1).json()["look_closer"] is False
+    jobs, data = app.state.jobs, DataRoot(tmp_path / "data")
+
+    def searches(det, w, h):
+        calls = []
+        run = det._run
+        det._run = lambda img, ox, oy: calls.append(img.shape[:2]) or run(img, ox, oy)
+        det.detect(np.zeros((h, w, 3), np.uint8))
+        return len(calls)
+
+    plain, _ = jobs.detector_for(data.open_mission(mid))
+    assert plain.settings.min_tile_side == 360 and searches(plain, 854, 480) == 1      # tiles skipped
+    assert remote_spec(jobs, data.open_mission(mid))["look_closer"] is False
+
+    r = c.put(url, json={"detector": "rfdetr", "look_closer": True}, headers=H1)
+    assert r.status_code == 200 and r.json()["look_closer"] is True
+    assert c.get(f"/api/missions/{mid}", headers=H1).json()["config"]["look_closer"] is True
+    closer, _ = jobs.detector_for(data.open_mission(mid))
+    assert closer.settings.min_tile_side == 160 and closer.session is plain.session   # the same loaded model
+    assert searches(closer, 854, 480) == 7                                             # the frame and its 6 tiles
+    assert searches(closer, 1920, 1080) == searches(plain, 1920, 1080) == 7            # sharp pictures: as before
+    assert remote_spec(jobs, data.open_mission(mid))["look_closer"] is True
+    assert c.put(url, json={"detector": "rfdetr", "look_closer": False}, headers=H1).json()["look_closer"] is False

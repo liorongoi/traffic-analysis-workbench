@@ -1210,6 +1210,8 @@ class MissionConfig:
                                      # as they arrive (always so in full auto)
     track_min_frames: int | None = None  # video: analysed frames a target must be seen on before it counts as a target
                                          # (None: 5 with the standard detector, 3 with SAM 3.1 alone)
+    look_closer: bool = False        # the standard detector also searches small tiles of low-resolution pictures
+                                     # (480p and less): finds small, far vehicles there, about 6 times slower
 
     def sources(self) -> list[str]:
         """Every source folder of the mission, the first being source_dir."""

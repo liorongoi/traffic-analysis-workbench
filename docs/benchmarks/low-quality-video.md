@@ -41,3 +41,10 @@ On 1080p drone frames, 480p is 4 to 5 times faster, because the tiles are skippe
 
 The "original" tracking and RF-DETR figures here are today's reruns (`*-rerun-20261116.json`), made with the current
 tracker so every column compares like with like; the earlier files are kept as they were.
+
+## In the app (0.2.14)
+
+A mission's Settings tab has **Look closer at low-resolution video** (or images), off by default. Ticked, the
+standard detector searches tiles down to 160 px instead of 360 px, which is the "tiles down to 160 px" row above:
+480p and smaller pictures are searched tile by tile (about 6 times slower on those), and sharper pictures are
+analysed exactly as before. Other computers helping with a mission's video do the same.
