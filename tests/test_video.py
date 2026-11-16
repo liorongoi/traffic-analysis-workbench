@@ -37,13 +37,13 @@ def car_scene(t: float, cars=((-40, 80, 60),), bg=100) -> np.ndarray:
     return img
 
 
-def make_video(path: Path, dur: float, draw=car_scene, vfr: bool = False) -> list[float]:
+def make_video(path: Path, dur: float, draw=car_scene, vfr: bool = False, fps: int = 25) -> list[float]:
     """Write an H.264 file with millisecond timestamps. Returns the frame times written."""
     c = av.open(str(path), "w")
-    s = c.add_stream("libx264", rate=25)
+    s = c.add_stream("libx264", rate=fps)
     s.width, s.height, s.pix_fmt = W, H, "yuv420p"
     s.time_base = s.codec_context.time_base = Fraction(1, 1000)
-    s.options = {"g": "25", "bf": "0", "crf": "18"}
+    s.options = {"g": str(fps), "bf": "0", "crf": "18"}
     t, times = 0.0, []
     while t < dur - 1e-9:
         ms = int(round(t * 1000))
@@ -52,7 +52,7 @@ def make_video(path: Path, dur: float, draw=car_scene, vfr: bool = False) -> lis
         for p in s.encode(fr):
             c.mux(p)
         times.append(ms / 1000)
-        t += (0.02 if int(t * 2) % 2 else 0.06) if vfr else 0.04
+        t += (0.02 if int(t * 2) % 2 else 0.06) if vfr else 1.0 / fps
     for p in s.encode():
         c.mux(p)
     c.close()
@@ -657,8 +657,31 @@ def test_only_the_videos_ticked_when_the_mission_is_made_are_analysed(tmp_path, 
     assert not st["b.mp4"]["analysed"] and st["b.mp4"]["selected"]          # waits, ticked on the video page
     assert "analyse_only" not in c.get(f"/api/missions/{mid}", headers=H1).text
 
+    if analyse_new:
+        return      # (new videos start by themselves: the folder watch scans in the background, tested elsewhere)
     # Ticked later on the video page, it is analysed then.
     c.post(f"/api/missions/{mid}/catalog/analyse", json={"version_ids": [st["b.mp4"]["id"]]}, headers=H1)
     wait(c, mid)
     st = {v["rel_path"]: v for v in c.get(f"/api/missions/{mid}/catalog?refresh=false", headers=H1).json()["videos"]}
     assert all(v["analysed"] for v in st.values())
+
+
+def test_a_camera_recording_one_frame_a_second_still_counts_its_targets(tmp_path):
+    # A car in sight for 4 s of a 1-frame-a-second recording is seen on 4 frames: fewer than the 5 a target needs at 5
+    # analysed frames a second, but the same time in sight, so it counts.
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    make_video(src / "slow.mp4", 6.0, lambda t: car_scene(t, cars=((60, 80, 12),) if 0.5 < t < 4.5 else ()), fps=1)
+    dr = DataRoot(tmp_path / "data")
+    cfg = MissionConfig(name="v", input_type="video", mode="general_traffic", country="IL", iana_zone="Asia/Jerusalem",
+                        source_dir=str(src), include_subdirs=False, processing="one_time", output_dir=str(out),
+                        export_formats=["csv"])
+    m = dr.create_mission(cfg, "lior")
+    cycle(m, stability_seconds=0)
+    vp = VideoProcessor(m, RedDetector(), {})
+    vp.process_all()
+    assert len(VideoService(m).events()) == 1
+    t = vp._tracker_for({"nominal_fps": 1.0})
+    assert t.frame_s == 1.0 and t.min_hits == 2
+    assert vp._tracker_for({"nominal_fps": 25.0}) == vp.s.tracker      # an ordinary camera: unchanged

@@ -327,12 +327,33 @@ def subset(images: list[dict], anns: list[dict], limit: int | None, seed: int) -
     return sorted(random.Random(seed).sample(pool, min(limit, len(pool))), key=lambda i: i["id"])
 
 
+class LowRes:
+    """A detector seeing the picture as a lower-resolution camera would record it: shrunk to ``height`` pixels
+    high (never enlarged), its boxes scaled back to the picture's own pixels for scoring."""
+
+    def __init__(self, det, height: int):
+        self.det, self.height = det, height
+
+    def __getattr__(self, name):
+        return getattr(self.det, name)
+
+    def detect(self, img, area=None):
+        h, w = img.shape[:2]
+        s = min(1.0, self.height / h)
+        if s >= 1.0:
+            return self.det.detect(img)
+        small = cv2.resize(img, (max(1, round(w * s)), max(1, round(h * s))), interpolation=cv2.INTER_AREA)
+        return [replace(d, box=tuple(round(v / s, 1) for v in d.box)) for d in self.det.detect(small)]
+
+
 def run_detect(a) -> dict:
     data = Path(a.data)
     gt = {"coco": coco_gt, "visdrone": visdrone_gt, "hituav": hituav_gt}[a.suite](data)
     images = subset(gt["images"], gt["annotations"], a.limit, a.seed)
     det, desc = build_detector(a.detector, Path(a.models) if a.models else None, coco80=gt.get("coco80"),
                                standard_pack=a.standard_pack)
+    if a.height:
+        det = LowRes(det, a.height)
     names = {v: k for k, v in gt["coco80"].items()} if a.detector == "published" else dict(CATS)
     if a.detector != "published":
         names.update({"van": CATS["car"]})
@@ -352,7 +373,7 @@ def run_detect(a) -> dict:
                  "image_ids": [i["id"] for i in images] if a.limit else "all", "seed": a.seed,
                  "model": desc.get("model"), "preprocessing": desc.get("preprocessing"),
                  "seconds_per_image": round(float(np.mean(secs)), 3), "wall_s": round(time.monotonic() - t_all, 1),
-                 "machine": machine()}
+                 "machine": machine(), "height": a.height}
     md = MAX_DETS[a.suite]
     if a.detector == "published":
         coco80 = gt["coco80"]
@@ -521,6 +542,10 @@ def run_track(a) -> dict:
         grid_s = max(vset.interval_s, sam_s) if a.rate == "app" else None
     if a.detector != "sam3":
         det = _low_threshold(det, vset.low_score)
+    if a.height:
+        det = LowRes(det, a.height)
+    if a.source_fps:          # a camera recording fewer frames a second: every one is analysed, further apart
+        grid_s = max(vset.interval_s, 1.0 / a.source_fps)
     if a.detector != "standard":
         params = replace(params, jump_per_s=3.0)
     work = Path(tempfile.mkdtemp(prefix="twb-mot-"))
@@ -550,6 +575,7 @@ def run_track(a) -> dict:
     tot_gt = sum(c["gt_people"] for c in counts.values())
     tot = sum(c["counted"] for c in counts.values())
     return {"kind": "track", "suite": "mot17", "detector": a.detector, "rate": a.rate,
+            "height": a.height, "source_fps": a.source_fps,
             "grid_s": grid_s, "sequences": names, "metrics": m, "counts": counts,
             "count_total": {"gt_people": tot_gt, "counted": tot, "ratio": round(tot / tot_gt, 3) if tot_gt else None},
             "tracker": asdict(params), "model": desc.get("model"), "seconds_per_frame": timing,
@@ -566,10 +592,11 @@ def machine() -> dict:
 def result_name(r: dict) -> str:
     pack = r.get("standard_pack", "yolox-s")
     det = r["detector"] if pack == "yolox-s" or r["detector"] in ("sam3", "published") else f"{r['detector']}-{pack}"
+    low = (f"-{r['height']}p" if r.get("height") else "") + (f"-{r['source_fps']:g}fps" if r.get("source_fps") else "")
     if r["kind"] == "track":
-        return f"track-{r['suite']}-{det}-{r['rate']}.json"
+        return f"track-{r['suite']}-{det}-{r['rate']}{low}.json"
     n = "all" if r["image_ids"] == "all" else f"n{r['images']}"
-    return f"detect-{r['suite']}-{det}-{n}.json"
+    return f"detect-{r['suite']}-{det}{low}-{n}.json"
 
 
 def pct(v) -> str:
@@ -618,7 +645,9 @@ def main(argv=None) -> int:
     r = sub.add_parser("report")
     for p in (d, t, r):
         p.add_argument("--out", default=str(ROOT / "docs" / "benchmarks" / "results"))
+    t.add_argument("--source-fps", type=float, help="a lower frame rate the camera records at (e.g. 2): frames that far apart")
     for p in (d, t):
+        p.add_argument("--height", type=int, help="a lower resolution: shrink each picture to this many pixels high")
         p.add_argument("--models", help="model packs folder (default: TWB_MODELS or <repo>/models)")
         p.add_argument("--standard-pack", default="yolox-s",
                        help="the standard detector's model pack, e.g. a trained or imported one (default yolox-s)")

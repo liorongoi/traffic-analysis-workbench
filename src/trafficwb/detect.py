@@ -348,7 +348,36 @@ class DetrDetector(_OnnxDetector):
         return dets
 
 
-FAMILIES = {"yolox": YoloxDetector, "detr": DetrDetector}
+class YoloDetector(_OnnxDetector):
+    """Ultralytics-style YOLO exported to ONNX without end-to-end NMS (YOLOv8, YOLO11, YOLO26): one output of
+    (4 + 80) x anchors, boxes as centre and size in input pixels, class scores already between 0 and 1. RGB values
+    in 0..1, letterboxed top-left with pad 114, as YOLOX."""
+    family = "yolo"
+
+    def _preprocessing(self) -> dict:
+        return {"letterbox": self.size, "pad": 114, "colour": "RGB", "scale": "1/255"}
+
+    def _run(self, img: np.ndarray, ox: int, oy: int) -> list[Detection]:
+        if not self.classes:
+            return []
+        x, r = _letterbox(img, self.size)
+        x = (x[..., ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
+        out = self.session.run(None, {self.input_name: np.ascontiguousarray(x)})[0][0].T     # anchors x (4 + 80)
+        ids = sorted(self.classes)
+        veh = out[:, [4 + i for i in ids]]
+        conf = veh.max(1)
+        keep = np.where(conf >= self.settings.score_threshold)[0]
+        dets = []
+        h, w = img.shape[:2]
+        for k in keep:
+            cx, cy, bw, bh = out[k, :4] / r
+            d = self._detection(ids, veh[k], (cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2), w, h, ox, oy)
+            if d is not None:
+                dets.append(d)
+        return dets
+
+
+FAMILIES = {"yolox": YoloxDetector, "detr": DetrDetector, "yolo": YoloDetector}
 
 
 def make_detector(pack: ModelPack, settings: DetectorSettings | None = None, accelerator: str | None = None):

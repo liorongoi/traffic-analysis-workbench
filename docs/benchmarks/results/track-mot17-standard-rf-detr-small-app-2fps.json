@@ -1,0 +1,240 @@
+{
+ "kind": "track",
+ "suite": "mot17",
+ "detector": "standard",
+ "rate": "app",
+ "height": null,
+ "source_fps": 2.0,
+ "grid_s": 0.5,
+ "sequences": [
+  "MOT17-02",
+  "MOT17-04",
+  "MOT17-05",
+  "MOT17-09",
+  "MOT17-10",
+  "MOT17-11",
+  "MOT17-13"
+ ],
+ "metrics": {
+  "combined": {
+   "HOTA": 0.4690602459301751,
+   "DetA": 0.3867379619698207,
+   "AssA": 0.5793192262351198,
+   "MOTA": 0.2973939703628002,
+   "IDF1": 0.5306183560413236,
+   "IDSW": 87,
+   "MT": 53,
+   "ML": 146,
+   "FP": 757,
+   "FN": 1906,
+   "Frag": 127
+  },
+  "per_sequence": {
+   "MOT17-02": {
+    "HOTA": 0.3003554024635201,
+    "DetA": 0.22960944395301633,
+    "AssA": 0.395184549661243,
+    "MOTA": 0.1712121212121212,
+    "IDF1": 0.3496199782844734,
+    "IDSW": 10,
+    "MT": 4,
+    "ML": 28,
+    "FP": 69,
+    "FN": 468,
+    "Frag": 18
+   },
+   "MOT17-04": {
+    "HOTA": 0.5618534301931056,
+    "DetA": 0.4767161107149461,
+    "AssA": 0.6762914930755926,
+    "MOTA": 0.32507739938080493,
+    "IDF1": 0.6154838709677419,
+    "IDSW": 18,
+    "MT": 24,
+    "ML": 16,
+    "FP": 471,
+    "FN": 601,
+    "Frag": 49
+   },
+   "MOT17-05": {
+    "HOTA": 0.4203870027214818,
+    "DetA": 0.3689776952485962,
+    "AssA": 0.4821024954690742,
+    "MOTA": 0.3747412008281574,
+    "IDF1": 0.5071895424836601,
+    "IDSW": 7,
+    "MT": 7,
+    "ML": 37,
+    "FP": 47,
+    "FN": 248,
+    "Frag": 13
+   },
+   "MOT17-09": {
+    "HOTA": 0.3396314830280785,
+    "DetA": 0.28237902426897354,
+    "AssA": 0.41306923407735674,
+    "MOTA": 0.18781725888324874,
+    "IDF1": 0.37662337662337664,
+    "IDSW": 10,
+    "MT": 1,
+    "ML": 8,
+    "FP": 32,
+    "FN": 118,
+    "Frag": 10
+   },
+   "MOT17-10": {
+    "HOTA": 0.48619508401580763,
+    "DetA": 0.44652096260735014,
+    "AssA": 0.5366729306673668,
+    "MOTA": 0.45185185185185184,
+    "IDF1": 0.6257142857142857,
+    "IDSW": 14,
+    "MT": 6,
+    "ML": 11,
+    "FP": 49,
+    "FN": 159,
+    "Frag": 23
+   },
+   "MOT17-11": {
+    "HOTA": 0.3873137668683709,
+    "DetA": 0.374357577089634,
+    "AssA": 0.4052180238878046,
+    "MOTA": 0.3525423728813559,
+    "IDF1": 0.48851774530271397,
+    "IDSW": 20,
+    "MT": 7,
+    "ML": 20,
+    "FP": 30,
+    "FN": 141,
+    "Frag": 13
+   },
+   "MOT17-13": {
+    "HOTA": 0.31397934886968004,
+    "DetA": 0.23266126649499047,
+    "AssA": 0.4261623500295539,
+    "MOTA": 0.08108108108108109,
+    "IDF1": 0.3399014778325123,
+    "IDSW": 8,
+    "MT": 4,
+    "ML": 26,
+    "FP": 59,
+    "FN": 171,
+    "Frag": 1
+   }
+  }
+ },
+ "counts": {
+  "MOT17-02": {
+   "gt_people": 49,
+   "gt_boxes": 660,
+   "counted": 35,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 20,
+   "frames_in_subset": 299,
+   "moving_camera": false
+  },
+  "MOT17-04": {
+   "gt_people": 69,
+   "gt_boxes": 1615,
+   "counted": 78,
+   "flagged_possible_duplicate": 1,
+   "frames_analysed": 35,
+   "frames_in_subset": 524,
+   "moving_camera": false
+  },
+  "MOT17-05": {
+   "gt_people": 70,
+   "gt_boxes": 483,
+   "counted": 19,
+   "flagged_possible_duplicate": 1,
+   "frames_analysed": 60,
+   "frames_in_subset": 418,
+   "moving_camera": true
+  },
+  "MOT17-09": {
+   "gt_people": 22,
+   "gt_boxes": 197,
+   "counted": 14,
+   "flagged_possible_duplicate": 1,
+   "frames_analysed": 18,
+   "frames_in_subset": 262,
+   "moving_camera": false
+  },
+  "MOT17-10": {
+   "gt_people": 36,
+   "gt_boxes": 405,
+   "counted": 29,
+   "flagged_possible_duplicate": 6,
+   "frames_analysed": 22,
+   "frames_in_subset": 326,
+   "moving_camera": true
+  },
+  "MOT17-11": {
+   "gt_people": 37,
+   "gt_boxes": 295,
+   "counted": 21,
+   "flagged_possible_duplicate": 2,
+   "frames_analysed": 30,
+   "frames_in_subset": 449,
+   "moving_camera": true
+  },
+  "MOT17-13": {
+   "gt_people": 42,
+   "gt_boxes": 259,
+   "counted": 20,
+   "flagged_possible_duplicate": 0,
+   "frames_analysed": 30,
+   "frames_in_subset": 374,
+   "moving_camera": true
+  }
+ },
+ "count_total": {
+  "gt_people": 325,
+  "counted": 216,
+  "ratio": 0.665
+ },
+ "tracker": {
+  "iou_min": 0.25,
+  "min_hits": 5,
+  "gap_s": 1.5,
+  "reentry_s": 3.0,
+  "reentry_dist": 2.0,
+  "edge_px": 4.0,
+  "velocity_smoothing": 0.5,
+  "jump_per_s": 0.0,
+  "jump_skip": [],
+  "algo": "byte",
+  "high_score": 0.3,
+  "low_iou_min": 0.5,
+  "frame_s": 0.2,
+  "first_jump": 1.0,
+  "relink_s": 1.5,
+  "relink_dist": 0.5,
+  "relink_app": 0.85,
+  "nested_ioa": 0.8,
+  "still_hold_s": 6.0,
+  "still_speed": 0.25,
+  "fuse_ioa": 0.7
+ },
+ "model": {
+  "name": "rf-detr-small",
+  "version": "1.12.1",
+  "sha256": "70ba705671c08154e422480c7fd369eddd60618c56c835f8c4a742917e4b6d9c",
+  "family": "detr"
+ },
+ "seconds_per_frame": {
+  "MOT17-02": 1.561,
+  "MOT17-04": 1.57,
+  "MOT17-05": 0.235,
+  "MOT17-09": 1.523,
+  "MOT17-10": 1.528,
+  "MOT17-11": 1.587,
+  "MOT17-13": 1.607
+ },
+ "machine": {
+  "os": "Linux-6.18.44-fc-v470-x86_64-with-glibc2.39",
+  "python": "3.13.18",
+  "cpus": 4
+ },
+ "standard_pack": "rf-detr-small"
+}
