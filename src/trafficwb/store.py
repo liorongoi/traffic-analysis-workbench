@@ -1090,6 +1090,27 @@ CREATE TABLE video_platform (
 );
 CREATE INDEX ix_video_platform ON video_platform(source_version_id);
 """,
+    27: """
+-- Fixed lights learned per view: places where a light shows up again and again at exactly the same spot (a street
+-- lamp, a lit sign, a reflector), counted only over the images where it is lit, so a lamp that is off part of the
+-- time is still found. JSON list of {cx, cy, area, images, sd}.
+ALTER TABLE background_model ADD COLUMN fixed_sites TEXT;
+-- Places the operator marked as a fixed target (a street light or sign the detector takes for a vehicle). Machine
+-- boxes there are left out of the view's results, in every image, from the moment of marking; undone by removing it.
+CREATE TABLE fixed_target (
+  id INTEGER PRIMARY KEY,
+  view_id INTEGER NOT NULL REFERENCES camera_view(id),
+  x1 REAL NOT NULL, y1 REAL NOT NULL, x2 REAL NOT NULL, y2 REAL NOT NULL,
+  source_version_id INTEGER REFERENCES source_version(id),   -- the image it was marked on
+  author TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL,
+  removed_at TEXT,
+  removed_by TEXT
+);
+CREATE INDEX ix_fixed_target ON fixed_target(view_id);
+ALTER TABLE light_group ADD COLUMN fixed_rev TEXT;   -- the view's fixed targets the grouping saw (night_service)
+""",
 }
 
 

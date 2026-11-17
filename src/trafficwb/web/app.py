@@ -178,7 +178,7 @@ class TimePreviewBody(BaseModel):
 class ObjectBody(BaseModel):
     box: list[float] | None = None
     cls: str | None = None
-    action: str | None = None   # remove | restore | reclass | move
+    action: str | None = None   # remove | restore | reclass | move | fixed
     note: str | None = None
 
 
@@ -1545,6 +1545,9 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             "classes": rs.classes(),
             "uncounted_classes": sorted(rs.uncounted()),
             "candidates": [c.__dict__ for c in rs.candidates(version_id)],
+            "fixed_targets": [{"id": t["id"], "box": [t["x1"], t["y1"], t["x2"], t["y2"]], "author": t["author"],
+                               "created_at": t["created_at"], "source_version_id": t["source_version_id"]}
+                              for t in rs.fixed_targets(view_id)],
             "lights": [li.__dict__ for li in NightService(m).lights(version_id)],
             "bands": NightService(m).bands(view_id) if cond and cond["condition"] in ("night", "dusk") else None,
             "regions": [{"uid": x.uid, "kind": x.kind, "name": x.name, "polygon": x.polygon}
@@ -1577,10 +1580,32 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         acts = {"remove": lambda: rs.remove(v, uid, u.username, body.note),
                 "restore": lambda: rs.restore(v, uid, u.username),
                 "reclass": lambda: rs.reclass(v, uid, body.cls or "", u.username, body.note),
-                "move": lambda: rs.move(v, uid, body.box, u.username)}
+                "move": lambda: rs.move(v, uid, body.box, u.username),
+                "fixed": lambda: rs.mark_fixed(v, uid, u.username, body.note)}
         if body.action not in acts:
-            raise ApiError(400, "bad_action", "Use remove, restore, reclass or move.")
+            raise ApiError(400, "bad_action", "Use remove, restore, reclass, move or fixed.")
         _edit(acts[body.action])
+        return {"ok": True}
+
+    @app.get("/api/missions/{mission_id}/views/{view_id}/fixed-targets")
+    def fixed_targets(view_id: int, m: Mission = Depends(mission)):
+        """Places marked as fixed targets in the view, with how many machine boxes each leaves out."""
+        rs = ReviewService(m)
+        rows = rs.fixed_targets(view_id)
+        hits = {t["id"]: 0 for t in rows}
+        if rows:
+            for (v,) in m.con.execute("SELECT source_version_id FROM view_assignment WHERE view_id=? AND superseded_by IS NULL",
+                                      (view_id,)).fetchall():
+                for o in rs.objects(v):
+                    if o.fixed_target_id in hits:
+                        hits[o.fixed_target_id] += 1
+        return [{"id": t["id"], "box": [t["x1"], t["y1"], t["x2"], t["y2"]], "source_version_id": t["source_version_id"],
+                 "author": t["author"], "created_at": t["created_at"], "note": t["note"], "boxes_left_out": hits[t["id"]]}
+                for t in rows]
+
+    @app.delete("/api/missions/{mission_id}/fixed-targets/{target_id}")
+    def fixed_target_remove(target_id: int, m: Mission = Depends(mission), u: User = Depends(user)):
+        _edit(lambda: ReviewService(m).unmark_fixed(target_id, u.username))
         return {"ok": True}
 
     @app.post("/api/missions/{mission_id}/items/{version_id}/candidates/{uid}")

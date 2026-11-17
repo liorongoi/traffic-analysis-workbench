@@ -16,6 +16,7 @@ const STYLE = {
   confirmed: { stroke: "var(--human)", dash: "10 3 2 3" },
   plate: { stroke: "var(--plate)", dash: "" },
   plateHuman: { stroke: "var(--plate)", dash: "6 3" },
+  fixed: { stroke: "var(--exclude)", dash: "1 3" },
 };
 const PLATE_REVIEW: Record<string, string> = {
   pending: "not reviewed", confirmed: "confirmed", corrected: "corrected", unreadable: "unreadable (operator)", no_plate: "no plate (operator)",
@@ -121,6 +122,8 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
       else if ((k === "delete" || k === "backspace") && selObj) objAct(selObj.uid, { action: selObj.status === "removed" ? "restore" : "remove" });
       else if ((k === "delete" || k === "backspace") && selCand) candAct(selCand.uid, { action: "reject" });
       else if (k === "c" && selCand) candAct(selCand.uid, { action: "confirm", cls: drawCls });
+      else if (k === "f" && selCand) candAct(selCand.uid, { action: "persistent" });
+      else if (k === "f" && selObj && selObj.origin !== "human" && selObj.status === "present" && !selObj.fixed_target_id) objAct(selObj.uid, { action: "fixed" });
       else if (k === "g" && pickedLights.length) run(() => post(`${base}/regroup`, { light_ids: pickedLights })).then(() => setPickedLights([]));
       else if (/^[1-9]$/.test(k) && Number(k) <= CLASSES.length) {
         const cls = CLASSES[Number(k) - 1];
@@ -244,6 +247,13 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
                 <text x={W - 6 * sw} y={a + 14 * sw} textAnchor="end" fill="var(--band)" fontSize={12 * sw} paintOrder="stroke" stroke="#000" strokeWidth={2.5 * sw}>{name as string}</text>
               </g>;
             })}
+            {overlays && (item.fixed_targets ?? []).map((t) => (
+              <g key={`ft${t.id}`} pointerEvents="none">
+                <rect x={t.box[0]} y={t.box[1]} width={t.box[2] - t.box[0]} height={t.box[3] - t.box[1]} fill="transparent"
+                  stroke={STYLE.fixed.stroke} strokeWidth={sw} strokeDasharray={`${1 * sw} ${3 * sw}`} />
+                <text x={t.box[0]} y={t.box[3] + 11 * sw} fill={STYLE.fixed.stroke} fontSize={10 * sw} paintOrder="stroke" stroke="#000" strokeWidth={2.5 * sw}>fixed</text>
+              </g>
+            ))}
             {overlays && item.objects.filter((o) => o.status === "present" || showRemoved).map((o: Obj) => rect(
               o.box, STYLE[o.origin],
               `${LETTER[o.origin]} ${o.cls}${o.score != null && o.correction === "none" ? " " + o.score.toFixed(2) : ""}${o.status === "removed" ? " removed" : ""}${o.in_region === 0 ? " (outside region)" : ""}`,
@@ -373,6 +383,16 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
                 <button className="danger" onClick={() => objAct(selObj.uid, { action: selObj.status === "removed" ? "restore" : "remove" })}>
                   {selObj.status === "removed" ? "Restore" : "Not a vehicle"} <kbd>Del</kbd></button>
               </div>
+              {selObj.fixed_target_id ? (
+                <div className="muted" style={{ marginTop: 6 }}>Left out: this place is marked as a fixed target. “Restore” keeps this one box;
+                  {" "}<button className="linkish" onClick={() => run(() => api(`/missions/${missionId}/fixed-targets/${selObj.fixed_target_id}`, { method: "DELETE" }))}>
+                    remove the fixed target</button> to bring back every box there.</div>
+              ) : selObj.origin !== "human" && selObj.status === "present" && (
+                <div className="row" style={{ marginTop: 6 }}>
+                  <button title="A street light, a sign or anything else that never moves: boxes at this place are left out in every image of this camera, now and in later runs"
+                    onClick={() => objAct(selObj.uid, { action: "fixed" })}>Fixed target (street light, sign) <kbd>F</kbd></button>
+                </div>
+              )}
             </div>
           )}
           {selObj && selPlate && (
@@ -426,7 +446,8 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
               <div className="row" style={{ marginTop: 8 }}>
                 <button className="primary" onClick={() => candAct(selCand.uid, { action: "confirm", cls: drawCls })}>Vehicle ({drawCls}) <kbd>C</kbd></button>
                 <button onClick={() => candAct(selCand.uid, { action: "reject" })}>Not a vehicle <kbd>Del</kbd></button>
-                <button onClick={() => candAct(selCand.uid, { action: "persistent" })}>Fixed light (lamp, sign)</button>
+                <button onClick={() => candAct(selCand.uid, { action: "persistent" })}
+                  title="Lights at this place are left out in every night and dusk image of this camera, lit or not">Fixed light (lamp, sign) <kbd>F</kbd></button>
               </div>
               <p className="muted">To regroup, click lights on the image (circles), then press <kbd>G</kbd>. {pickedLights.length > 0 && `${pickedLights.length} chosen.`}</p>
             </div>
@@ -484,7 +505,8 @@ export default function Investigate({ missionId, versionId }: { missionId: strin
             <h2>Keyboard shortcuts</h2>
             <table className="t"><tbody>
               {[["K / J", "Next / previous image"], ["A", "Approve this image and move on to the next one to review"], ["B", "Draw a box for a missed vehicle"], ["Del", "Reject the selected object or candidate"],
-                ["C", "Confirm the selected candidate as a vehicle"], ["G", "Group the chosen lights into one candidate"], ["1–" + CLASSES.length, "Set class: " + CLASSES.join(", ")],
+                ["C", "Confirm the selected candidate as a vehicle"],
+                ["F", "Mark the selected box or lights as a fixed target (street light, sign): left out at this place in every image of this camera"], ["G", "Group the chosen lights into one candidate"], ["1–" + CLASSES.length, "Set class: " + CLASSES.join(", ")],
                 ["H", "Hide or show results on the image"], ["Scroll, + / −", "Zoom in or out around the pointer"], ["0", "Fit the whole image"],
                 ["Space + drag", "Move around when zoomed in (or drag with the middle button)"], ["Esc", "Cancel drawing or selection"], ["?", "This help"]].map(([k, v]) => <tr key={k}><td><kbd>{k}</kbd></td><td>{v}</td></tr>)}
             </tbody></table>

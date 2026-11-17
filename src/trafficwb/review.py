@@ -43,6 +43,7 @@ class Obj:
     correction: str = "none"        # none | reclassed | moved | reclassed_moved | removed | added
     run_item_id: int | None = None
     vehicle: bool = True            # False: a class of the mission's own that is not counted (a pedestrian)
+    fixed_target_id: int | None = None   # left out because it sits on a place marked as a fixed target
 
     @property
     def counted(self) -> bool:
@@ -102,6 +103,19 @@ class Candidate:
     cls: str | None = None          # for confirmed candidates
     band: str | None = None         # far | middle | close (night distance band at the group's row)
     recurrence: float | None = None # share of the view's images lit at this place
+
+
+def on_fixed_target(box, target, min_iou: float = 0.3, max_scale: float = 3.0) -> bool:
+    """A box is on a fixed target when it overlaps it well, or its centre lies in it and its size is alike (the same
+    lamp found a little larger or smaller from image to image)."""
+    x1, y1, x2, y2 = box
+    a1, b1, a2, b2 = target
+    iw, ih = max(0.0, min(x2, a2) - max(x1, a1)), max(0.0, min(y2, b2) - max(y1, b1))
+    ab, at = max(1e-6, (x2 - x1) * (y2 - y1)), max(1e-6, (a2 - a1) * (b2 - b1))
+    if iw * ih / (ab + at - iw * ih) >= min_iou:
+        return True
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    return a1 <= cx <= a2 and b1 <= cy <= b2 and 1 / max_scale <= ab / at <= max_scale
 
 
 class ReviewService:
@@ -171,11 +185,74 @@ class ReviewService:
             else:
                 o.correction = {(True, True): "reclassed_moved", (True, False): "reclassed",
                                 (False, True): "moved"}.get((o.cls != o.machine_cls, moved), "none")
+        self._apply_fixed_targets(version_id, objs, revs)
         out = list(objs.values())
         uncounted = self.uncounted()
         for o in out:
             o.vehicle = o.cls not in uncounted
         return out if include_removed else [o for o in out if o.status == "present"]
+
+    # ---------- fixed targets ----------
+    def fixed_targets(self, view_id: int | None, include_removed: bool = False) -> list:
+        if view_id is None:
+            return []
+        return self.con.execute("SELECT * FROM fixed_target WHERE view_id=?" + ("" if include_removed else
+                                " AND removed_at IS NULL") + " ORDER BY id", (view_id,)).fetchall()
+
+    def _apply_fixed_targets(self, version_id: int, objs: dict, revs) -> None:
+        """Machine boxes on a place marked as a fixed target are left out, in every image of the view, also those
+        found before the marking. Restoring one box by hand after the marking keeps it."""
+        from .views import ViewService
+        targets = self.fixed_targets(ViewService(self.m).current_view(version_id))
+        if not targets:
+            return
+        last = {r["object_uid"]: r for r in revs}
+        for o in objs.values():
+            if o.origin == "human" or o.status != "present":
+                continue
+            for t in targets:
+                if not on_fixed_target(o.box, (t["x1"], t["y1"], t["x2"], t["y2"])):
+                    continue
+                r = last.get(o.uid)
+                if r is not None and r["action"] == "restored" and r["created_at"] >= t["created_at"]:
+                    break
+                o.status, o.correction, o.fixed_target_id = "removed", "fixed_target", t["id"]
+                break
+
+    def mark_fixed(self, version_id: int, uid: str, author: str, note: str | None = None) -> int:
+        """The operator says this box is a fixed target (a street light, a sign): not a vehicle here, ever. Machine
+        boxes at this place are left out of the view's results at once, in every image, without running detection
+        again, and in later runs; night lights there are explained the same way."""
+        from .night_service import NightService
+        from .views import ViewService
+        view_id = ViewService(self.m).current_view(version_id)
+        if view_id is None:
+            raise ValueError("Assign this image to a camera view before marking a fixed target.")
+        o = self._get(version_id, uid)
+        if o.origin == "human":
+            raise ValueError("This box was drawn by hand; remove it instead.")
+        tid = self.con.execute(
+            "INSERT INTO fixed_target(view_id,x1,y1,x2,y2,source_version_id,author,note,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (view_id, *(float(v) for v in o.box), version_id, author, note, utcnow())).lastrowid
+        self._reopen_affected(view_id, author)
+        NightService(self.m).refresh()  # the view's night images are grouped again
+        return tid
+
+    def unmark_fixed(self, target_id: int, author: str) -> None:
+        from .night_service import NightService
+        t = self.con.execute("SELECT * FROM fixed_target WHERE id=? AND removed_at IS NULL", (target_id,)).fetchone()
+        if t is None:
+            raise KeyError("That fixed target does not exist or was already removed.")
+        self.con.execute("UPDATE fixed_target SET removed_at=?, removed_by=? WHERE id=?", (utcnow(), author, target_id))
+        self._reopen_affected(t["view_id"], author)
+        NightService(self.m).refresh()
+
+    def _reopen_affected(self, view_id: int, author: str) -> None:
+        """Approved images of the view whose boxes a fixed target changes go back to unreviewed."""
+        for (v,) in self.con.execute("SELECT source_version_id FROM view_assignment WHERE view_id=? AND superseded_by IS NULL",
+                                     (view_id,)).fetchall():
+            if self.review_status(v) != "unreviewed" and any(o.fixed_target_id for o in self.objects(v)):
+                self._decide(v, "reopened", author)
 
     def classes(self) -> list[str]:
         """The vehicle classes, then the classes of the mission's own (words for SAM 3.1)."""
@@ -332,11 +409,14 @@ class ReviewService:
         view_id = ViewService(self.m).current_view(version_id)
         if view_id is None:
             raise ValueError("Assign this image to a camera view before marking background lights.")
-        cond = self.con.execute("SELECT condition FROM image_condition WHERE source_version_id=?", (version_id,)).fetchone()[0]
         x1, y1, x2, y2 = c.box
         poly = [[x1 - margin, y1 - margin], [x2 + margin, y1 - margin], [x2 + margin, y2 + margin], [x1 - margin, y2 + margin]]
-        lid = self.con.execute("INSERT INTO light_label(view_id,condition,kind,polygon,author,created_at) VALUES (?,?,?,?,?,?)",
-                               (view_id, cond, "persistent", json.dumps(poly), author, utcnow())).lastrowid
+        lid = None
+        # A lamp is fixed whatever the light: the label holds at dusk and at night alike.
+        for cond in ("night", "dusk"):
+            lid = self.con.execute("INSERT INTO light_label(view_id,condition,kind,polygon,author,created_at) VALUES (?,?,?,?,?,?)",
+                                   (view_id, cond, "persistent", json.dumps(poly), author, utcnow())).lastrowid if \
+                cond == "dusk" or lid is None else lid
         self._cand_rev(version_id, c, "persistent_light", author, note=f"light_label {lid}")
         NightService(self.m).refresh()  # the label changes this view's background; regroup its images
         return lid
