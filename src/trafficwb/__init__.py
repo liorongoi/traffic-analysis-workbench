@@ -1,5 +1,5 @@
 """LanePulse (formerly Traffic Analysis Workbench) foundations."""
-__version__ = "0.2.18"
+__version__ = "0.2.19"
 
 
 def safe_console() -> None:

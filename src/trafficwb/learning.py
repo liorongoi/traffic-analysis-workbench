@@ -813,13 +813,14 @@ class LearningService:
 
     def all_datasets(self) -> list[dict]:
         """Dataset versions of every mission on this computer (still images and video), this mission's first."""
-        out = [d | {"mission_id": self.m.id, "mission": self.m.config().name} for d in self.datasets()]
+        out = [d | {"mission_id": self.m.id, "mission": self.m.config().name, "input_type": self.m.input_type}
+               for d in self.datasets()]
         for r in self.m.root.missions():
             if r["id"] == self.m.id or r["state"] != "active":
                 continue
             try:
                 ls = self._open(r["id"])
-                out += [d | {"mission_id": r["id"], "mission": r["name"]} for d in ls.datasets()]
+                out += [d | {"mission_id": r["id"], "mission": r["name"], "input_type": r["input_type"]} for d in ls.datasets()]
             except Exception:          # a mission that cannot be opened just offers nothing
                 continue
         return out
@@ -1115,10 +1116,13 @@ class LearningService:
             (json.dumps(refs), start_from, int(epochs), "running", author, utcnow())).lastrowid
 
     def finish_training_run(self, run_id: int, **f) -> None:
-        cols = ("state", "model_name", "model_version", "evaluation_id", "baseline_evaluation_id", "improved", "error")
+        cols = ("state", "model_name", "model_version", "evaluation_id", "baseline_evaluation_id", "improved", "error",
+                "current_evaluation_id")
         sets = {k: f[k] for k in cols if k in f}
         if "history" in f:
             sets["history"] = json.dumps(f["history"])
+        if "advice" in f:
+            sets["advice"] = None if f["advice"] is None else json.dumps(f["advice"], ensure_ascii=False)
         if sets.get("state") in ("finished", "failed", "cancelled"):
             sets["finished_at"] = utcnow()
         if "improved" in sets and sets["improved"] is not None:
@@ -1134,8 +1138,27 @@ class LearningService:
             d["sources"] = json.loads(d["sources"])
             d["history"] = json.loads(d["history"]) if d["history"] else []
             d["improved"] = None if d["improved"] is None else bool(d["improved"])
+            d["advice"] = json.loads(d["advice"]) if d.get("advice") else None
             out.append(d)
         return out
+
+    def training_run(self, run_id: int) -> dict:
+        for r in self.training_runs():
+            if r["id"] == run_id:
+                return r
+        raise LearningError("No such training round.")
+
+    def decide_round(self, run_id: int, decision: str, author: str) -> dict:
+        """Record the operator's answer to a round's recommendation: replaced (the mission now uses the new model) or
+        kept (the model in use stays). Only a record: the model itself changes through the mission's model setting."""
+        if decision not in ("replaced", "kept"):
+            raise LearningError("The decision is replaced or kept.")
+        r = self.training_run(run_id)
+        if not r["advice"]:
+            raise LearningError("This round has no recommendation to answer.")
+        advice = {**r["advice"], "decision": {"choice": decision, "author": author, "at": utcnow()}}
+        self.finish_training_run(run_id, advice=advice)
+        return self.training_run(run_id)
 
     def carry_over(self) -> dict:
         """Rounds since the last one that improved and did not improve: their data goes into the next round too."""

@@ -13,6 +13,7 @@ const Investigate = lazy(() => import("./pages/Investigate"));
 const RegionEditor = lazy(() => import("./pages/RegionEditor"));
 const Settings = lazy(() => import("./pages/Settings"));
 const GeoPlace = lazy(() => import("./pages/GeoPlace"));
+const Training = lazy(() => import("./pages/Training"));
 
 export default function App() {
   const route = useRoute();
@@ -22,6 +23,7 @@ export default function App() {
   if (section === "new" && id === "full") body = <Wizard />;
   else if (section === "new") body = <QuickStart />;
   else if (section === "settings") body = <Settings section={id} />;
+  else if (section === "training") body = <Training />;
   // Older links: these pages now live in Settings.
   else if (section === "formats" || section === "workers") body = <Settings section={section} />;
   else if (section === "m" && id && sub === "i" && extra) body = <Investigate missionId={id} versionId={Number(extra)} />;
@@ -42,7 +44,8 @@ export default function App() {
           aria-label="Settings" aria-current={inSettings ? "page" : undefined}><GearIcon /></a>
         <div id="top-slot" className="top-slot" />
         <nav className="top-nav" aria-label="Main navigation">
-          <a href="#/" aria-current={section === "m" ? "true" : section !== "new" && !inSettings ? "page" : undefined}>Missions</a>
+          <a href="#/" aria-current={section === "m" ? "true" : section !== "new" && section !== "training" && !inSettings ? "page" : undefined}>Missions</a>
+          <a href="#/training" aria-current={section === "training" ? "page" : undefined}>Training</a>
           <a href="#/new" aria-current={section === "new" ? "page" : undefined}>New mission</a>
         </nav>
         <div className="top-tools">
