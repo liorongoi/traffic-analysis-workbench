@@ -66,10 +66,9 @@ def test_update_backs_up_before_migrating_and_rollback_restores_old_schema(env):
     m.con.close()
     # Make the mission look like it was written by the previous version (one migration behind).
     con = sqlite3.connect(db)
-    assert newest == 27, "update this test to undo the newest migration"
-    con.execute("ALTER TABLE background_model DROP COLUMN fixed_sites")
-    con.execute("DROP TABLE fixed_target")
-    con.execute("ALTER TABLE light_group DROP COLUMN fixed_rev")
+    assert newest == 28, "update this test to undo the newest migration"
+    con.execute("ALTER TABLE training_run DROP COLUMN current_evaluation_id")
+    con.execute("ALTER TABLE training_run DROP COLUMN advice")
     con.execute("DELETE FROM schema_version WHERE version=?", (newest,))
     con.commit()
     con.close()

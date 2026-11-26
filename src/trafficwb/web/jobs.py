@@ -690,6 +690,7 @@ class JobManager:
             job.result["model"] = {"name": r["name"], "version": r["version"]}
             ls.finish_training_run(run_id, model_name=r["name"], model_version=r["version"])
             test_images = len(ls.combine(refs, "test")[0])
+            new_eval = cur = None
             if test_images and p.get("evaluate", True):
                 job.control.stage = "evaluating the new model on the test images"
                 job.done, job.total, job.rate_start, job.rate_done = 0, 0, None, 0
@@ -702,6 +703,8 @@ class JobManager:
                     # The model it started from first (or its earlier identical evaluation), then the new one, so the
                     # newest evaluation is the new model's and "compare" puts the two side by side.
                     base = self._baseline(ls, p, refs, job, eprogress)
+                    # The model this mission uses now, on the same test images, for the replace-or-keep advice.
+                    cur = self._current_evaluation(m, ls, p, refs, job, eprogress, base)
                     job.control.stage = "evaluating the new model on the test images"
                     det = self.load_model(r["name"], r["version"])
                     ev = ls.evaluate(None, det, p["author"], split="test", control=job.control, progress=eprogress,
@@ -714,12 +717,23 @@ class JobManager:
                         better = improved(ev["report"]["overall"], base["report"]["overall"])
                         job.result["improved"] = better
                         ls.finish_training_run(run_id, baseline_evaluation_id=base["id"], improved=better)
+                    if cur is not None:
+                        job.result["current_evaluation"] = cur["id"]
+                        ls.finish_training_run(run_id, current_evaluation_id=cur["id"])
+                    new_eval = ev
                 except Exception as exc:              # the model is installed; evaluating it can be redone by hand
                     from ..process import RunCancelled
                     if isinstance(exc, RunCancelled):
                         final = "cancelled"
                         return
                     job.result["evaluation_error"] = f"{type(exc).__name__}: {exc}"
+            try:                                      # advice only: a failure here never fails the round
+                job.control.stage = "reading the training curves"
+                advice = self._advise(ls, refs, job, new_eval, cur)
+                job.result["advice"] = advice
+                ls.finish_training_run(run_id, advice=advice)
+            except Exception as exc:  # noqa: BLE001
+                job.result["advice_error"] = f"{type(exc).__name__}: {exc}"
             if p.get("auto"):
                 self._auto_decide(m, ls, job, run_id, r, p)
             final = "finished"
@@ -910,6 +924,68 @@ class JobManager:
                 raise
             job.result["baseline_error"] = f"{type(exc).__name__}: {exc}"
             return None
+
+    def _current_evaluation(self, m, ls, p, refs, job, eprogress, base) -> dict | None:
+        """The model the mission uses now (its saved model, else the one in production use) on the same test images:
+        the starting model's evaluation when it is the same model, an earlier identical one, or a new one."""
+        try:
+            det, card = self.standard_for(m)
+            name, version = (card or {}).get("name"), (card or {}).get("version")
+            job.result["current_model"] = {"name": name, "version": version,
+                                           "saved_as": getattr(m.config(), "vehicle_model", None)}
+            if name and version:
+                bm = ((base or {}).get("model") or {}).get("model") or {}
+                if base is not None and (bm.get("name"), bm.get("version")) == (name, version):
+                    return base
+                sources = [{"mission_id": x["mission_id"], "dataset_id": x["dataset_id"]}
+                           for x in ls.combine(refs, "test")[1]]
+                found = ls.find_evaluation(name, version, sources, "test", 0.5)
+                if found:
+                    return found
+            job.control.stage = "evaluating the model in use on the same test images"
+            return ls.evaluate(None, det, p["author"], split="test", control=job.control, progress=eprogress,
+                               datasets=refs)
+        except Exception as exc:
+            from ..process import RunCancelled
+            if isinstance(exc, RunCancelled):
+                raise
+            job.result["current_error"] = f"{type(exc).__name__}: {exc}"
+            return None
+
+    def _advise(self, ls, refs, job, new_eval, cur) -> dict:
+        """What the curves say would help, and replace or keep: both kept with the round, never acted on."""
+        from ..learning import learnt
+        from ..train_advice import curve_advice, swap_advice
+        items = ls.combine(refs)[0]
+        classes: dict[str, int] = {}
+        for it in items:
+            if it["split"] == "train":
+                for b in it["row"]["labels"]["positives"]:
+                    c = learnt(b["cls"]) or b["cls"]
+                    classes[c] = classes.get(c, 0) + 1
+        rep = (new_eval or {}).get("report") or {}
+        hist = job.result.get("history") or []
+        val_before = None
+        for line in job.result.get("log") or []:
+            if line.startswith("Validation loss before training: "):
+                try:
+                    val_before = float(line.rsplit(" ", 1)[-1])
+                except ValueError:
+                    pass
+        curves = curve_advice(hist, job.result.get("epochs"), val_before=val_before,
+                              train_images=sum(1 for i in items if i["split"] == "train"),
+                              val_images=sum(1 for i in items if i["split"] == "val"),
+                              class_counts=classes, overall=rep.get("overall"), by_condition=rep.get("by_condition"))
+        cm = job.result.get("current_model") or {}
+        label = (f"the saved model \u201c{cm['saved_as']}\u201d" if cm.get("saved_as")
+                 else "the model in use" if not cm.get("name") else f"the model in use ({cm['name']} {cm.get('version') or ''})".replace(" )", ")"))
+        crep = (cur or {}).get("report") or {}
+        start = job.params.get("start_from") or "coco"
+        same = bool(cm.get("name")) and f"{cm['name']}/{cm.get('version')}" == start
+        swap = swap_advice(rep.get("overall"), crep.get("overall"), new_by_condition=rep.get("by_condition"),
+                           current_by_condition=crep.get("by_condition"), current_label=label, same_as_start=same)
+        return {"curves": curves, "swap": swap, "current_model": cm,
+                "new_evaluation_id": (new_eval or {}).get("id"), "current_evaluation_id": (cur or {}).get("id")}
 
     # ---------- monitoring ----------
     def set_monitoring(self, mission_id: str, enabled: bool) -> None:

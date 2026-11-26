@@ -428,6 +428,9 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
             : r.evaluation_error ? `. Evaluating it failed (${r.evaluation_error}); evaluate it below by hand.` : ". Evaluate it below, then promote it if it is better."}</div>}
         {job.state === "finished" && r.improved === true && <div className="msg ok">It is better than the model it started from on the same test images. Promote it, or save it by name below.</div>}
         {job.state === "finished" && r.improved === false && <div className="msg warn">It did not improve on the model it started from. Its data is kept for the next round: add more reviewed images, freeze a new dataset version and train again.</div>}
+        {job.state === "finished" && (r.advice || r.training_run) && <AdviceCard s={s} missionId={missionId} act={act}
+          run={(s.training_runs as any[] ?? []).find((x) => x.id === r.training_run) ?? { id: r.training_run, ...r.model && { model_name: r.model.name, model_version: r.model.version } }}
+          live={r.advice} />}
         {job.error && <div className="msg err">{job.error}</div>}
         {job.state === "cancelled" && <div className="muted">Stopped; no model was added.</div>}
         {active && <div className="row" style={{ marginTop: 6 }}>
@@ -442,6 +445,74 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
               <tbody>{r.history.map((h: any) => <tr key={h.epoch}><td>{h.epoch}</td><td>{h.train_loss}</td><td>{h.val_loss ?? "–"}</td></tr>)}</tbody></table>
           </details></div>}
       </div>}
+    </div>
+  );
+}
+
+/** After a training round: what the loss curves say would help, and whether to replace the model this mission uses
+ *  with the new one (recall first). Both are advice: the model changes only when the operator presses Replace. */
+function AdviceCard({ run, s, missionId, act, live }: { run: any; s: any; missionId: string; act: Act; live?: any }) {
+  const a = run?.advice ?? live;
+  if (!a) return null;
+  const c = a.curves ?? { items: [] };
+  const w = a.swap;
+  const f = w?.figures ?? {};
+  const dec = a.decision;
+  const saved = (s.saved_models as any[]).find((x) => x.model_name === run?.model_name && x.model_version === run?.model_version);
+  const inUse = !!saved && s.mission_model === saved.name;
+  const level: Record<string, string> = { warn: "warn", tip: "", ok: "ok" };
+  const replace = () => act(async () => {
+    let name = saved?.name;
+    if (!name) {
+      name = `Round ${run.id} (${run.model_name} ${run.model_version})`.slice(0, 80);
+      await post("/models/saved", { name, description: `Trained in round #${run.id}; chosen from its replace-or-keep advice.`,
+        model_name: run.model_name, model_version: run.model_version, mission_id: missionId, evaluation_id: run.evaluation_id ?? null });
+    }
+    await api(`/missions/${missionId}/vehicle-model`, { method: "PUT", body: { saved: name } });
+    await post(`/missions/${missionId}/learning/rounds/${run.id}/decision`, { decision: "replaced" });
+    return name;
+  }, (name) => `This mission now uses “${name}”. The model before it is still installed; choose it again in mission setup to go back.`);
+  const keep = () => act(() => post(`/missions/${missionId}/learning/rounds/${run.id}/decision`, { decision: "kept" }),
+    () => "Kept the model in use. The new model stays installed; you can still save or use it later.");
+  const row = (label: string, n: any, cur: any, fmt: (v: any) => string, higher = true) => {
+    const d = n != null && cur != null ? n - cur : null;
+    const good = d == null || Math.abs(d) < 1e-9 ? "" : (d > 0) === higher ? "up" : "down";
+    return <tr><td>{label}</td><td className={`adv-${good}`}>{fmt(n)}</td><td>{fmt(cur)}</td></tr>;
+  };
+  return (
+    <div className="advice">
+      <h3>What would improve the model</h3>
+      <p className="advice-summary">{c.summary}</p>
+      {c.items?.length > 0 && <ul className="advice-list">{c.items.map((x: any, i: number) =>
+        <li key={i} className={`advice-item ${level[x.level] ?? ""}`}><b>{x.title}.</b> {x.text}</li>)}</ul>}
+      {w && <>
+        <h3>Replace the model in use, or keep it?</h3>
+        <div className={`msg ${w.verdict === "replace" ? "ok" : w.verdict === "keep" ? "warn" : ""}`} style={{ marginTop: 4 }}>
+          <b>{w.headline}</b>
+          {w.reasons?.map((t: string, i: number) => <div key={i} style={{ marginTop: 4 }}>{t}</div>)}
+          {w.cautions?.map((t: string, i: number) => <div key={`c${i}`} style={{ marginTop: 4 }}>⚠ {t}</div>)}
+        </div>
+        {f.references > 0 && <table className="t advice-table">
+          <thead><tr><th>Same {f.references} test vehicles</th><th>New model</th><th>In use now</th></tr></thead>
+          <tbody>
+            {row("Vehicles found (recall, decides first)", f.recall_new, f.recall_current, (v) => (v == null ? "–" : `${pct(v)}`))}
+            {row("Found boxes that are vehicles (precision)", f.precision_new, f.precision_current, pct)}
+            {row("Wrong boxes on fully reviewed images", f.false_alarms_new, f.false_alarms_current, (v) => (v == null ? "–" : String(v)), false)}
+            {row("F1", f.f1_new, f.f1_current, pct)}
+            {row("AP at IoU 0.5", f.ap50_new, f.ap50_current, pct)}
+          </tbody></table>}
+        <div className="row" style={{ marginTop: 8, gap: 8, alignItems: "center" }}>
+          {dec ? <span className="muted">{dec.choice === "replaced" ? "Replaced" : "Kept the model in use"} by {dec.author} on {String(dec.at).slice(0, 16).replace("T", " ")}.</span>
+            : inUse ? <span className="muted">This mission already uses the new model.</span>
+            : run?.model_name && w.verdict !== "unclear" ? <>
+              <button className={w.verdict === "replace" ? "primary" : ""} onClick={() => {
+                if (window.confirm("Use the new model for this mission from now on? It is saved by name first; the model in use stays installed.")) replace();
+              }}>Replace with the new model</button>
+              <button className={w.verdict === "keep" ? "primary" : ""} onClick={keep}>Keep the model in use</button>
+              <span className="muted">Nothing changes until you choose.</span>
+            </> : null}
+        </div>
+      </>}
     </div>
   );
 }
@@ -599,7 +670,7 @@ function RoundsCard({ s, missionId, act, modelLabel, dataLabel }: {
     <div className="card">
       <h2 style={{ marginTop: 0 }}>Training rounds</h2>
       <table className="t">
-        <thead><tr><th>Round</th><th>Trained on</th><th>Started from</th><th>Epochs</th><th>New model</th><th>F1: start → new</th><th>Result</th><th></th></tr></thead>
+        <thead><tr><th>Round</th><th>Trained on</th><th>Started from</th><th>Epochs</th><th>New model</th><th>F1: start → new</th><th>Result</th><th>Advice</th><th></th></tr></thead>
         <tbody>{runs.map((r) => {
           const n = ev.get(r.evaluation_id)?.report?.overall, b = ev.get(r.baseline_evaluation_id)?.report?.overall;
           const saved = (s.saved_models as any[]).find((x) => x.model_name === r.model_name && x.model_version === r.model_version);
@@ -612,8 +683,11 @@ function RoundsCard({ s, missionId, act, modelLabel, dataLabel }: {
               : r.improved === true ? <span className="badge ok">▲ improved</span>
               : r.improved === false ? <span className="badge failed">did not improve</span> : <span className="badge">not compared</span>}
               {saved && <> <span className="badge">saved as {saved.name}</span></>}</td>
+            <td>{r.advice?.swap ? <span className={`badge ${r.advice.swap.verdict === "replace" ? "ok" : ""}`}>
+              {r.advice.decision ? (r.advice.decision.choice === "replaced" ? "replaced" : "kept")
+                : r.advice.swap.verdict === "replace" ? "replace advised" : r.advice.swap.verdict === "keep" ? "keep advised" : "unclear"}</span> : "–"}</td>
             <td className="row" style={{ gap: 4 }}>
-              {r.history?.length > 0 && <button onClick={() => setSel(r.id)} disabled={shown?.id === r.id}>Loss graph</button>}
+              {r.history?.length > 0 && <button onClick={() => setSel(r.id)} disabled={shown?.id === r.id}>{r.advice ? "Graph and advice" : "Loss graph"}</button>}
               {r.model_name && !saved && <button onClick={() => setSaving(r)}>Save model…</button>}
             </td>
           </tr>;
@@ -624,6 +698,7 @@ function RoundsCard({ s, missionId, act, modelLabel, dataLabel }: {
       {shown?.history?.length > 0 && <div style={{ marginTop: 12 }}>
         <div className="muted" style={{ fontSize: 12.5, marginBottom: 4 }}>Round #{shown.id}: loss per epoch</div>
         <LossChart history={shown.history} />
+        {shown.advice && <AdviceCard run={shown} s={s} missionId={missionId} act={act} />}
       </div>}
     </div>
   );

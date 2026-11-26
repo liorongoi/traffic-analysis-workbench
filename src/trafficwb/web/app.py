@@ -146,6 +146,10 @@ class RecordingReviewBody(BaseModel):
     action: str                            # approve | confirm_rest_and_approve | reopen
 
 
+class RoundDecisionBody(BaseModel):
+    decision: str                          # replaced | kept
+
+
 class VehicleModelBody(BaseModel):
     saved: str | None = None               # a saved model's name; None: the model in production use
 
@@ -2347,6 +2351,13 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         else:
             raise ApiError(400, "bad_action", "Use pause, resume or cancel.")
         return job.snapshot()
+
+    @app.post("/api/missions/{mission_id}/learning/rounds/{run_id}/decision")
+    def round_decision(run_id: int, body: RoundDecisionBody, m: Mission = Depends(mission), u: User = Depends(user)):
+        """The operator's answer to a round's replace-or-keep recommendation. A record only: the model the mission
+        uses changes through its model setting (PUT vehicle-model), never here."""
+        ls = _learn(m)
+        return _learn_call(lambda: ls.decide_round(run_id, body.decision, u.username))
 
     @app.get("/api/missions/{mission_id}/learning/evaluations/{evaluation_id}")
     def evaluation_get(evaluation_id: int, m: Mission = Depends(mission)):

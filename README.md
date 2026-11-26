@@ -26,6 +26,7 @@ Status: **still images (phases 0 to 4), web screens, object search, video part 1
 | `trafficwb.video`, `trafficwb.tracker`, `trafficwb.video_process`, `trafficwb.video_review` | Video by frame timestamps in resumable chunks, vehicle tracking, one event per appearance, event review, clips |
 | `trafficwb.plates`, `trafficwb.plate_layout` | Plate finding and reading on each vehicle, raw and normalised text, unreadable kept unreadable, review, country evaluation gate; in video, each vehicle event read on several frames and combined |
 | `trafficwb.learning` | Which reviewed images can teach a model, frozen dataset versions with leak-free splits, COCO export, model evaluation, promotion and rollback (no training yet) |
+| `trafficwb.train_advice` | After each training round: what the loss curves say would improve the model, and the new model beside the one the mission uses on the same test images, with a replace-or-keep recommendation that puts recall first (advice only; the operator decides) |
 | `trafficwb.admin`, `trafficwb.runtime` | Backups, restore, explicit mission deletion with an audit log; CUDA, DirectML or CPU with fallback |
 | `trafficwb.review`, `trafficwb.export` | Results table, corrections, approval, CSV and Excel export |
 | `trafficwb-web` | Local web server and screens: missions, wizard, results, investigation, camera views, regions, search, video events and player, plates, learning |

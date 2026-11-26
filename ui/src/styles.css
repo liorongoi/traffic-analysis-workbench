@@ -982,3 +982,16 @@ details.fold > .card { margin-top: 10px; }
 .newm-v.bad > span { color: var(--bad); }
 .newm-own { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line-strong); background: var(--panel-2); }
 .vid-switch { font-size: 15px; font-weight: 600; max-width: 360px; }
+
+/* Advice after a training round (Learning page) */
+.advice { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--panel-2); }
+.advice h3 { margin: 0 0 6px; font-size: 14.5px; }
+.advice h3 + .advice-summary { margin-top: 0; }
+.advice .advice-summary { margin: 0 0 8px; }
+.advice-list { margin: 0 0 12px; padding-left: 18px; }
+.advice-item { margin: 4px 0; line-height: 1.45; }
+.advice-item.warn b { color: var(--warn); }
+.advice-item.ok b { color: var(--ok); }
+.advice-table { margin-top: 8px; max-width: 620px; }
+.advice-table td.adv-up { color: var(--ok); font-weight: 600; }
+.advice-table td.adv-down { color: var(--bad); font-weight: 600; }

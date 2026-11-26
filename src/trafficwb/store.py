@@ -1111,6 +1111,12 @@ CREATE TABLE fixed_target (
 CREATE INDEX ix_fixed_target ON fixed_target(view_id);
 ALTER TABLE light_group ADD COLUMN fixed_rev TEXT;   -- the view's fixed targets the grouping saw (night_service)
 """,
+    28: """
+-- After a training round: what the loss curves say would help, and the new model beside the model the mission used
+-- then, on the same test images, with a replace-or-keep recommendation (JSON). The operator's choice is kept in it.
+ALTER TABLE training_run ADD COLUMN current_evaluation_id INTEGER;
+ALTER TABLE training_run ADD COLUMN advice TEXT;
+""",
 }
 
 
