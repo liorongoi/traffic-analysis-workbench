@@ -228,6 +228,12 @@ def test_train_on_the_learning_page(tmp_path, monkeypatch):
     assert run["state"] == "finished" and run["model_version"] == res["model"]["version"] and len(run["history"]) == 1
     assert run["evaluation_id"] == res["evaluation"] and run["improved"] is None and "baseline_error" in res
     assert run["sources"] == [{"mission_id": mid, "dataset_id": ds["id"]}]
+    # Advice is kept with the round: one epoch is too short to read, and the model in use was evaluated on the same
+    # test images for the replace-or-keep recommendation, which never changes the mission's model by itself.
+    adv = run["advice"]
+    assert adv["curves"]["verdict"] == "too_short" and adv["swap"]["verdict"] in ("replace", "keep", "unclear")
+    assert run["current_evaluation_id"] == res["current_evaluation"] != res["evaluation"]
+    assert c.get(f"/api/missions/{mid}").json()["config"].get("vehicle_model") is None
 
 
 def test_training_can_be_stopped(tmp_path):
