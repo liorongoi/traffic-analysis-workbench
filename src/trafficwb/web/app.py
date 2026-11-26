@@ -146,6 +146,11 @@ class RecordingReviewBody(BaseModel):
     action: str                            # approve | confirm_rest_and_approve | reopen
 
 
+class UseModelBody(BaseModel):
+    saved: str                             # a saved model's name
+    missions: list[str]                    # mission ids
+
+
 class RoundDecisionBody(BaseModel):
     decision: str                          # replaced | kept
 
@@ -495,6 +500,7 @@ class TrainBody(BaseModel):
     start_from: str | None = None     # "coco" (the released weights) or "<name>/<version>" of a trained model
     arch: str = "yolox"               # what to train from the released weights: yolox, rf-detr, d-fine or rt-detr
     size: str | None = None           # RF-DETR only: nano, small or medium (default small)
+    compare_with: str | None = None   # "<name>/<version>": the model the new one is compared with (default: in use)
 
 
 class PromoteBody(BaseModel):
@@ -947,6 +953,15 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(404, "no_mission", "That mission does not exist.") from None
         return m
 
+    def learn_scope(mission_id: str, _u: User = Depends(user)) -> Mission:
+        """The learning endpoints also answer for the training workspace (id "training"): training and evaluation
+        on dataset versions of any missions, still images and video, belonging to no mission."""
+        from ..workspace import open_scope
+        try:
+            return open_scope(DataRoot(data_root), mission_id)
+        except KeyError:
+            raise ApiError(404, "no_mission", "That mission does not exist.") from None
+
     def flt(b: FilterBody | None) -> Filter:
         return Filter(**b.model_dump()) if b else Filter()
 
@@ -1321,7 +1336,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         return jobs.start(m.id).snapshot()
 
     @app.post("/api/missions/{mission_id}/job/{action}")
-    def job_control(action: str, m: Mission = Depends(mission)):
+    def job_control(action: str, m: Mission = Depends(learn_scope)):
         job = jobs.current(m.id)
         if job is None or job.state not in ("running", "paused"):
             raise ApiError(409, "no_job", "Nothing is running for this mission.")
@@ -2110,7 +2125,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "learning", str(exc)) from None
 
     @app.get("/api/missions/{mission_id}/learning")
-    def learning_summary(m: Mission = Depends(mission)):
+    def learning_summary(m: Mission = Depends(learn_scope)):
         from .. import models
         from ..learning import ADAPTERS, ModelRegistry
         ls = _learn(m)
@@ -2134,7 +2149,24 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
         auto = {"run_mode": cfg.run_mode, "auto_min_reviews": cfg.auto_min_reviews, "auto_epochs": cfg.auto_epochs,
                 "analyse_new": cfg.analyse_new, "teacher": cfg.teacher, "new_reviews": ls.reviews_since_last_dataset(),
                 "history": ls.auto_history()}
-        return {"in_use": in_use, "eligibility": ls.eligibility(), "datasets": ls.datasets(), "evaluations": ls.evaluations(),
+        from ..workspace import is_workspace
+        ws = is_workspace(m.id)
+        if ws:                                    # where a model trained here can be put to use
+            missions = []
+            for r in DataRoot(data_root).missions():
+                if r["state"] != "active":
+                    continue
+                try:
+                    mc = DataRoot(data_root).open_mission(r["id"]).config()
+                except Exception:  # noqa: BLE001 - a mission that cannot be opened is not offered
+                    continue
+                if mc.mode == "indoor_outdoor":
+                    continue
+                missions.append({"id": r["id"], "name": r["name"], "input_type": r["input_type"],
+                                 "vehicle_model": mc.vehicle_model, "busy": jobs.busy(r["id"])})
+        return {"workspace": ws, **({"missions": missions, "job": (lambda j: j.snapshot() if j else None)(jobs.current(m.id))}
+                                    if ws else {}),
+                "in_use": in_use, "eligibility": ls.eligibility(), "datasets": ls.datasets(), "evaluations": ls.evaluations(),
                 "auto": auto, "video": m.input_type == "video",
                 "all_datasets": ls.all_datasets(), "training_runs": ls.training_runs(), "carry_over": ls.carry_over(),
                 "saved_models": saved, "mission_model": getattr(m.config(), "vehicle_model", None),
@@ -2224,7 +2256,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                            "Check that the output folder exists, is writable and has free space.") from None
 
     @app.post("/api/missions/{mission_id}/learning/evaluate")
-    def evaluate_start(body: EvaluateBody, m: Mission = Depends(mission), u: User = Depends(user)):
+    def evaluate_start(body: EvaluateBody, m: Mission = Depends(learn_scope), u: User = Depends(user)):
         ls = _learn(m)
         refs = _refs_of(m, body.dataset_id, body.datasets)
         if not _learn_call(lambda: ls.combine(refs, body.split)[0]):
@@ -2237,7 +2269,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                           name=body.name, version=body.version, iou=body.iou, author=u.username).snapshot()
 
     @app.post("/api/missions/{mission_id}/learning/benchmark")
-    def benchmark_start(body: BenchmarkBody, m: Mission = Depends(mission), u: User = Depends(user)):
+    def benchmark_start(body: BenchmarkBody, m: Mission = Depends(learn_scope), u: User = Depends(user)):
         """Compare detectors (phase 1c): every installed vehicle detector, or the chosen ones, on the same images."""
         from .. import models
         ls = _learn(m)
@@ -2262,7 +2294,7 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                           candidates=[list(x) for x in want], author=u.username).snapshot()
 
     @app.post("/api/missions/{mission_id}/learning/train")
-    def train_start(body: TrainBody, m: Mission = Depends(mission), u: User = Depends(user)):
+    def train_start(body: TrainBody, m: Mission = Depends(learn_scope), u: User = Depends(user)):
         """Fine-tune the vehicle detector here, on this computer's GPU or CPU. The new model is added, not promoted."""
         from .. import models, training_env
         ls = _learn(m)
@@ -2333,12 +2365,18 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
                 start = f"{rel.name}/{rel.version}"
             except models.ModelPackError:
                 pass
+        if body.compare_with:
+            cn, _, cv = body.compare_with.partition("/")
+            try:
+                models.find(cn, cv or None)
+            except models.ModelPackError as exc:
+                raise ApiError(400, "model", str(exc)) from None
         return jobs.start(m.id, kind="train", dataset_id=body.dataset_id, datasets=refs, epochs=body.epochs, init=init,
                           start_from=start, author=u.username, work_dir=str(work) if work else None, arch=arch,
-                          size=size).snapshot()
+                          size=size, compare_with=body.compare_with).snapshot()
 
     @app.post("/api/missions/{mission_id}/learning/train/{action}")
-    def train_control(action: str, m: Mission = Depends(mission)):
+    def train_control(action: str, m: Mission = Depends(learn_scope)):
         job = jobs.training_job(m.id)
         if job is None or job.state not in ("running", "paused"):
             raise ApiError(409, "no_job", "Nothing is training for this mission.")
@@ -2352,15 +2390,36 @@ def create_app(data_root: Path | str, detector_factory: Callable | None = None,
             raise ApiError(400, "bad_action", "Use pause, resume or cancel.")
         return job.snapshot()
 
+    @app.post("/api/models/saved/use")
+    def saved_model_use(body: UseModelBody, u: User = Depends(user)):
+        """Put a saved model to use in the chosen missions (still images and video alike). Missions that are processing
+        are left as they are and listed, so nothing changes under a running job."""
+        if not _saved_or_none(body.saved):
+            raise ApiError(400, "invalid", f"There is no saved model named “{body.saved}”.")
+        done, busy, missing = [], [], []
+        for mid in dict.fromkeys(body.missions):
+            try:
+                mm = DataRoot(data_root).open_mission(mid)
+            except KeyError:
+                missing.append(mid)
+                continue
+            if jobs.busy(mid):
+                busy.append(mm.config().name)
+                continue
+            if getattr(mm.config(), "vehicle_model", None) != body.saved:
+                mm.update_config(u.username, f"model set to {body.saved} (from the training page)", vehicle_model=body.saved)
+            done.append(mm.config().name)
+        return {"saved": body.saved, "updated": done, "busy": busy, "missing": missing}
+
     @app.post("/api/missions/{mission_id}/learning/rounds/{run_id}/decision")
-    def round_decision(run_id: int, body: RoundDecisionBody, m: Mission = Depends(mission), u: User = Depends(user)):
+    def round_decision(run_id: int, body: RoundDecisionBody, m: Mission = Depends(learn_scope), u: User = Depends(user)):
         """The operator's answer to a round's replace-or-keep recommendation. A record only: the model the mission
         uses changes through its model setting (PUT vehicle-model), never here."""
         ls = _learn(m)
         return _learn_call(lambda: ls.decide_round(run_id, body.decision, u.username))
 
     @app.get("/api/missions/{mission_id}/learning/evaluations/{evaluation_id}")
-    def evaluation_get(evaluation_id: int, m: Mission = Depends(mission)):
+    def evaluation_get(evaluation_id: int, m: Mission = Depends(learn_scope)):
         ls = _learn(m)
         return _learn_call(lambda: ls.evaluation(evaluation_id))
 

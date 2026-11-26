@@ -813,13 +813,14 @@ class LearningService:
 
     def all_datasets(self) -> list[dict]:
         """Dataset versions of every mission on this computer (still images and video), this mission's first."""
-        out = [d | {"mission_id": self.m.id, "mission": self.m.config().name} for d in self.datasets()]
+        out = [d | {"mission_id": self.m.id, "mission": self.m.config().name, "input_type": self.m.input_type}
+               for d in self.datasets()]
         for r in self.m.root.missions():
             if r["id"] == self.m.id or r["state"] != "active":
                 continue
             try:
                 ls = self._open(r["id"])
-                out += [d | {"mission_id": r["id"], "mission": r["name"]} for d in ls.datasets()]
+                out += [d | {"mission_id": r["id"], "mission": r["name"], "input_type": r["input_type"]} for d in ls.datasets()]
             except Exception:          # a mission that cannot be opened just offers nothing
                 continue
         return out

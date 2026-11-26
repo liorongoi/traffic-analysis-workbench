@@ -358,7 +358,8 @@ class JobManager:
     def _run(self, job: Job) -> None:
         try:
             root = DataRoot(self.data_root)
-            m = root.open_mission(job.mission_id)
+            from ..workspace import open_scope
+            m = open_scope(root, job.mission_id)      # a mission, or the training workspace (no mission)
             if job.kind == "search":
                 self._search(job, m)
                 return
@@ -542,6 +543,11 @@ class JobManager:
         det, key = self.teacher_for(m, teacher)
         det.engine.load()
         job.control.stage = "SAM 3.1 is labelling what nobody reviewed"
+        try:
+            job.control.checkpoint()                  # stopped (or paused) while SAM 3.1 was loading
+        except RunCancelled:
+            job.state = "cancelled"
+            return
 
         def progress(n, total):
             job.total = total
@@ -929,10 +935,19 @@ class JobManager:
         """The model the mission uses now (its saved model, else the one in production use) on the same test images:
         the starting model's evaluation when it is the same model, an earlier identical one, or a new one."""
         try:
-            det, card = self.standard_for(m)
-            name, version = (card or {}).get("name"), (card or {}).get("version")
+            want = p.get("compare_with")              # the training workspace: the model the operator chose
+            if want and "/" in want:
+                name, _, version = want.partition("/")
+                det, card = self.load_model(name, version), {"name": name, "version": version}
+            else:
+                det, card = self.standard_for(m)
+                name, version = (card or {}).get("name"), (card or {}).get("version")
+            from ..learning import ModelLibrary
+            saved = next((x["name"] for x in ModelLibrary(self.data_root).saved()
+                          if (x["model_name"], x["model_version"]) == (name, version)), None) if name else None
             job.result["current_model"] = {"name": name, "version": version,
-                                           "saved_as": getattr(m.config(), "vehicle_model", None)}
+                                           "saved_as": getattr(m.config(), "vehicle_model", None) or saved,
+                                           "chosen": bool(want)}
             if name and version:
                 bm = ((base or {}).get("model") or {}).get("model") or {}
                 if base is not None and (bm.get("name"), bm.get("version")) == (name, version):
@@ -977,8 +992,13 @@ class JobManager:
                               val_images=sum(1 for i in items if i["split"] == "val"),
                               class_counts=classes, overall=rep.get("overall"), by_condition=rep.get("by_condition"))
         cm = job.result.get("current_model") or {}
+        from ..workspace import is_workspace
+        if is_workspace(job.mission_id) and not cm.get("chosen"):
+            cm = cm | {"production": True}
         label = (f"the saved model \u201c{cm['saved_as']}\u201d" if cm.get("saved_as")
-                 else "the model in use" if not cm.get("name") else f"the model in use ({cm['name']} {cm.get('version') or ''})".replace(" )", ")"))
+                 else "the model in use" if not cm.get("name")
+                 else f"{cm['name']} {cm.get('version') or ''}".strip() if cm.get("chosen")
+                 else f"the model in {'production ' if cm.get('production') else ''}use ({cm['name']} {cm.get('version') or ''})".replace(" )", ")"))
         crep = (cur or {}).get("report") or {}
         start = job.params.get("start_from") or "coco"
         same = bool(cm.get("name")) and f"{cm['name']}/{cm.get('version')}" == start

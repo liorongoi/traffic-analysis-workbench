@@ -44,7 +44,8 @@ function DatasetPicker({ s, missionId, value, onChange, split = "train", label =
     const g = new Map<string, { name: string; items: any[] }>();
     for (const d of s.all_datasets as any[]) {
       const k = d.mission_id;
-      if (!g.has(k)) g.set(k, { name: k === missionId ? "This mission" : d.mission, items: [] });
+      const kind = d.input_type === "video" ? "video" : "still images";
+      if (!g.has(k)) g.set(k, { name: `${k === missionId ? "This mission" : d.mission} · ${kind}`, items: [] });
       g.get(k)!.items.push(d);
     }
     return [...g.entries()];
@@ -57,7 +58,7 @@ function DatasetPicker({ s, missionId, value, onChange, split = "train", label =
       <button aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)} title={value.map((r) => dsLabel(s, missionId, r)).join("\n")}>
         {summary} <span aria-hidden>▾</span></button>
       {open && <div className="dspick-menu" role="listbox" aria-multiselectable aria-label={label}>
-        {groups.length === 0 && <div className="muted" style={{ padding: 6 }}>No dataset versions yet. Freeze one above.</div>}
+        {groups.length === 0 && <div className="muted" style={{ padding: 6 }}>No dataset versions yet. Freeze one on a mission's Learning tab.</div>}
         {groups.map(([mid, g]) => <div key={mid}>
           <h4>{g.name}</h4>
           {g.items.map((d) => {
@@ -73,6 +74,77 @@ function DatasetPicker({ s, missionId, value, onChange, split = "train", label =
         <p className="muted small" style={{ margin: "8px 6px 2px", fontSize: 12 }}>Chosen versions are used together. An image in a test set in
           any of them stays in test, and identical images count once.</p>
       </div>}
+    </div>
+  );
+}
+
+/** A learning job of this mission (SAM labelling while freezing, evaluating, comparing detectors) with its progress
+ *  and Pause, Continue and Stop: every long action can be held or stopped, not only training. */
+function LearnJobBar({ job, missionId, after }: { job: any; missionId: string; after: () => void }) {
+  const [err, setErr] = useState<string | null>(null);
+  if (!job || !["teach", "evaluate", "benchmark"].includes(job.kind) || !["running", "paused"].includes(job.state)) return null;
+  const what = job.kind === "teach" ? "Freezing a dataset version (SAM 3.1 labelling)" : job.kind === "evaluate" ? "Evaluating a model" : "Comparing detectors";
+  const pctDone = job.total ? Math.round((100 * job.done) / job.total) : 0;
+  const control = async (a: string) => { setErr(null); try { await post(`/missions/${missionId}/job/${a}`); after(); } catch (e) { setErr((e as ApiError).message); } };
+  return (
+    <div className="card jobbar">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <b>{what}{job.state === "paused" ? ": paused" : `: ${job.stage}`}</b>
+        {job.total > 0 && <span className="muted">{job.done} of {job.total} · elapsed {fmtDuration(job.elapsed_s)}{job.eta_s != null ? ` · about ${fmtDuration(job.eta_s)} left` : ""}</span>}
+      </div>
+      <div className="progress" style={{ margin: "6px 0" }}><div style={{ width: `${pctDone}%` }} /></div>
+      <div className="row" style={{ gap: 8 }}>
+        {job.state === "running" && <button onClick={() => control("pause")}>Pause</button>}
+        {job.state === "paused" && <button className="primary" onClick={() => control("resume")}>Continue</button>}
+        <button className="danger" onClick={() => {
+          if (window.confirm(job.kind === "teach" ? "Stop? No dataset version is frozen; labels SAM 3.1 already made are kept for next time." : "Stop? Nothing from this run is kept."))
+            control("cancel");
+        }}>Stop</button>
+        <span className="muted">{job.kind === "teach" && job.stage?.startsWith("loading") ? "Stop takes effect as soon as SAM 3.1 has loaded." : ""}</span>
+      </div>
+      {err && <div className="msg err">{err}</div>}
+    </div>
+  );
+}
+
+/** Put a saved model (or a new one, saved first) to use in the missions the operator ticks, stills and video alike. */
+function UseInMissions({ s, act, model, onDone }: {
+  s: any; act: Act; model: { saved?: string; name?: string; version?: string; saveAs?: string; evaluationId?: number | null; missionId?: string };
+  onDone: (applied: boolean) => void;
+}) {
+  const ms: any[] = s.missions ?? [];
+  const [pick, setPick] = useState<string[]>([]);
+  const [saveAs, setSaveAs] = useState(model.saveAs ?? "");
+  const toggle = (id: string) => setPick((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const apply = () => act(async () => {
+    let name = model.saved;
+    if (!name) {
+      name = saveAs.trim();
+      await post("/models/saved", { name, description: "Trained on the Training page.", model_name: model.name, model_version: model.version,
+        mission_id: model.evaluationId ? model.missionId : null, evaluation_id: model.evaluationId ?? null });
+    }
+    const r = await post("/models/saved/use", { saved: name, missions: pick });
+    onDone(true);
+    return r;
+  }, (r) => `“${r.saved}” is now used by ${r.updated.length ? r.updated.join(", ") : "no mission"}.`
+    + (r.busy.length ? ` Not changed while processing: ${r.busy.join(", ")}; try again when it ends.` : ""));
+  return (
+    <div className="card" style={{ marginTop: 8 }}>
+      <h3 style={{ marginTop: 0 }}>Use in missions</h3>
+      {!model.saved && <label style={{ display: "grid", gap: 4, maxWidth: 520 }}>Save it as
+        <input value={saveAs} onChange={(e) => setSaveAs(e.target.value)} placeholder="A name of your own" style={{ width: "100%" }} /></label>}
+      {ms.length === 0 ? <p className="muted">There are no missions to use it in yet.</p> : (
+        <div className="usegrid">{ms.map((x) => (
+          <label key={x.id} className={x.busy ? "muted" : ""}>
+            <input type="checkbox" checked={pick.includes(x.id)} disabled={x.busy} onChange={() => toggle(x.id)} />
+            <span><span className="bidi">{x.name}</span> <span className="badge">{x.input_type === "video" ? "video" : "stills"}</span>
+              <small>{x.busy ? "processing now" : `uses ${x.vehicle_model ? `“${x.vehicle_model}”` : "the model in production use"}`}</small></span>
+          </label>))}</div>)}
+      <div className="row" style={{ marginTop: 8, gap: 8 }}>
+        <button className="primary" disabled={!pick.length || (!model.saved && !saveAs.trim())} onClick={apply}>Use in {pick.length || ""} chosen mission{pick.length === 1 ? "" : "s"}</button>
+        <button onClick={() => onDone(false)}>Cancel</button>
+        <span className="muted">Missions you do not tick keep their model.</span>
+      </div>
     </div>
   );
 }
@@ -102,6 +174,14 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
 
   const load = useCallback(async () => setS(await api(`/missions/${missionId}/learning`)), [missionId]);
   useEffect(() => { load(); }, [load]);
+  // The Training page (no mission) gets its own job with the page's figures; a mission's comes from the mission page.
+  if (s?.workspace) job = s.job;
+  const wsActive = !!s?.workspace && !!s.job && ["running", "paused"].includes(s.job.state);
+  useEffect(() => {
+    if (!wsActive) return;
+    const t = setInterval(() => { load().catch(() => undefined); }, 1500);
+    return () => clearInterval(t);
+  }, [wsActive, load]);
   // While a model trains (or the computer is still being checked), refresh the page's figures.
   const tj = s?.training?.job;
   const training = tj && ["running", "paused"].includes(tj.state);
@@ -139,33 +219,39 @@ export default function LearningTab({ missionId, job, reload }: { missionId: str
   if (!s) return <div className="muted">Loading…</div>;
   const e = s.eligibility;
   const prod = s.production;
-  const done = [s.datasets.length > 0, (s.training_runs?.length ?? 0) > 0, s.evaluations.some((x: any) => x.state === "completed")];
+  const ws = !!s.workspace;
+  const done = [(ws ? s.all_datasets : s.datasets).length > 0, (s.training_runs?.length ?? 0) > 0, s.evaluations.some((x: any) => x.state === "completed")];
   const firstOpen = done.findIndex((d) => !d);
-  const cur = step ?? (firstOpen < 0 ? 2 : firstOpen);
+  const cur = step ?? (ws ? 1 : firstOpen < 0 ? 2 : firstOpen);
   const eRefs = evalRefs ?? defaultRefs(s, missionId);
   const savedByPack = new Map<string, any>((s.saved_models as any[]).map((x) => [`${x.model_name}/${x.model_version}`, x]));
   const modelLabel = (md: any) => { const sv = savedByPack.get(`${md?.name}/${md?.version}`); return sv ? `${sv.name} (${md.name} ${md.version})` : `${md?.name ?? "?"} ${md?.version ?? ""}`; };
   const dataLabel = (ev: any) => (ev.sources as Ref[]).map((r) => dsLabel(s, missionId, r)).join(" + ");
   return (
     <div className="grid" style={{ gap: 10 }}>
-      <div className="runmode-line">
+      {ws ? <div className="runmode-line">
+        <span>Still images and video together, from as many missions as you like. Dataset versions are frozen on each mission's
+          Learning tab; nothing here changes a mission until you choose it.</span>
+      </div> : <div className="runmode-line">
         <span><b>{s.auto?.run_mode === "auto" ? "Full auto" : "Manual decisions"}</b>
           {s.auto?.run_mode === "auto" ? <> · {s.auto.new_reviews} of {s.auto.auto_min_reviews} new decisions toward the next round</> : " · nothing trains or changes model by itself"}</span>
         <a href={`#/m/${missionId}/setup`}>Change in mission setup</a>
-      </div>
+      </div>}
       {/* Three steps in the order they are done (Nielsen #5: a later step says what it needs first, instead of a
           button that fails). Each tab shows only its own panels, so the page no longer scrolls through eight. */}
-      <ol className="learn-steps" role="tablist" aria-label="Learning steps">
-        {STEPS.map(([title, hint], i) => (
+      <ol className={`learn-steps${ws ? " two" : ""}`} role="tablist" aria-label="Learning steps">
+        {STEPS.map(([title, hint], i) => (ws && i === 0) ? null : (
           <li key={title} role="presentation">
             <button role="tab" aria-selected={cur === i} className={`${cur === i ? "on" : ""}${done[i] ? " done" : ""}`} onClick={() => setStep(i)}>
-              <span className="n" aria-hidden="true">{done[i] ? "✓" : i + 1}</span>
+              <span className="n" aria-hidden="true">{done[i] ? "✓" : ws ? i : i + 1}</span>
               <span><b>{title}</b><small>{hint}</small></span>
             </button>
           </li>))}
       </ol>
       {msg && <div className={`msg ${msg.kind}`}>{msg.text}</div>}
-      {cur > 0 && s.datasets.length === 0 && <div className="msg warn">Freeze a dataset version in step 1 first: training and
+      <LearnJobBar job={job} missionId={missionId} after={() => { load(); reload(); }} />
+      {ws && s.all_datasets.length === 0 && <div className="msg warn">No mission has a dataset version yet. Freeze one on a mission's Learning tab first.</div>}
+      {!ws && cur > 0 && s.datasets.length === 0 && <div className="msg warn">Freeze a dataset version in step 1 first: training and
         comparing use one. <button className="linkish" onClick={() => setStep(0)}>Go to step 1</button></div>}
       {cur === 0 && <>
       {s.video ? (
@@ -364,6 +450,7 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
   const ds = refs ?? defaultRefs(s, missionId);
   const [start, setStart] = useState<string>("");
   const [epochs, setEpochs] = useState<number | "">("");
+  const [cmpWith, setCmpWith] = useState("");
   const rec: Record<string, string | null> = t.recommended?.sizes ?? {};
   const yw: string[] = t.yolox_weights ?? (t.coco_weights ? ["s"] : []);
   const recNote = (fam: string, sz: string) => (rec[fam] === sz ? " (recommended for this computer)" : "");
@@ -398,12 +485,21 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
             <Choice label="Epochs" value={ep} onChange={setEpochs}
               options={[...new Set([...EPOCHS, t.suggested_epochs ?? 20])].sort((a, b) => a - b).map((n): [number, string] => [n, n === (t.suggested_epochs ?? 20) ? `${n} (suggested)` : String(n)])} />
           </label>
+          {s.workspace && <label>Compare the new model with
+            <select value={cmpWith} onChange={(ev) => setCmpWith(ev.target.value)}>
+              <option value="">the model in production use{s.in_use ? ` (${s.in_use.name} ${s.in_use.version})` : ""}</option>
+              {(s.models as any[]).filter((md) => !md.evaluation_only).map((md: any) => <option key={`${md.name}/${md.version}`} value={`${md.name}/${md.version}`}>
+                {md.saved_as ? `${md.saved_as} (${md.name} ${md.version})` : `${md.name} ${md.version}`}</option>)}
+            </select>
+          </label>}
           <button className="primary" disabled={ds.length === 0 || !startFrom || !!t.busy_mission} onClick={() => act(
             () => post(`/missions/${missionId}/learning/train`, /^(yolox|rf-detr|d-fine|rt-detr):/.test(startFrom)
-              ? { datasets: ds, epochs: ep, start_from: "coco", arch: startFrom.split(":")[0], size: startFrom.split(":")[1] }
-              : { datasets: ds, epochs: ep, start_from: startFrom }),
+              ? { datasets: ds, epochs: ep, start_from: "coco", arch: startFrom.split(":")[0], size: startFrom.split(":")[1], compare_with: cmpWith || null }
+              : { datasets: ds, epochs: ep, start_from: startFrom, compare_with: cmpWith || null }),
             () => "Training started. You can close the browser; it continues on this computer.")}>Train</button>
         </div>}
+        {!active && !s.workspace && <p className="muted" style={{ marginTop: 6 }}>To train on several missions at once (still images and
+          video together) and choose afterwards which missions use the model, use the <a href="#/training">Training page</a>.</p>}
         {!active && t.recommended?.why && <p className="muted" style={{ marginTop: 6 }}>Recommended sizes are chosen for training on {t.recommended.why}.</p>}
         {!active && (s.carry_over?.runs?.length ?? 0) > 0 && refs === null && <div className="msg warn">
           {s.carry_over.runs.length === 1 ? "The last training round" : `The last ${s.carry_over.runs.length} training rounds`}{" "}
@@ -452,8 +548,10 @@ function TrainCard({ missionId, s, act }: { missionId: string; s: any; act: Act 
 /** After a training round: what the loss curves say would help, and whether to replace the model this mission uses
  *  with the new one (recall first). Both are advice: the model changes only when the operator presses Replace. */
 function AdviceCard({ run, s, missionId, act, live }: { run: any; s: any; missionId: string; act: Act; live?: any }) {
+  const [using, setUsing] = useState(false);
   const a = run?.advice ?? live;
   if (!a) return null;
+  const ws = !!s.workspace;
   const c = a.curves ?? { items: [] };
   const w = a.swap;
   const f = w?.figures ?? {};
@@ -486,14 +584,14 @@ function AdviceCard({ run, s, missionId, act, live }: { run: any; s: any; missio
       {c.items?.length > 0 && <ul className="advice-list">{c.items.map((x: any, i: number) =>
         <li key={i} className={`advice-item ${level[x.level] ?? ""}`}><b>{x.title}.</b> {x.text}</li>)}</ul>}
       {w && <>
-        <h3>Replace the model in use, or keep it?</h3>
+        <h3>{ws ? "Use the new model, or keep the one compared?" : "Replace the model in use, or keep it?"}</h3>
         <div className={`msg ${w.verdict === "replace" ? "ok" : w.verdict === "keep" ? "warn" : ""}`} style={{ marginTop: 4 }}>
           <b>{w.headline}</b>
           {w.reasons?.map((t: string, i: number) => <div key={i} style={{ marginTop: 4 }}>{t}</div>)}
           {w.cautions?.map((t: string, i: number) => <div key={`c${i}`} style={{ marginTop: 4 }}>⚠ {t}</div>)}
         </div>
         {f.references > 0 && <table className="t advice-table">
-          <thead><tr><th>Same {f.references} test vehicles</th><th>New model</th><th>In use now</th></tr></thead>
+          <thead><tr><th>Same {f.references} test vehicles</th><th>New model</th><th>{ws ? "Compared with" : "In use now"}</th></tr></thead>
           <tbody>
             {row("Vehicles found (recall, decides first)", f.recall_new, f.recall_current, (v) => (v == null ? "–" : `${pct(v)}`))}
             {row("Found boxes that are vehicles (precision)", f.precision_new, f.precision_current, pct)}
@@ -506,12 +604,18 @@ function AdviceCard({ run, s, missionId, act, live }: { run: any; s: any; missio
             : inUse ? <span className="muted">This mission already uses the new model.</span>
             : run?.model_name && w.verdict !== "unclear" ? <>
               <button className={w.verdict === "replace" ? "primary" : ""} onClick={() => {
-                if (window.confirm("Use the new model for this mission from now on? It is saved by name first; the model in use stays installed.")) replace();
-              }}>Replace with the new model</button>
-              <button className={w.verdict === "keep" ? "primary" : ""} onClick={keep}>Keep the model in use</button>
+                if (ws) setUsing(true);
+                else if (window.confirm("Use the new model for this mission from now on? It is saved by name first; the model in use stays installed.")) replace();
+              }}>{ws ? "Use the new model in missions…" : "Replace with the new model"}</button>
+              <button className={w.verdict === "keep" ? "primary" : ""} onClick={keep}>{ws ? "Keep the one compared" : "Keep the model in use"}</button>
               <span className="muted">Nothing changes until you choose.</span>
             </> : null}
         </div>
+        {ws && using && !dec && <UseInMissions s={s} act={act} onDone={(ok) => {
+          setUsing(false);
+          if (ok) post(`/missions/${missionId}/learning/rounds/${run.id}/decision`, { decision: "replaced" }).catch(() => undefined);
+        }} model={saved ? { saved: saved.name } : { name: run.model_name, version: run.model_version, missionId,
+          evaluationId: run.evaluation_id, saveAs: `Round ${run.id} (${run.model_name} ${run.model_version})`.slice(0, 80) }} />}
       </>}
     </div>
   );
@@ -743,6 +847,8 @@ function SaveForm({ s, missionId, act, model, evaluationId, onDone }: {
 /** Models kept by name, and which one this mission uses to find vehicles. */
 function SavedModelsCard({ s, missionId, act }: { s: any; missionId: string; act: Act }) {
   const [adding, setAdding] = useState(false);
+  const [usingIn, setUsingIn] = useState<string | null>(null);
+  const ws = !!s.workspace;
   const saved: any[] = s.saved_models ?? [];
   const use = (name: string | null) => act(() => api(`/missions/${missionId}/vehicle-model`, { method: "PUT", body: { saved: name } }),
     () => name ? `This mission now finds vehicles with “${name}” in new images.` : "This mission now uses the model in production use.");
@@ -754,8 +860,9 @@ function SavedModelsCard({ s, missionId, act }: { s: any; missionId: string; act
       </div>
       <p className="muted">When a model is good enough and you do not need to keep training it, save it by name. Any mission can then
         process its images with it, so you can keep one model for cars at night, another for a busy junction, and so on.
-        This mission uses: <b>{s.mission_model ?? "the model in production use"}</b>.</p>
+        {!ws && <>This mission uses: <b>{s.mission_model ?? "the model in production use"}</b>.</>}</p>
       {adding && <SaveForm s={s} missionId={missionId} act={act} onDone={() => setAdding(false)} />}
+      {usingIn && <UseInMissions s={s} act={act} model={{ saved: usingIn }} onDone={() => setUsingIn(null)} />}
       {saved.length === 0 ? <div className="muted">No saved models yet.</div> : (
         <div className="savedgrid" style={{ marginTop: 10 }}>
           {saved.map((x) => {
@@ -774,7 +881,11 @@ function SavedModelsCard({ s, missionId, act }: { s: any; missionId: string; act
               {x.history?.length > 0 && <details style={{ marginTop: 6 }}><summary className="muted" style={{ fontSize: 12.5 }}>Loss per epoch</summary>
                 <LossChart history={x.history} height={180} /></details>}
               <div className="row" style={{ marginTop: 8 }}>
-                {mine ? <><span className="badge ok">Used by this mission</span><button onClick={() => use(null)}>Stop using</button></>
+                {ws ? <>
+                  {(s.missions as any[]).filter((mm) => mm.vehicle_model === x.name).length > 0 && <span className="badge ok">
+                    Used by {(s.missions as any[]).filter((mm) => mm.vehicle_model === x.name).map((mm) => mm.name).join(", ")}</span>}
+                  <button className="primary" disabled={!x.installed} onClick={() => setUsingIn(x.name)}>Use in missions…</button></>
+                  : mine ? <><span className="badge ok">Used by this mission</span><button onClick={() => use(null)}>Stop using</button></>
                   : <button className="primary" disabled={!x.installed} onClick={() => use(x.name)}>Use for this mission</button>}
                 <button className="danger" onClick={() => {
                   if (window.confirm(`Take “${x.name}” off the saved list? Its files stay on this computer.`))

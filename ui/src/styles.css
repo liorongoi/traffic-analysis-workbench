@@ -995,3 +995,12 @@ details.fold > .card { margin-top: 10px; }
 .advice-table { margin-top: 8px; max-width: 620px; }
 .advice-table td.adv-up { color: var(--ok); font-weight: 600; }
 .advice-table td.adv-down { color: var(--bad); font-weight: 600; }
+
+/* Long learning jobs: progress with Pause, Continue and Stop */
+.jobbar { border-left: 3px solid var(--accent, var(--ok)); }
+/* Use a model in several missions */
+.usegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 14px; margin-top: 6px; }
+.usegrid label { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); cursor: pointer; }
+.usegrid label:has(input:checked) { border-color: var(--ok); background: rgba(69, 224, 160, .06); }
+.usegrid small { display: block; color: var(--text-2); margin-top: 2px; }
+.learn-steps.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }

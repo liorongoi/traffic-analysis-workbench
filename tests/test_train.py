@@ -143,8 +143,10 @@ def test_import_refuses_damaged_or_conflicting_packs(tmp_path):
         import_pack(z2, root)
 
 
-def test_train_on_the_learning_page(tmp_path, monkeypatch):
-    """Train button: export, train on this computer, add the new model, evaluate it; nothing is promoted."""
+@pytest.mark.parametrize("scope", ["mission", "training"])
+def test_train_on_the_learning_page(tmp_path, monkeypatch, scope):
+    """Train button: export, train on this computer, add the new model, evaluate it; nothing is promoted. The same on
+    the Training page, which belongs to no mission and trains on a mission's dataset version."""
     import os
     import time
     from datetime import datetime, timedelta, timezone
@@ -187,28 +189,29 @@ def test_train_on_the_learning_page(tmp_path, monkeypatch):
         c.post(f"/api/missions/{mid}/items/{r['source_version_id']}/decision/approve", headers=H1)
     ds = c.post(f"/api/missions/{mid}/learning/datasets", json={"name": "v1", "ratios": [0.5, 0.17, 0.33]},
                 headers=H1).json()
+    where = mid if scope == "mission" else "training"
     sp = ds["stats"]["splits"]
     assert sp["train"]["images"] and sp["test"]["images"], sp
 
     for _ in range(300):                             # PyTorch is checked in the background
-        s = c.get(f"/api/missions/{mid}/learning").json()["training"]
+        s = c.get(f"/api/missions/{where}/learning").json()["training"]
         if s["state"] != "checking":
             break
         time.sleep(0.1)
     assert s["state"] == "ready" and s["coco_weights"] and s["device_type"] in ("cpu", "cuda", "mps"), s
 
-    bad = c.post(f"/api/missions/{mid}/learning/train", json={"dataset_id": ds["id"], "start_from": "nope/1"}, headers=H1)
+    bad = c.post(f"/api/missions/{where}/learning/train", json={"datasets": [{"mission_id": mid, "dataset_id": ds["id"]}], "start_from": "nope/1"}, headers=H1)
     assert bad.status_code == 400
-    j = c.post(f"/api/missions/{mid}/learning/train", json={"dataset_id": ds["id"], "epochs": 1, "start_from": "coco"},
+    j = c.post(f"/api/missions/{where}/learning/train", json={"datasets": [{"mission_id": mid, "dataset_id": ds["id"]}], "epochs": 1, "start_from": "coco"},
                headers=H1).json()
     assert j["kind"] == "train"
     # Training has its own slot: the mission can still process meanwhile.
     assert c.get(f"/api/missions/{mid}").json()["job"]["kind"] != "train"
-    again = c.post(f"/api/missions/{mid}/learning/train", json={"dataset_id": ds["id"], "epochs": 1}, headers=H1)
+    again = c.post(f"/api/missions/{where}/learning/train", json={"datasets": [{"mission_id": mid, "dataset_id": ds["id"]}], "epochs": 1}, headers=H1)
     assert again.status_code in (200, 409)
     t0 = time.time()
     while time.time() - t0 < 600:
-        job = c.get(f"/api/missions/{mid}/learning").json()["training"]["job"]
+        job = c.get(f"/api/missions/{where}/learning").json()["training"]["job"]
         if job["state"] not in ("running", "paused"):
             break
         time.sleep(0.5)
@@ -216,11 +219,11 @@ def test_train_on_the_learning_page(tmp_path, monkeypatch):
     res = job["result"]
     assert res["model"]["name"] == "yolox-s-tuned" and res["history"] and res["device"]
     assert "evaluation" in res, res
-    s = c.get(f"/api/missions/{mid}/learning").json()
+    s = c.get(f"/api/missions/{where}/learning").json()
     new = [md for md in s["models"] if md["name"] == "yolox-s-tuned"]
-    assert len(new) == 1 and new[0]["trainable"] and new[0]["trained_on"] == "v1"
+    assert len(new) == 1 and new[0]["trainable"] and new[0]["trained_on"] == ("v1" if scope == "mission" else "Route 6: v1")
     assert s["production"] is None                   # added and evaluated, never promoted by itself
-    ev = c.get(f"/api/missions/{mid}/learning/evaluations/{res['evaluation']}").json()
+    ev = c.get(f"/api/missions/{where}/learning/evaluations/{res['evaluation']}").json()
     assert ev["state"] == "completed" and ev["model"]["model"]["version"] == res["model"]["version"]
     assert not (out / ".training").exists() or not any((out / ".training").iterdir())   # temporary copy removed
     # The round is recorded with its loss per epoch; with no built-in YOLOX-s here there is nothing to compare with.
